@@ -31,6 +31,10 @@ import (
 	"github.com/livekit/protocol/logger"
 	redisLiveKit "github.com/livekit/protocol/redis"
 	"github.com/livekit/protocol/rpc"
+
+	// BEGIN OPENVIDU BLOCK
+	"github.com/livekit/livekit-server/pkg/openvidu/openviduconfig"
+	// END OPENVIDU BLOCK
 )
 
 type CongestionControlProbeMode string
@@ -80,6 +84,10 @@ type Config struct {
 	Limit    LimitConfig   `yaml:"limit,omitempty"`
 
 	Development bool `yaml:"development,omitempty"`
+
+	// BEGIN OPENVIDU BLOCK
+	OpenVidu openviduconfig.OpenviduConfig
+	// END OPENVIDU BLOCK
 }
 
 type RTCConfig struct {

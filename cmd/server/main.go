@@ -36,6 +36,10 @@ import (
 	"github.com/livekit/livekit-server/pkg/routing"
 	"github.com/livekit/livekit-server/pkg/service"
 	"github.com/livekit/livekit-server/version"
+
+	// BEGIN OPENVIDU BLOCK
+	"github.com/livekit/livekit-server/pkg/openvidu"
+	// END OPENVIDU BLOCK
 )
 
 var baseFlags = []cli.Flag{
@@ -299,6 +303,10 @@ func startServer(c *cli.Context) error {
 			go server.Stop(force)
 		}
 	}()
+
+	// BEGIN OPENVIDU BLOCK
+	openvidu.Start(conf)
+	// END OPENVIDU BLOCK
 
 	return server.Start()
 }

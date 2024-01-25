@@ -25,6 +25,10 @@ import (
 
 	"github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/livekit-server/pkg/routing"
+
+	// BEGIN OPENVIDU BLOCK
+	"github.com/livekit/livekit-server/pkg/openvidu/analytics"
+	// END OPENVIDU BLOCK
 )
 
 //go:generate go run github.com/maxbrunsfeld/counterfeiter/v6 . AnalyticsService
@@ -48,6 +52,10 @@ func NewAnalyticsService(_ *config.Config, currentNode routing.LocalNode) Analyt
 	return &analyticsService{
 		analyticsKey: "", // TODO: conf.AnalyticsKey
 		nodeID:       currentNode.Id,
+		// BEGIN OPENVIDU BLOCK
+		events: analytics.NewOpenViduEventsIngestClient(),
+		stats:  analytics.NewOpenViduStatsIngestClient(),
+		// END OPENVIDU BLOCK
 	}
 }
 
