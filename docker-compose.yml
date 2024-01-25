@@ -23,6 +23,9 @@ services:
   mongo-express:
     image: mongo-express
     container_name: mongo-express
+    environment:
+     - ME_CONFIG_BASICAUTH_USERNAME=admin
+     - ME_CONFIG_BASICAUTH_PASSWORD=pass
     depends_on:
       - mongo
     ports:

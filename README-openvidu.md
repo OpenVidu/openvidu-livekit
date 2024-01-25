@@ -30,12 +30,20 @@ Just run the `docker-compose.yml` file to launch the required services (includin
 docker compose up
 ```
 
+Install dependencies:
+
+```bash
+go mod tidy
+```
+
 Run openvidu-livekit:
 
 ```bash
 export LIVEKIT_CONFIG=$(cat ${PWD}/config.yaml)
 go run ./...
 ```
+
+Go to `http://localhost:8081` to explore the MongoDB database (`admin` username and `pass` password).
 
 ## Changing the destination of events/stats
 
