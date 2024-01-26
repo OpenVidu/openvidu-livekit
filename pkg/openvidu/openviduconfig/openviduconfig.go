@@ -14,9 +14,11 @@
 
 package openviduconfig
 
-import "time"
+import (
+	"time"
+)
 
-type OpenviduConfig struct {
+type OpenViduConfig struct {
 	Analytics AnalyticsConfig `yaml:"analytics"`
 }
 

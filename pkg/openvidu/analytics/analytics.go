@@ -21,13 +21,14 @@ import (
 	"time"
 
 	"github.com/livekit/livekit-server/pkg/config"
-	"github.com/livekit/livekit-server/pkg/openvidu/openviduconfig"
-	"github.com/livekit/livekit-server/pkg/openvidu/queue"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/openvidu/openvidu-livekit/pkg/openvidu/openviduconfig"
+	"github.com/openvidu/openvidu-livekit/pkg/openvidu/queue"
 )
 
 var ANALYTICS_CONFIGURATION *openviduconfig.AnalyticsConfig

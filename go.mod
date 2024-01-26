@@ -1,6 +1,10 @@
-module github.com/livekit/livekit-server
+module github.com/openvidu/openvidu-livekit
 
 go 1.20
+
+require github.com/livekit/livekit-server v0.0.0-00010101000000-000000000000
+
+replace github.com/livekit/livekit-server => ./
 
 require (
 	github.com/bep/debounce v1.2.1

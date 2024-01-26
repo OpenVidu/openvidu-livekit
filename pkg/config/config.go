@@ -33,7 +33,7 @@ import (
 	"github.com/livekit/protocol/rpc"
 
 	// BEGIN OPENVIDU BLOCK
-	"github.com/livekit/livekit-server/pkg/openvidu/openviduconfig"
+	"github.com/openvidu/openvidu-livekit/pkg/openvidu/openviduconfig"
 	// END OPENVIDU BLOCK
 )
 
@@ -86,7 +86,7 @@ type Config struct {
 	Development bool `yaml:"development,omitempty"`
 
 	// BEGIN OPENVIDU BLOCK
-	OpenVidu openviduconfig.OpenviduConfig
+	OpenVidu openviduconfig.OpenViduConfig `yaml:"openvidu"`
 	// END OPENVIDU BLOCK
 }
 

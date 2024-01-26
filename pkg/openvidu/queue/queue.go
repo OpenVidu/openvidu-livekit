@@ -14,7 +14,9 @@
 
 package queue
 
-import "errors"
+import (
+	"errors"
+)
 
 type Queue[T any] interface {
 	Enqueue(T) error

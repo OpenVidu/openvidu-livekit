@@ -19,13 +19,14 @@ import (
 	"errors"
 	"time"
 
-	"github.com/livekit/livekit-server/pkg/openvidu/openviduconfig"
-	"github.com/livekit/livekit-server/pkg/openvidu/queue"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+
+	"github.com/openvidu/openvidu-livekit/pkg/openvidu/openviduconfig"
+	"github.com/openvidu/openvidu-livekit/pkg/openvidu/queue"
 )
 
 type MongoDatabaseClient struct {
