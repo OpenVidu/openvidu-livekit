@@ -125,11 +125,11 @@ func (m *MongoDatabaseClient) createMongoJsonIndexDocuments() error {
 	openviduDb := m.client.Database("openvidu")
 	eventCollection := openviduDb.Collection("events")
 	result, err1 := eventCollection.Indexes().CreateMany(context, []mongo.IndexModel{
-		{Keys: bson.D{{"type", 1}}},
-		{Keys: bson.D{{"room.sid", 1}}},
-		{Keys: bson.D{{"participant.sid", 1}}},
-		{Keys: bson.D{{"timestamp.seconds", 1}}},
-		{Keys: bson.D{{"openvidu_expire_at", 1}}, Options: options.Index().SetExpireAfterSeconds(0)},
+		{Keys: bson.D{{Key: "type", Value: 1}}},
+		{Keys: bson.D{{Key: "room.sid", Value: 1}}},
+		{Keys: bson.D{{Key: "participant.sid", Value: 1}}},
+		{Keys: bson.D{{Key: "timestamp.seconds", Value: 1}}},
+		{Keys: bson.D{{Key: "openvidu_expire_at", Value: 1}}, Options: options.Index().SetExpireAfterSeconds(0)},
 	})
 	if err1 != nil {
 		logger.Errorw("failed to create MongoDB event indexes", err1)
@@ -139,13 +139,13 @@ func (m *MongoDatabaseClient) createMongoJsonIndexDocuments() error {
 
 	statCollection := openviduDb.Collection("stats")
 	result, err2 := statCollection.Indexes().CreateMany(context, []mongo.IndexModel{
-		{Keys: bson.D{{"room_id", 1}}},
-		{Keys: bson.D{{"participant_id", 1}}},
-		{Keys: bson.D{{"track_id", 1}}},
-		{Keys: bson.D{{"kind", 1}}},
-		{Keys: bson.D{{"time_stamp.seconds", 1}}},
-		{Keys: bson.D{{"score", 1}}},
-		{Keys: bson.D{{"openvidu_expire_at", 1}}, Options: options.Index().SetExpireAfterSeconds(0)},
+		{Keys: bson.D{{Key: "room_id", Value: 1}}},
+		{Keys: bson.D{{Key: "participant_id", Value: 1}}},
+		{Keys: bson.D{{Key: "track_id", Value: 1}}},
+		{Keys: bson.D{{Key: "kind", Value: 1}}},
+		{Keys: bson.D{{Key: "time_stamp.seconds", Value: 1}}},
+		{Keys: bson.D{{Key: "score", Value: 1}}},
+		{Keys: bson.D{{Key: "openvidu_expire_at", Value: 1}}, Options: options.Index().SetExpireAfterSeconds(0)},
 	})
 	if err2 != nil {
 		logger.Errorw("failed to create MongoDB stat indexes", err2)
