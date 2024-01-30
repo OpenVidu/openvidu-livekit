@@ -12,13 +12,13 @@ Extend the native livekit configuration ([`.yaml` file](https://docs.livekit.io/
 openvidu:
   analytics:
     enabled: true
-    mongoUrl: mongodb://localhost:27017/
+    mongo_url: mongodb://localhost:27017/
     interval: 10s
     expiration: 360h # 15 days
 ```
 
 - `enabled`: whether to enable the storage of events/stats or not.
-- `mongoUrl`: URL of the MongoDB deployment where to store the events/stats. This is a [Connection String](https://www.mongodb.com/docs/manual/reference/connection-string/).
+- `mongo_url`: URL of the MongoDB deployment where to store the events/stats. This is a [Connection String](https://www.mongodb.com/docs/manual/reference/connection-string/).
 - `interval`: how often the events/stats batches must be sent. It is a [time.Duration](https://pkg.go.dev/time#Duration)
 - `expiration`: the time to live of the events/stats in the storage destination. It is a [time.Duration](https://pkg.go.dev/time#Duration)
 

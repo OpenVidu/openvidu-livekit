@@ -2,7 +2,7 @@
 openvidu:
   analytics:
     enabled: true
-    mongoUrl: mongodb://localhost:27017/
+    mongo_url: mongodb://localhost:27017/
     interval: 10s
     expiration: 360h # 15 days
 
@@ -293,4 +293,3 @@ keys:
 #   # value less or equal than 0 means no limit.
 #   subscription_limit_video: 0
 #   subscription_limit_audio: 0
-

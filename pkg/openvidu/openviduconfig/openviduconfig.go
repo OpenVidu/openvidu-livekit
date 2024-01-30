@@ -24,7 +24,7 @@ type OpenViduConfig struct {
 
 type AnalyticsConfig struct {
 	Enabled    bool          `yaml:"enabled"`
-	MongoUrl   string        `yaml:"mongoUrl"`
+	MongoUrl   string        `yaml:"mongo_url"`
 	Interval   time.Duration `yaml:"interval"`
 	Expiration time.Duration `yaml:"expiration"`
 }
