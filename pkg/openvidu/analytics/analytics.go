@@ -113,7 +113,7 @@ func NewOpenViduStatsIngestClient() OpenViduStatsIngestClient {
 }
 
 func (client OpenViduEventsIngestClient) Send(events *livekit.AnalyticsEvents) error {
-	logger.Infow("adding " + strconv.Itoa(len(events.Events)) + " new events to next batch")
+	logger.Debugw("adding " + strconv.Itoa(len(events.Events)) + " new events to next batch")
 	logger.Debugw(events.String())
 	for _, sender := range ANALYTICS_SENDERS {
 		for _, event := range events.Events {
@@ -124,7 +124,7 @@ func (client OpenViduEventsIngestClient) Send(events *livekit.AnalyticsEvents) e
 }
 
 func (client OpenViduStatsIngestClient) Send(stats *livekit.AnalyticsStats) error {
-	logger.Infow("adding " + strconv.Itoa(len(stats.Stats)) + " new stats to next batch")
+	logger.Debugw("adding " + strconv.Itoa(len(stats.Stats)) + " new stats to next batch")
 	logger.Debugw(stats.String())
 	for _, sender := range ANALYTICS_SENDERS {
 		for _, stat := range stats.Stats {
