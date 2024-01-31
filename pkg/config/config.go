@@ -33,7 +33,7 @@ import (
 	"github.com/livekit/protocol/rpc"
 
 	// BEGIN OPENVIDU BLOCK
-	"github.com/openvidu/openvidu-livekit/pkg/openvidu/openviduconfig"
+	"github.com/openvidu/openvidu-livekit/openvidu/openviduconfig"
 	// END OPENVIDU BLOCK
 )
 

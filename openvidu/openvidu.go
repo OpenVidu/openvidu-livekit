@@ -18,7 +18,7 @@ import (
 	"github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/protocol/logger"
 
-	"github.com/openvidu/openvidu-livekit/pkg/openvidu/analytics"
+	"github.com/openvidu/openvidu-livekit/openvidu/analytics"
 )
 
 func Start(conf *config.Config) {

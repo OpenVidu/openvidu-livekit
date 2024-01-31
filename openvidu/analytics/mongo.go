@@ -25,8 +25,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
-	"github.com/openvidu/openvidu-livekit/pkg/openvidu/openviduconfig"
-	"github.com/openvidu/openvidu-livekit/pkg/openvidu/queue"
+	"github.com/openvidu/openvidu-livekit/openvidu/openviduconfig"
+	"github.com/openvidu/openvidu-livekit/openvidu/queue"
 )
 
 type MongoDatabaseClient struct {

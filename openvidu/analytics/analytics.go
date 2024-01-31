@@ -27,8 +27,8 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/openvidu/openvidu-livekit/pkg/openvidu/openviduconfig"
-	"github.com/openvidu/openvidu-livekit/pkg/openvidu/queue"
+	"github.com/openvidu/openvidu-livekit/openvidu/openviduconfig"
+	"github.com/openvidu/openvidu-livekit/openvidu/queue"
 )
 
 var ANALYTICS_CONFIGURATION *openviduconfig.AnalyticsConfig

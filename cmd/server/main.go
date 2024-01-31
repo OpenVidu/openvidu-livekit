@@ -38,7 +38,7 @@ import (
 	"github.com/livekit/livekit-server/version"
 
 	// BEGIN OPENVIDU BLOCK
-	"github.com/openvidu/openvidu-livekit/pkg/openvidu"
+	"github.com/openvidu/openvidu-livekit/openvidu"
 	// END OPENVIDU BLOCK
 )
 
