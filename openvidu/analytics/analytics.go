@@ -196,12 +196,180 @@ func parseEvent(eventMap map[string]interface{}, event *livekit.AnalyticsEvent) 
 	}
 	if eventMap["egress"] != nil {
 		eventMap["egress"].(map[string]interface{})["status"] = event.Egress.Status.String()
+
+		if eventMap["egress"].(map[string]interface{})["Request"] != nil {
+			parseEgressRequest(
+				eventMap["egress"].(map[string]interface{})["Request"].(map[string]interface{}),
+				event.Egress.Request,
+			)
+		}
 	}
 	if eventMap["ingress"] != nil && eventMap["ingress"].(map[string]interface{})["state"] != nil {
-		eventMap["ingress"].(map[string]interface{})["state"].(map[string]interface{})["status"] = event.Ingress.State.Status.String()
+		eventMap["ingress"].(map[string]interface{})["state"].(map[string]interface{})["status"] =
+			event.Ingress.State.Status.String()
 	}
 	if eventMap["track"] != nil {
 		eventMap["track"].(map[string]interface{})["source"] = event.Track.Source.String()
+	}
+}
+
+func parseEgressRequest(egressRequestMap map[string]interface{}, egressRequest interface{}) {
+	switch egressRequest.(type) {
+	case *livekit.EgressInfo_RoomComposite:
+		parseRoomCompositeEgressRequest(
+			egressRequestMap["RoomComposite"].(map[string]interface{}),
+			egressRequest.(*livekit.EgressInfo_RoomComposite).RoomComposite,
+		)
+	case *livekit.EgressInfo_Web:
+		parseWebEgressRequest(
+			egressRequestMap["Web"].(map[string]interface{}),
+			egressRequest.(*livekit.EgressInfo_Web).Web,
+		)
+	case *livekit.EgressInfo_Participant:
+		parseParticipantEgressRequest(
+			egressRequestMap["Participant"].(map[string]interface{}),
+			egressRequest.(*livekit.EgressInfo_Participant).Participant,
+		)
+	case *livekit.EgressInfo_TrackComposite:
+		parseTrackCompositeEgressRequest(
+			egressRequestMap["TrackComposite"].(map[string]interface{}),
+			egressRequest.(*livekit.EgressInfo_TrackComposite).TrackComposite,
+		)
+	}
+}
+
+func parseRoomCompositeEgressRequest(roomCompositeMap map[string]interface{}, roomComposite *livekit.RoomCompositeEgressRequest) {
+	var options = roomComposite.Options
+	if options != nil {
+		switch options.(type) {
+		case *livekit.RoomCompositeEgressRequest_Preset:
+			roomCompositeMap["Options"].(map[string]interface{})["Preset"] =
+				options.(*livekit.RoomCompositeEgressRequest_Preset).Preset.String()
+		case *livekit.RoomCompositeEgressRequest_Advanced:
+			var advancedOptions = options.(*livekit.RoomCompositeEgressRequest_Advanced).Advanced
+			if advancedOptions != nil {
+				parseEncodingOptions(roomCompositeMap, advancedOptions)
+			}
+		}
+	}
+
+	parseEgressRequestOutputs(
+		roomCompositeMap,
+		roomComposite.FileOutputs,
+		roomComposite.StreamOutputs,
+		roomComposite.SegmentOutputs,
+		roomComposite.ImageOutputs,
+	)
+}
+
+func parseWebEgressRequest(webRequestMap map[string]interface{}, webRequest *livekit.WebEgressRequest) {
+	var options = webRequest.Options
+	if options != nil {
+		switch options.(type) {
+		case *livekit.WebEgressRequest_Preset:
+			webRequestMap["Options"].(map[string]interface{})["Preset"] =
+				options.(*livekit.WebEgressRequest_Preset).Preset.String()
+		case *livekit.WebEgressRequest_Advanced:
+			var advancedOptions = options.(*livekit.WebEgressRequest_Advanced).Advanced
+			if advancedOptions != nil {
+				parseEncodingOptions(webRequestMap, advancedOptions)
+			}
+		}
+	}
+
+	parseEgressRequestOutputs(
+		webRequestMap,
+		webRequest.FileOutputs,
+		webRequest.StreamOutputs,
+		webRequest.SegmentOutputs,
+		webRequest.ImageOutputs,
+	)
+}
+
+func parseParticipantEgressRequest(participantRequestMap map[string]interface{}, participantRequest *livekit.ParticipantEgressRequest) {
+	var options = participantRequest.Options
+	if options != nil {
+		switch options.(type) {
+		case *livekit.ParticipantEgressRequest_Preset:
+			participantRequestMap["Options"].(map[string]interface{})["Preset"] =
+				options.(*livekit.ParticipantEgressRequest_Preset).Preset.String()
+		case *livekit.ParticipantEgressRequest_Advanced:
+			var advancedOptions = options.(*livekit.ParticipantEgressRequest_Advanced).Advanced
+			if advancedOptions != nil {
+				parseEncodingOptions(participantRequestMap, advancedOptions)
+			}
+		}
+	}
+
+	parseEgressRequestOutputs(
+		participantRequestMap,
+		participantRequest.FileOutputs,
+		participantRequest.StreamOutputs,
+		participantRequest.SegmentOutputs,
+		participantRequest.ImageOutputs,
+	)
+}
+
+func parseTrackCompositeEgressRequest(trackCompositeMap map[string]interface{}, trackComposite *livekit.TrackCompositeEgressRequest) {
+	var options = trackComposite.Options
+	if options != nil {
+		switch options.(type) {
+		case *livekit.TrackCompositeEgressRequest_Preset:
+			trackCompositeMap["Options"].(map[string]interface{})["Preset"] =
+				options.(*livekit.TrackCompositeEgressRequest_Preset).Preset.String()
+		case *livekit.TrackCompositeEgressRequest_Advanced:
+			var advancedOptions = options.(*livekit.TrackCompositeEgressRequest_Advanced).Advanced
+			if advancedOptions != nil {
+				parseEncodingOptions(trackCompositeMap, advancedOptions)
+			}
+		}
+	}
+
+	parseEgressRequestOutputs(
+		trackCompositeMap,
+		trackComposite.FileOutputs,
+		trackComposite.StreamOutputs,
+		trackComposite.SegmentOutputs,
+		trackComposite.ImageOutputs,
+	)
+}
+
+func parseEncodingOptions(egressRequestMap map[string]interface{}, advancedOptions *livekit.EncodingOptions) {
+	egressRequestMap["Options"].(map[string]interface{})["Advanced"].(map[string]interface{})["audio_codec"] =
+		advancedOptions.AudioCodec.String()
+	egressRequestMap["Options"].(map[string]interface{})["Advanced"].(map[string]interface{})["video_codec"] =
+		advancedOptions.VideoCodec.String()
+}
+
+func parseEgressRequestOutputs(
+	egressRequestMap map[string]interface{},
+	fileOutputs []*livekit.EncodedFileOutput,
+	streamOutputs []*livekit.StreamOutput,
+	segmentOutputs []*livekit.SegmentedFileOutput,
+	imageOutputs []*livekit.ImageOutput,
+) {
+	for i, fileOutput := range fileOutputs {
+		egressRequestMap["file_outputs"].([]interface{})[i].(map[string]interface{})["file_type"] =
+			fileOutput.FileType.String()
+	}
+
+	for i, streamOutput := range streamOutputs {
+		egressRequestMap["stream_outputs"].([]interface{})[i].(map[string]interface{})["protocol"] =
+			streamOutput.Protocol.String()
+	}
+
+	for i, segmentOutput := range segmentOutputs {
+		egressRequestMap["segment_outputs"].([]interface{})[i].(map[string]interface{})["protocol"] =
+			segmentOutput.Protocol.String()
+		egressRequestMap["segment_outputs"].([]interface{})[i].(map[string]interface{})["filename_suffix"] =
+			segmentOutput.FilenameSuffix.String()
+	}
+
+	for i, imageOutput := range imageOutputs {
+		egressRequestMap["image_outputs"].([]interface{})[i].(map[string]interface{})["filename_suffix"] =
+			imageOutput.FilenameSuffix.String()
+		egressRequestMap["image_outputs"].([]interface{})[i].(map[string]interface{})["image_codec"] =
+			imageOutput.ImageCodec.String()
 	}
 }
 
