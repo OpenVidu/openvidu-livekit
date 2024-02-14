@@ -7,7 +7,14 @@ import (
 
 	"github.com/livekit/livekit-server/pkg/telemetry"
 	"github.com/livekit/protocol/livekit"
+	// BEGIN OPENVIDU BLOCK
+	"github.com/pion/webrtc/v3"
+	// END OPENVIDU BLOCK
 )
+
+// BEGIN OPENVIDU BLOCK
+func (fake *FakeAnalyticsService) SendICECandidate (context.Context, *webrtc.ICECandidate) {}
+// END OPENVIDU BLOCK
 
 type FakeAnalyticsService struct {
 	SendEventStub        func(context.Context, *livekit.AnalyticsEvent)

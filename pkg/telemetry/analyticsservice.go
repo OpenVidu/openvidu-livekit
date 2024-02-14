@@ -28,6 +28,7 @@ import (
 
 	// BEGIN OPENVIDU BLOCK
 	"github.com/openvidu/openvidu-livekit/openvidu/analytics"
+	"github.com/pion/webrtc/v3"
 	// END OPENVIDU BLOCK
 )
 
@@ -36,6 +37,9 @@ type AnalyticsService interface {
 	SendStats(ctx context.Context, stats []*livekit.AnalyticsStat)
 	SendEvent(ctx context.Context, events *livekit.AnalyticsEvent)
 	SendNodeRoomStates(ctx context.Context, nodeRooms *livekit.AnalyticsNodeRooms)
+	// BEGIN OPENVIDU BLOCK
+	SendICECandidate(ctx context.Context, icecandidate *webrtc.ICECandidate)
+	// END OPENVIDU BLOCK
 }
 
 type analyticsService struct {
@@ -46,6 +50,9 @@ type analyticsService struct {
 	events    livekit.AnalyticsRecorderService_IngestEventsClient
 	stats     livekit.AnalyticsRecorderService_IngestStatsClient
 	nodeRooms livekit.AnalyticsRecorderService_IngestNodeRoomStatesClient
+	// BEGIN OPENVIDU BLOCK
+	icecandidates analytics.OpenViduIcecandidatesIngestClient
+	// END OPENVIDU BLOCK
 }
 
 func NewAnalyticsService(_ *config.Config, currentNode routing.LocalNode) AnalyticsService {
@@ -53,8 +60,9 @@ func NewAnalyticsService(_ *config.Config, currentNode routing.LocalNode) Analyt
 		analyticsKey: "", // TODO: conf.AnalyticsKey
 		nodeID:       currentNode.Id,
 		// BEGIN OPENVIDU BLOCK
-		events: analytics.NewOpenViduEventsIngestClient(),
-		stats:  analytics.NewOpenViduStatsIngestClient(),
+		events:        analytics.NewOpenViduEventsIngestClient(),
+		stats:         analytics.NewOpenViduStatsIngestClient(),
+		icecandidates: analytics.NewOpenViduIcecandidatesIngestClient(),
 		// END OPENVIDU BLOCK
 	}
 }
@@ -98,3 +106,12 @@ func (a *analyticsService) SendNodeRoomStates(_ context.Context, nodeRooms *live
 		logger.Errorw("failed to send node room states", err)
 	}
 }
+
+// BEGIN OPENVIDU BLOCK
+func (a *analyticsService) SendICECandidate(_ context.Context, icecandidate *webrtc.ICECandidate) {
+	if err := a.icecandidates.Send(icecandidate); err != nil {
+		logger.Errorw("failed to send ice candidate", err)
+	}
+}
+
+// END OPENVIDU BLOCK

@@ -23,6 +23,7 @@ import (
 	"github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
+	"github.com/pion/webrtc/v3"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -35,9 +36,10 @@ var ANALYTICS_CONFIGURATION *openviduconfig.AnalyticsConfig
 var ANALYTICS_SENDERS []*AnalyticsSender
 
 type AnalyticsSender struct {
-	eventsQueue    queue.Queue[*livekit.AnalyticsEvent]
-	statsQueue     queue.Queue[*livekit.AnalyticsStat]
-	databaseClient DatabaseClient
+	eventsQueue        queue.Queue[*livekit.AnalyticsEvent]
+	statsQueue         queue.Queue[*livekit.AnalyticsStat]
+	icecandidatesQueue queue.Queue[*webrtc.ICECandidate]
+	databaseClient     DatabaseClient
 }
 
 type DatabaseClient interface {
@@ -104,12 +106,19 @@ type OpenViduStatsIngestClient struct {
 	grpc.ClientStream
 }
 
+type OpenViduIcecandidatesIngestClient struct {
+}
+
 func NewOpenViduEventsIngestClient() OpenViduEventsIngestClient {
 	return OpenViduEventsIngestClient{}
 }
 
 func NewOpenViduStatsIngestClient() OpenViduStatsIngestClient {
 	return OpenViduStatsIngestClient{}
+}
+
+func NewOpenViduIcecandidatesIngestClient() OpenViduIcecandidatesIngestClient {
+	return OpenViduIcecandidatesIngestClient{}
 }
 
 func (client OpenViduEventsIngestClient) Send(events *livekit.AnalyticsEvents) error {
@@ -130,6 +139,15 @@ func (client OpenViduStatsIngestClient) Send(stats *livekit.AnalyticsStats) erro
 		for _, stat := range stats.Stats {
 			sender.statsQueue.Enqueue(stat)
 		}
+	}
+	return nil
+}
+
+func (client OpenViduIcecandidatesIngestClient) Send(icecandidate *webrtc.ICECandidate) error {
+	logger.Debugw("adding new ICE candidate to next batch")
+	logger.Debugw(icecandidate.String())
+	for _, sender := range ANALYTICS_SENDERS {
+		sender.icecandidatesQueue.Enqueue(icecandidate)
 	}
 	return nil
 }
@@ -162,6 +180,15 @@ func dequeStats(statsQueue queue.Queue[*livekit.AnalyticsStat]) []*livekit.Analy
 	return result
 }
 
+func dequeIcecandidates(icecandidatesQueue queue.Queue[*webrtc.ICECandidate]) []*webrtc.ICECandidate {
+	var result []*webrtc.ICECandidate
+	for icecandidatesQueue.Len() > 0 {
+		icecandidate, _ := icecandidatesQueue.Dequeue()
+		result = append(result, icecandidate)
+	}
+	return result
+}
+
 func obtainMapInterfaceFromEvent(event *livekit.AnalyticsEvent) map[string]interface{} {
 	var eventMap map[string]interface{}
 	var eventBytes []byte
@@ -176,6 +203,14 @@ func obtainMapInterfaceFromStat(stat *livekit.AnalyticsStat) map[string]interfac
 	statBytes, _ = json.Marshal(stat)
 	json.Unmarshal(statBytes, &statMap)
 	return statMap
+}
+
+func obtainMapInterfaceFromIcecandidate(icecandidate *webrtc.ICECandidate) map[string]interface{} {
+	var icecandidateMap map[string]interface{}
+	var icecandidateBytes []byte
+	icecandidateBytes, _ = json.Marshal(icecandidate)
+	json.Unmarshal(icecandidateBytes, &icecandidateMap)
+	return icecandidateMap
 }
 
 func getTimestampFromStruct(timestamp *timestamppb.Timestamp) string {

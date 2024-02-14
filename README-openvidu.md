@@ -88,6 +88,7 @@ func NewMongoDatabaseClient(conf *openviduconfig.AnalyticsConfig) (*MongoDatabas
 	owner := &AnalyticsSender{
 		eventsQueue:    queue.NewSliceQueue[*livekit.AnalyticsEvent](),
 		statsQueue:     queue.NewSliceQueue[*livekit.AnalyticsStat](),
+		icecandidatesQueue: queue.NewSliceQueue[*webrtc.ICECandidate](),
 		databaseClient: mongoDatabaseClient,
 	}
 	mongoDatabaseClient.owner = owner

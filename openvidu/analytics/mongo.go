@@ -21,6 +21,7 @@ import (
 
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
+	"github.com/pion/webrtc/v3"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -50,9 +51,10 @@ func NewMongoDatabaseClient(conf *openviduconfig.AnalyticsConfig) (*MongoDatabas
 		owner:  nil,
 	}
 	sender := &AnalyticsSender{
-		eventsQueue:    queue.NewSliceQueue[*livekit.AnalyticsEvent](),
-		statsQueue:     queue.NewSliceQueue[*livekit.AnalyticsStat](),
-		databaseClient: mongoDatabaseClient,
+		eventsQueue:        queue.NewSliceQueue[*livekit.AnalyticsEvent](),
+		statsQueue:         queue.NewSliceQueue[*livekit.AnalyticsStat](),
+		icecandidatesQueue: queue.NewSliceQueue[*webrtc.ICECandidate](),
+		databaseClient:     mongoDatabaseClient,
 	}
 	mongoDatabaseClient.owner = sender
 
@@ -68,12 +70,14 @@ func (m *MongoDatabaseClient) SendBatch() {
 
 	events := dequeEvents(m.owner.eventsQueue)
 	stats := dequeStats(m.owner.statsQueue)
+	icecandidates := dequeIcecandidates(m.owner.icecandidatesQueue)
 
-	if len(events) > 0 || len(stats) > 0 {
+	if len(events) > 0 || len(stats) > 0 || len(icecandidates) > 0 {
 
 		openviduDb := m.client.Database("openvidu")
 		eventCollection := openviduDb.Collection("events")
 		statCollection := openviduDb.Collection("stats")
+		icecandidatesCollection := openviduDb.Collection("icecandidates")
 
 		var parsedEvents []interface{}
 		for _, event := range events {
@@ -91,6 +95,14 @@ func (m *MongoDatabaseClient) SendBatch() {
 			parsedStats = append(parsedStats, statMap)
 		}
 
+		var parsedIcecandidates []interface{}
+		for _, icecandidate := range icecandidates {
+			icecandidateMap := obtainMapInterfaceFromIcecandidate(icecandidate)
+			// parseIcecandidate(icecandidateMap, icecandidate) ?
+			mongoParseIcecandidate(icecandidateMap)
+			parsedIcecandidates = append(parsedIcecandidates, icecandidateMap)
+		}
+
 		if len(parsedEvents) > 0 {
 			logger.Debugw("inserting events into MongoDB...")
 
@@ -101,7 +113,7 @@ func (m *MongoDatabaseClient) SendBatch() {
 				logger.Warnw("restoring events for next batch", nil)
 				handleInsertManyError(err, m.owner.eventsQueue, events)
 			} else {
-				logger.Debugw("inserted events", "IDs", eventsResult.InsertedIDs)
+				logger.Debugw("inserted events", "#", len(eventsResult.InsertedIDs))
 			}
 		}
 		if len(parsedStats) > 0 {
@@ -114,7 +126,20 @@ func (m *MongoDatabaseClient) SendBatch() {
 				logger.Warnw("restoring stats for next batch", nil)
 				handleInsertManyError(err, m.owner.statsQueue, stats)
 			} else {
-				logger.Debugw("inserted stats", "IDs", statsResult.InsertedIDs)
+				logger.Debugw("inserted stats", "#", len(statsResult.InsertedIDs))
+			}
+		}
+		if len(parsedIcecandidates) > 0 {
+			logger.Debugw("inserting icecandidates into MongoDB...")
+
+			icecandidatesResult, err := icecandidatesCollection.InsertMany(context.Background(), parsedIcecandidates, options.InsertMany().SetOrdered(false))
+
+			if err != nil {
+				logger.Errorw("failed to insert icecandidates into MongoDB", err)
+				logger.Warnw("restoring icecandidates for next batch", nil)
+				handleInsertManyError(err, m.owner.icecandidatesQueue, icecandidates)
+			} else {
+				logger.Debugw("inserted icecandidates", "#", len(icecandidatesResult.InsertedIDs))
 			}
 		}
 	}
@@ -122,7 +147,10 @@ func (m *MongoDatabaseClient) SendBatch() {
 
 func (m *MongoDatabaseClient) createMongoJsonIndexDocuments() error {
 	context := context.TODO()
+
 	openviduDb := m.client.Database("openvidu")
+	logger.Infow("created database openvidu", "result", openviduDb)
+
 	eventCollection := openviduDb.Collection("events")
 	result, err1 := eventCollection.Indexes().CreateMany(context, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "type", Value: 1}}},
@@ -152,10 +180,23 @@ func (m *MongoDatabaseClient) createMongoJsonIndexDocuments() error {
 		return err2
 	}
 	logger.Infow("created mongo stat indexes", "result", result)
+
+	icecandidatesCollection := openviduDb.Collection("icecandidates")
+	result, err4 := icecandidatesCollection.Indexes().CreateMany(context, []mongo.IndexModel{
+		{Keys: bson.D{{Key: "protocol", Value: 1}}},
+		{Keys: bson.D{{Key: "type", Value: 1}}},
+		{Keys: bson.D{{Key: "openvidu_expire_at", Value: 1}}, Options: options.Index().SetExpireAfterSeconds(0)},
+	})
+	if err4 != nil {
+		logger.Errorw("failed to create MongoDB icecandidates indexes", err4)
+		return err4
+	}
+	logger.Infow("created mongo icecandidates indexes", "result", result)
+
 	return nil
 }
 
-func handleInsertManyError[T *livekit.AnalyticsEvent | *livekit.AnalyticsStat](err error, queue queue.Queue[T], accumulatedCollection []T) {
+func handleInsertManyError[T *livekit.AnalyticsEvent | *livekit.AnalyticsStat | *webrtc.ICECandidate](err error, queue queue.Queue[T], accumulatedCollection []T) {
 	var mongoBulkWriteException mongo.BulkWriteException
 	if errors.As(err, &mongoBulkWriteException) {
 		// Known error BulkWriteException. Use it to restore only failed events
@@ -176,6 +217,10 @@ func mongoParseEvent(eventMap map[string]interface{}) {
 
 func mongoParseStat(statMap map[string]interface{}) {
 	statMap["openvidu_expire_at"] = time.Now().Add(ANALYTICS_CONFIGURATION.Expiration).UTC()
+}
+
+func mongoParseIcecandidate(icecandidateMap map[string]interface{}) {
+	icecandidateMap["openvidu_expire_at"] = time.Now().Add(ANALYTICS_CONFIGURATION.Expiration).UTC()
 }
 
 // func addMongoIdToEvent(eventMap map[string]interface{}, event *livekit.AnalyticsEvent) {

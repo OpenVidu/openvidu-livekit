@@ -15,6 +15,7 @@
 package rtc
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -246,6 +247,16 @@ func (p *ParticipantImpl) sendDisconnectUpdatesForReconnect() error {
 }
 
 func (p *ParticipantImpl) sendICECandidate(c *webrtc.ICECandidate, target livekit.SignalTarget) error {
+
+	// BEGIN OPENVIDU BLOCK
+	// fmt.Println(p.params.Identity)
+	// fmt.Println(p.params.SID)
+	// fmt.Println(p.params.Name)
+	// fmt.Println(p.params.GetParticipantInfo(p.params.SID))
+	// fmt.Println(p.roomId)
+	p.params.Telemetry.SendICECandidate(context.TODO(), c)
+	// END OPENVIDU BLOCK
+
 	trickle := ToProtoTrickle(c.ToJSON())
 	trickle.Target = target
 	return p.writeMessage(&livekit.SignalResponse{
