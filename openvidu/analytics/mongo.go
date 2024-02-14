@@ -16,6 +16,8 @@ package analytics
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"errors"
 	"time"
 
@@ -79,7 +81,7 @@ func (m *MongoDatabaseClient) SendBatch() {
 		for _, event := range events {
 			eventMap := obtainMapInterfaceFromEvent(event)
 			parseEvent(eventMap, event)
-			mongoParseEvent(eventMap)
+			mongoParseEvent(eventMap, event)
 			parsedEvents = append(parsedEvents, eventMap)
 		}
 
@@ -87,7 +89,7 @@ func (m *MongoDatabaseClient) SendBatch() {
 		for _, stat := range stats {
 			statMap := obtainMapInterfaceFromStat(stat)
 			parseStat(statMap, stat)
-			mongoParseStat(statMap)
+			mongoParseStat(statMap, stat)
 			parsedStats = append(parsedStats, statMap)
 		}
 
@@ -101,7 +103,7 @@ func (m *MongoDatabaseClient) SendBatch() {
 				logger.Warnw("restoring events for next batch", nil)
 				handleInsertManyError(err, m.owner.eventsQueue, events)
 			} else {
-				logger.Debugw("inserted events", "IDs", eventsResult.InsertedIDs)
+				logger.Debugw("inserted events", "#", len(eventsResult.InsertedIDs))
 			}
 		}
 		if len(parsedStats) > 0 {
@@ -114,7 +116,7 @@ func (m *MongoDatabaseClient) SendBatch() {
 				logger.Warnw("restoring stats for next batch", nil)
 				handleInsertManyError(err, m.owner.statsQueue, stats)
 			} else {
-				logger.Debugw("inserted stats", "IDs", statsResult.InsertedIDs)
+				logger.Debugw("inserted stats", "#", len(statsResult.InsertedIDs))
 			}
 		}
 	}
@@ -122,7 +124,10 @@ func (m *MongoDatabaseClient) SendBatch() {
 
 func (m *MongoDatabaseClient) createMongoJsonIndexDocuments() error {
 	context := context.TODO()
+
 	openviduDb := m.client.Database("openvidu")
+	logger.Infow("created database openvidu", "result", openviduDb)
+
 	eventCollection := openviduDb.Collection("events")
 	result, err1 := eventCollection.Indexes().CreateMany(context, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "type", Value: 1}}},
@@ -158,31 +163,51 @@ func (m *MongoDatabaseClient) createMongoJsonIndexDocuments() error {
 func handleInsertManyError[T *livekit.AnalyticsEvent | *livekit.AnalyticsStat](err error, queue queue.Queue[T], accumulatedCollection []T) {
 	var mongoBulkWriteException mongo.BulkWriteException
 	if errors.As(err, &mongoBulkWriteException) {
-		// Known error BulkWriteException. Use it to restore only failed events
+		// Known error BulkWriteException. Use it to restore only failed objects
 		for _, writeError := range mongoBulkWriteException.WriteErrors {
+			if writeError.HasErrorCode(11000) {
+				// Duplicate key error. Skip reinsertion of this event
+				logger.Warnw("skipping reinsertion of duplicated object", writeError, "event", accumulatedCollection[writeError.Index])
+				continue
+			}
 			queue.Enqueue(accumulatedCollection[writeError.Index])
 		}
 	} else {
-		// Unknown error. Restore all events
+		// Unknown error. Restore all objects
 		for _, event := range accumulatedCollection {
 			queue.Enqueue(event)
 		}
 	}
 }
 
-func mongoParseEvent(eventMap map[string]interface{}) {
+func mongoParseEvent(eventMap map[string]interface{}, event *livekit.AnalyticsEvent) {
+	addMongoIdToEvent(eventMap, event)
 	eventMap["openvidu_expire_at"] = time.Now().Add(ANALYTICS_CONFIGURATION.Expiration).UTC()
 }
 
-func mongoParseStat(statMap map[string]interface{}) {
+func mongoParseStat(statMap map[string]interface{}, stat *livekit.AnalyticsStat) {
+	addMongoIdToStat(statMap, stat)
 	statMap["openvidu_expire_at"] = time.Now().Add(ANALYTICS_CONFIGURATION.Expiration).UTC()
 }
 
-// func addMongoIdToEvent(eventMap map[string]interface{}, event *livekit.AnalyticsEvent) {
-// 	var id string = event.Room.Sid + ":" + event.Type.String() + ":" + getTimestampFromStruct(event.Timestamp)
-// 	eventMap["_id"], _ = primitive.ObjectIDFromHex(id)
-// }
+func addMongoIdToEvent(eventMap map[string]interface{}, event *livekit.AnalyticsEvent) {
+	var id string = event.Room.Sid + ":"
+	if event.ParticipantId != "" {
+		id += event.ParticipantId + ":"
+	}
+	if event.TrackId != "" {
+		id += event.TrackId + ":"
+	}
+	id += event.Type.String() + ":" + getTimestampFromStruct(event.Timestamp)
+	eventMap["_id"] = hashFromStringId(id)
+}
 
-// func addMongoIdToStat(statMap map[string]interface{}, stat *livekit.AnalyticsStat) {
-// 	statMap["_id"], _ = primitive.ObjectIDFromHex(stat.RoomId + ":" + stat.Kind.String() + ":" + stat.ParticipantId + ":" + stat.TrackId + ":" + getTimestampFromStruct(stat.TimeStamp))
-// }
+func addMongoIdToStat(statMap map[string]interface{}, stat *livekit.AnalyticsStat) {
+	var id string = stat.RoomId + ":" + stat.ParticipantId + ":" + stat.TrackId + ":" + stat.Kind.String() + ":" + stat.Node + ":" + getTimestampFromStruct(stat.TimeStamp)
+	statMap["_id"] = hashFromStringId(id)
+}
+
+func hashFromStringId(id string) string {
+	hash := md5.Sum([]byte(id))
+	return hex.EncodeToString(hash[:])
+}
