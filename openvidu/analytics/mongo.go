@@ -191,7 +191,10 @@ func mongoParseStat(statMap map[string]interface{}, stat *livekit.AnalyticsStat)
 }
 
 func addMongoIdToEvent(eventMap map[string]interface{}, event *livekit.AnalyticsEvent) {
-	var id string = event.Room.Sid + ":"
+	var id string
+	if event.Room != nil {
+		id += event.Room.Sid + ":"
+	}
 	if event.ParticipantId != "" {
 		id += event.ParticipantId + ":"
 	}
