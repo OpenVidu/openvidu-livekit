@@ -25,6 +25,7 @@ import (
 
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v3"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/livekit/protocol/logger"
 
@@ -43,7 +44,7 @@ const (
 	TransitionCostSpatial = 10
 
 	ResumeBehindThresholdSeconds      = float64(0.2)   // 200ms
-	ResumeBehindHighTresholdSeconds   = float64(2.0)   // 2 seconds
+	ResumeBehindHighThresholdSeconds  = float64(2.0)   // 2 seconds
 	LayerSwitchBehindThresholdSeconds = float64(0.05)  // 50ms
 	SwitchAheadThresholdSeconds       = float64(0.025) // 25ms
 )
@@ -92,7 +93,7 @@ type VideoAllocation struct {
 	DistanceToDesired   float64
 }
 
-func (v VideoAllocation) String() string {
+func (v *VideoAllocation) String() string {
 	return fmt.Sprintf("VideoAllocation{pause: %s, def: %+v, bwr: %d, del: %d, bwn: %d, rates: %+v, target: %s, req: %d, max: %s, dist: %0.2f}",
 		v.PauseReason,
 		v.IsDeficient,
@@ -105,6 +106,24 @@ func (v VideoAllocation) String() string {
 		v.MaxLayer,
 		v.DistanceToDesired,
 	)
+}
+
+func (v *VideoAllocation) MarshalLogObject(e zapcore.ObjectEncoder) error {
+	if v == nil {
+		return nil
+	}
+
+	e.AddString("PauseReason", v.PauseReason.String())
+	e.AddBool("IsDeficient", v.IsDeficient)
+	e.AddInt64("BandwidthRquested", v.BandwidthRequested)
+	e.AddInt64("BandwidthDelta", v.BandwidthDelta)
+	e.AddInt64("BandwidthNeeded", v.BandwidthNeeded)
+	e.AddReflected("Bitrates", v.Bitrates)
+	e.AddReflected("TargetLayer", v.TargetLayer)
+	e.AddInt32("RequestLayerSpatial", v.RequestLayerSpatial)
+	e.AddReflected("MaxLayer", v.MaxLayer)
+	e.AddFloat64("DistanceToDesired", v.DistanceToDesired)
+	return nil
 }
 
 var (
@@ -137,8 +156,19 @@ type VideoTransition struct {
 	BandwidthDelta int64
 }
 
-func (v VideoTransition) String() string {
+func (v *VideoTransition) String() string {
 	return fmt.Sprintf("VideoTransition{from: %s, to: %s, del: %d}", v.From, v.To, v.BandwidthDelta)
+}
+
+func (v *VideoTransition) MarshalLogObject(e zapcore.ObjectEncoder) error {
+	if v == nil {
+		return nil
+	}
+
+	e.AddReflected("From", v.From)
+	e.AddReflected("To", v.To)
+	e.AddInt64("BandwidthDelta", v.BandwidthDelta)
+	return nil
 }
 
 // -------------------------------------------------------------------
@@ -147,8 +177,7 @@ type TranslationParams struct {
 	shouldDrop  bool
 	isResuming  bool
 	isSwitching bool
-	rtp         *TranslationParamsRTP
-	codecBytes  []byte
+	rtp         TranslationParamsRTP
 	ddBytes     []byte
 	marker      bool
 }
@@ -185,12 +214,12 @@ func (f ForwarderState) String() string {
 // -------------------------------------------------------------------
 
 type Forwarder struct {
-	lock                          sync.RWMutex
-	codec                         webrtc.RTPCodecCapability
-	kind                          webrtc.RTPCodecType
-	logger                        logger.Logger
-	getReferenceLayerRTPTimestamp func(ts uint32, layer int32, referenceLayer int32) (uint32, error)
-	getExpectedRTPTimestamp       func(at time.Time) (uint64, error)
+	lock                    sync.RWMutex
+	codec                   webrtc.RTPCodecCapability
+	kind                    webrtc.RTPCodecType
+	logger                  logger.Logger
+	skipReferenceTS         bool
+	getExpectedRTPTimestamp func(at time.Time) (uint64, error)
 
 	muted                 bool
 	pubMuted              bool
@@ -202,6 +231,8 @@ type Forwarder struct {
 	lastSSRC              uint32
 	referenceLayerSpatial int32
 	refTSOffset           uint64
+	refSenderReports      [buffer.DefaultMaxLayerSpatial + 1]*buffer.RTCPSenderReportData
+	refIsSVC              bool
 
 	provisional *VideoAllocationProvisional
 
@@ -217,19 +248,19 @@ type Forwarder struct {
 func NewForwarder(
 	kind webrtc.RTPCodecType,
 	logger logger.Logger,
-	getReferenceLayerRTPTimestamp func(ts uint32, layer int32, referenceLayer int32) (uint32, error),
+	skipReferenceTS bool,
 	getExpectedRTPTimestamp func(at time.Time) (uint64, error),
 ) *Forwarder {
 	f := &Forwarder{
-		kind:                          kind,
-		logger:                        logger,
-		getReferenceLayerRTPTimestamp: getReferenceLayerRTPTimestamp,
-		getExpectedRTPTimestamp:       getExpectedRTPTimestamp,
-		referenceLayerSpatial:         buffer.InvalidLayerSpatial,
-		lastAllocation:                VideoAllocationDefault,
-		rtpMunger:                     NewRTPMunger(logger),
-		vls:                           videolayerselector.NewNull(logger),
-		codecMunger:                   codecmunger.NewNull(logger),
+		kind:                    kind,
+		logger:                  logger,
+		skipReferenceTS:         skipReferenceTS,
+		getExpectedRTPTimestamp: getExpectedRTPTimestamp,
+		referenceLayerSpatial:   buffer.InvalidLayerSpatial,
+		lastAllocation:          VideoAllocationDefault,
+		rtpMunger:               NewRTPMunger(logger),
+		vls:                     videolayerselector.NewNull(logger),
+		codecMunger:             codecmunger.NewNull(logger),
 	}
 
 	if f.kind == webrtc.RTPCodecTypeVideo {
@@ -248,7 +279,7 @@ func (f *Forwarder) SetMaxPublishedLayer(maxPublishedLayer int32) bool {
 	}
 
 	f.vls.SetMaxSeenSpatial(maxPublishedLayer)
-	f.logger.Debugw("setting max published layer", "maxPublishedLayer", maxPublishedLayer)
+	f.logger.Debugw("setting max published layer", "layer", maxPublishedLayer)
 	return true
 }
 
@@ -427,7 +458,7 @@ func (f *Forwarder) PubMute(pubMuted bool) bool {
 		return false
 	}
 
-	f.logger.Debugw("setting forwarder pub mute", "pubMuted", pubMuted)
+	f.logger.Debugw("setting forwarder pub mute", "muted", pubMuted)
 	f.pubMuted = pubMuted
 
 	// resync when pub muted so that sequence numbers do not jump on unmute
@@ -527,18 +558,72 @@ func (f *Forwarder) GetMaxSubscribedSpatial() int32 {
 	return layer
 }
 
-func (f *Forwarder) GetReferenceLayerSpatial() int32 {
-	f.lock.RLock()
-	defer f.lock.RUnlock()
+func (f *Forwarder) SetRefSenderReport(isSVC bool, layer int32, srData *buffer.RTCPSenderReportData) {
+	f.lock.Lock()
+	defer f.lock.Unlock()
 
-	return f.referenceLayerSpatial
+	f.refIsSVC = isSVC
+	if isSVC {
+		layer = 0
+	}
+	if layer >= 0 && int(layer) < len(f.refSenderReports) {
+		f.refSenderReports[layer] = srData
+	}
 }
 
-func (f *Forwarder) GetReferenceTimestampOffset() uint64 {
+func (f *Forwarder) clearRefSenderReportsLocked() {
+	// On (re)start of fowarding, clear any old publisher sender reports.
+	// This is done to prevent use of potentially stale publisher sender reports.
+	//
+	// It is possible to implement mute using pause/unpause
+	// which can implemented using a replaceTrack(null)/replaceTrack(track).
+	// In those cases, the RTP time stamp may not jump across
+	// the mute/pause valley (for the time it is replaced with null track).
+	// So, relying on a report that happened before unmute/unpause
+	// could result in incorrect RTCP sender report on subscriber side.
+	//
+	// It could happen like this
+	//   1. Normal operation: publisher sending sender reports and
+	//      suscribers use reports from publisher to calculate and send
+	//      RTCP sender report.
+	//   2. Publisher pauses: there are no more reports.
+	//   3. When paused, subscriber can still use the publisher side sender
+	//      report to send reports. Although the time since last publisher
+	//      sender report is increasing, the reports are correct though.
+	//   4. Publisher unpauses after 20 seconds. But, it may not have advanced
+	//      RTP Timestamp by that much. Let us say, it advances only by 5 seconds.
+	//   5. When subscriber starts forwarding packets, it will calculate
+	//      a new time stamp offset to adjust to the new time stamp of publisher.
+	//   6. But, when that same offset is used on an old publisher sender report
+	//      (i. e. a report from before the pause), the subscriber side sender
+	//      reports jumps ahead in time by 15 seconds.
+	//
+	// By clearing sender report on (re)start of a stream, subscribers will wait for a fresh report
+	// after unmute to send sender report.
+	for layer := int32(0); layer < buffer.DefaultMaxLayerSpatial+1; layer++ {
+		f.refSenderReports[layer] = nil
+	}
+}
+
+func (f *Forwarder) GetSenderReportParams() (int32, uint64, *buffer.RTCPSenderReportData) {
 	f.lock.RLock()
 	defer f.lock.RUnlock()
 
-	return f.refTSOffset
+	if f.kind == webrtc.RTPCodecTypeAudio {
+		return 0, f.rtpMunger.GetPinnedTSOffset(), f.refSenderReports[0]
+	}
+
+	currentLayerSpatial := f.vls.GetCurrent().Spatial
+	if currentLayerSpatial < 0 || currentLayerSpatial > buffer.DefaultMaxLayerSpatial {
+		return currentLayerSpatial, f.rtpMunger.GetPinnedTSOffset(), nil
+	}
+
+	refSenderReport := f.refSenderReports[currentLayerSpatial]
+	if f.refIsSVC {
+		refSenderReport = f.refSenderReports[0]
+	}
+
+	return currentLayerSpatial, f.rtpMunger.GetPinnedTSOffset(), refSenderReport
 }
 
 func (f *Forwarder) isDeficientLocked() bool {
@@ -1360,7 +1445,7 @@ func (f *Forwarder) updateAllocation(alloc VideoAllocation, reason string) Video
 		alloc.PauseReason != f.lastAllocation.PauseReason ||
 		alloc.TargetLayer != f.lastAllocation.TargetLayer ||
 		alloc.RequestLayerSpatial != f.lastAllocation.RequestLayerSpatial {
-		f.logger.Debugw(fmt.Sprintf("stream allocation: %s", reason), "allocation", alloc)
+		f.logger.Debugw(fmt.Sprintf("stream allocation: %s", reason), "allocation", &alloc)
 	}
 	f.lastAllocation = alloc
 
@@ -1433,12 +1518,12 @@ func (f *Forwarder) FilterRTX(nacks []uint16) (filtered []uint16, disallowedLaye
 	return
 }
 
-func (f *Forwarder) GetTranslationParams(extPkt *buffer.ExtPacket, layer int32) (*TranslationParams, error) {
+func (f *Forwarder) GetTranslationParams(extPkt *buffer.ExtPacket, layer int32) (TranslationParams, error) {
 	f.lock.Lock()
 	defer f.lock.Unlock()
 
 	if f.muted || f.pubMuted {
-		return &TranslationParams{
+		return TranslationParams{
 			shouldDrop: true,
 		}, nil
 	}
@@ -1450,7 +1535,36 @@ func (f *Forwarder) GetTranslationParams(extPkt *buffer.ExtPacket, layer int32) 
 		return f.getTranslationParamsVideo(extPkt, layer)
 	}
 
-	return nil, ErrUnknownKind
+	return TranslationParams{
+		shouldDrop: true,
+	}, ErrUnknownKind
+}
+
+func (f *Forwarder) getReferenceLayerRTPTimestamp(ts uint32, refLayer, targetLayer int32) (uint32, error) {
+	if refLayer < 0 || int(refLayer) > len(f.refSenderReports) || targetLayer < 0 || int(targetLayer) > len(f.refSenderReports) {
+		return 0, fmt.Errorf("invalid layer(s), refLayer: %d, targetLayer: %d", refLayer, targetLayer)
+	}
+
+	if refLayer == targetLayer || f.refIsSVC {
+		return ts, nil
+	}
+
+	srRef := f.refSenderReports[refLayer]
+	srTarget := f.refSenderReports[targetLayer]
+	if srRef == nil || srRef.NTPTimestamp == 0 || srTarget == nil || srTarget.NTPTimestamp == 0 {
+		return 0, fmt.Errorf("unavailable layer(s), refLayer: %d, targetLayer: %d", refLayer, targetLayer)
+	}
+
+	ntpDiff := srRef.NTPTimestamp.Time().Sub(srTarget.NTPTimestamp.Time())
+	rtpDiff := ntpDiff.Nanoseconds() * int64(f.codec.ClockRate) / 1e9
+
+	// calculate other layer's time stamp at the same time as ref layer's NTP time
+	normalizedOtherTS := srTarget.RTPTimestamp + uint32(rtpDiff)
+
+	// now both layers' time stamp refer to the same NTP time and the diff is the offset between the layers
+	offset := srRef.RTPTimestamp - normalizedOtherTS
+
+	return ts + offset, nil
 }
 
 func (f *Forwarder) processSourceSwitch(extPkt *buffer.ExtPacket, layer int32) error {
@@ -1459,6 +1573,7 @@ func (f *Forwarder) processSourceSwitch(extPkt *buffer.ExtPacket, layer int32) e
 		f.referenceLayerSpatial = layer
 		f.rtpMunger.SetLastSnTs(extPkt)
 		f.codecMunger.SetLast(extPkt)
+		f.clearRefSenderReportsLocked()
 		f.logger.Debugw(
 			"starting forwarding",
 			"sequenceNumber", extPkt.Packet.SequenceNumber,
@@ -1507,27 +1622,29 @@ func (f *Forwarder) processSourceSwitch(extPkt *buffer.ExtPacket, layer int32) e
 	extLastTS := rtpMungerState.ExtLastTS
 	extExpectedTS := extLastTS
 	extRefTS := extExpectedTS
+	refTS := uint32(extRefTS)
 	switchingAt := time.Now()
-	if f.getReferenceLayerRTPTimestamp != nil {
-		ts, err := f.getReferenceLayerRTPTimestamp(extPkt.Packet.Timestamp, layer, f.referenceLayerSpatial)
+	if !f.skipReferenceTS {
+		var err error
+		refTS, err = f.getReferenceLayerRTPTimestamp(extPkt.Packet.Timestamp, f.referenceLayerSpatial, layer)
 		if err != nil {
-			// error out if extRefTS is not available. It can happen when there is no sender report
+			// error out if refTS is not available. It can happen when there is no sender report
 			// for the layer being switched to. Can especially happen at the start of the track when layer switches are
 			// potentially happening very quickly. Erroring out and waiting for a layer for which a sender report has been
 			// received will calculate a better offset, but may result in initial adaptation to take a bit longer depending
 			// on how often publisher/remote side sends RTCP sender report.
 			return err
 		}
+	}
 
-		extRefTS = (extRefTS & 0xFFFF_FFFF_0000_0000) + uint64(ts)
+	extRefTS = (extRefTS & 0xFFFF_FFFF_0000_0000) + uint64(refTS)
 
-		expectedTS32 := uint32(extExpectedTS)
-		if (ts-expectedTS32) < 1<<31 && ts < expectedTS32 {
-			extRefTS += (1 << 32)
-		}
-		if (expectedTS32-ts) < 1<<31 && expectedTS32 < ts && extRefTS >= 1<<32 {
-			extRefTS -= (1 << 32)
-		}
+	expectedTS := uint32(extExpectedTS)
+	if (refTS-expectedTS) < 1<<31 && refTS < expectedTS {
+		extRefTS += (1 << 32)
+	}
+	if (expectedTS-refTS) < 1<<31 && expectedTS < refTS && extRefTS >= 1<<32 {
+		extRefTS -= (1 << 32)
 	}
 
 	if f.getExpectedRTPTimestamp != nil {
@@ -1583,7 +1700,7 @@ func (f *Forwarder) processSourceSwitch(extPkt *buffer.ExtPacket, layer int32) e
 			if f.resumeBehindThreshold > 0 && diffSeconds > f.resumeBehindThreshold {
 				logTransition("resume, reference too far behind", extExpectedTS, extRefTS, extLastTS, diffSeconds)
 				extNextTS = extExpectedTS
-			} else if diffSeconds > ResumeBehindHighTresholdSeconds {
+			} else if diffSeconds > ResumeBehindHighThresholdSeconds {
 				// could be due to incorrect reference calculation
 				logTransition("resume, reference very far behind", extExpectedTS, extRefTS, extLastTS, diffSeconds)
 				extNextTS = extExpectedTS
@@ -1597,6 +1714,13 @@ func (f *Forwarder) processSourceSwitch(extPkt *buffer.ExtPacket, layer int32) e
 			extNextTS = extRefTS
 		}
 		f.resumeBehindThreshold = 0.0
+
+		// sender reports are cleared after calculating switch time stamp
+		// as relative differences between layers should remain the same.
+		// TODO: If the relative difference changes a lot, probably have to
+		// abandon the checks above and just use the expected timestamp
+		// as the next time stamp.
+		f.clearRefSenderReportsLocked()
 	} else {
 		// switching between layers, check if extRefTS is too far behind the last sent
 		diffSeconds := float64(int64(extRefTS-extLastTS)) / float64(f.codec.ClockRate)
@@ -1647,11 +1771,11 @@ func (f *Forwarder) processSourceSwitch(extPkt *buffer.ExtPacket, layer int32) e
 }
 
 // should be called with lock held
-func (f *Forwarder) getTranslationParamsCommon(extPkt *buffer.ExtPacket, layer int32, tp *TranslationParams) (*TranslationParams, error) {
+func (f *Forwarder) getTranslationParamsCommon(extPkt *buffer.ExtPacket, layer int32, tp *TranslationParams) error {
 	if f.lastSSRC != extPkt.Packet.SSRC {
 		if err := f.processSourceSwitch(extPkt, layer); err != nil {
 			tp.shouldDrop = true
-			return tp, nil
+			return nil
 		}
 		f.logger.Debugw("switching feed", "from", f.lastSSRC, "to", extPkt.Packet.SSRC)
 		f.lastSSRC = extPkt.Packet.SSRC
@@ -1661,29 +1785,34 @@ func (f *Forwarder) getTranslationParamsCommon(extPkt *buffer.ExtPacket, layer i
 	if err != nil {
 		tp.shouldDrop = true
 		if err == ErrPaddingOnlyPacket || err == ErrDuplicatePacket || err == ErrOutOfOrderSequenceNumberCacheMiss {
-			return tp, nil
+			return nil
 		}
-		return tp, err
+		return err
 	}
 
 	tp.rtp = tpRTP
+	return nil
+}
+
+// should be called with lock held
+func (f *Forwarder) getTranslationParamsAudio(extPkt *buffer.ExtPacket, layer int32) (TranslationParams, error) {
+	tp := TranslationParams{}
+	if err := f.getTranslationParamsCommon(extPkt, layer, &tp); err != nil {
+		tp.shouldDrop = true
+		return tp, err
+	}
 	return tp, nil
 }
 
 // should be called with lock held
-func (f *Forwarder) getTranslationParamsAudio(extPkt *buffer.ExtPacket, layer int32) (*TranslationParams, error) {
-	return f.getTranslationParamsCommon(extPkt, layer, &TranslationParams{})
-}
-
-// should be called with lock held
-func (f *Forwarder) getTranslationParamsVideo(extPkt *buffer.ExtPacket, layer int32) (*TranslationParams, error) {
+func (f *Forwarder) getTranslationParamsVideo(extPkt *buffer.ExtPacket, layer int32) (TranslationParams, error) {
 	maybeRollback := func(isSwitching bool) {
 		if isSwitching {
 			f.vls.Rollback()
 		}
 	}
 
-	tp := &TranslationParams{}
+	tp := TranslationParams{}
 	if !f.vls.GetTarget().IsValid() {
 		// stream is paused by streamallocator
 		tp.shouldDrop = true
@@ -1695,8 +1824,10 @@ func (f *Forwarder) getTranslationParamsVideo(extPkt *buffer.ExtPacket, layer in
 		tp.shouldDrop = true
 		if f.started && result.IsRelevant {
 			// call to update highest incoming sequence number and other internal structures
-			if tpRTP, err := f.rtpMunger.UpdateAndGetSnTs(extPkt, result.RTPMarker); err == nil && tpRTP.snOrdering == SequenceNumberOrderingContiguous {
-				f.rtpMunger.PacketDropped(extPkt)
+			if tpRTP, err := f.rtpMunger.UpdateAndGetSnTs(extPkt, result.RTPMarker); err == nil {
+				if tpRTP.snOrdering == SequenceNumberOrderingContiguous {
+					f.rtpMunger.PacketDropped(extPkt)
+				}
 			}
 		}
 		return tp, nil
@@ -1730,38 +1861,49 @@ func (f *Forwarder) getTranslationParamsVideo(extPkt *buffer.ExtPacket, layer in
 		return tp, nil
 	}
 
-	_, err := f.getTranslationParamsCommon(extPkt, layer, tp)
-	if tp.shouldDrop || len(extPkt.Packet.Payload) == 0 {
+	err := f.getTranslationParamsCommon(extPkt, layer, &tp)
+	if tp.shouldDrop {
 		maybeRollback(result.IsSwitching)
 		return tp, err
 	}
 
+	return tp, nil
+}
+
+func (f *Forwarder) TranslateCodecHeader(extPkt *buffer.ExtPacket, tpr *TranslationParamsRTP, outputBuffer []byte) (bool, int, int, error) {
+	f.lock.Lock()
+	defer f.lock.Unlock()
+
+	maybeRollback := func(isSwitching bool) {
+		if isSwitching {
+			f.vls.Rollback()
+		}
+	}
+
 	// codec specific forwarding check and any needed packet munging
 	tl, isSwitching := f.vls.SelectTemporal(extPkt)
-	codecBytes, err := f.codecMunger.UpdateAndGet(
+	inputSize, outputSize, err := f.codecMunger.UpdateAndGet(
 		extPkt,
-		tp.rtp.snOrdering == SequenceNumberOrderingOutOfOrder,
-		tp.rtp.snOrdering == SequenceNumberOrderingGap,
+		tpr.snOrdering == SequenceNumberOrderingOutOfOrder,
+		tpr.snOrdering == SequenceNumberOrderingGap,
 		tl,
+		outputBuffer,
 	)
 	if err != nil {
-		tp.rtp = nil
-		tp.shouldDrop = true
 		if err == codecmunger.ErrFilteredVP8TemporalLayer || err == codecmunger.ErrOutOfOrderVP8PictureIdCacheMiss {
 			if err == codecmunger.ErrFilteredVP8TemporalLayer {
 				// filtered temporal layer, update sequence number offset to prevent holes
 				f.rtpMunger.PacketDropped(extPkt)
 			}
-			maybeRollback(result.IsSwitching || isSwitching)
-			return tp, nil
+			maybeRollback(isSwitching)
+			return false, 0, 0, nil
 		}
 
-		maybeRollback(result.IsSwitching || isSwitching)
-		return tp, err
+		maybeRollback(isSwitching)
+		return false, 0, 0, err
 	}
 
-	tp.codecBytes = codecBytes
-	return tp, nil
+	return true, inputSize, outputSize, nil
 }
 
 func (f *Forwarder) maybeStart() {
@@ -1838,11 +1980,11 @@ func (f *Forwarder) GetSnTsForBlankFrames(frameRate uint32, numPackets int) ([]S
 	return snts, frameEndNeeded, err
 }
 
-func (f *Forwarder) GetPadding(frameEndNeeded bool) ([]byte, error) {
+func (f *Forwarder) GetPadding(frameEndNeeded bool, outputBuffer []byte) (int, error) {
 	f.lock.Lock()
 	defer f.lock.Unlock()
 
-	return f.codecMunger.UpdateAndGetPadding(!frameEndNeeded)
+	return f.codecMunger.UpdateAndGetPadding(!frameEndNeeded, outputBuffer)
 }
 
 func (f *Forwarder) RTPMungerDebugInfo() map[string]interface{} {

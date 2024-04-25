@@ -255,6 +255,10 @@ func (m *SubscriptionManager) WaitUntilSubscribed(timeout time.Duration) error {
 	return context.DeadlineExceeded
 }
 
+func (m *SubscriptionManager) ReconcileAll() {
+	m.queueReconcile(trackIDForReconcileSubscriptions)
+}
+
 func (m *SubscriptionManager) setDesired(trackID livekit.TrackID, desired bool) (*trackSubscription, bool) {
 	m.lock.RLock()
 	defer m.lock.RUnlock()
@@ -344,7 +348,7 @@ func (m *SubscriptionManager) reconcileSubscription(s *trackSubscription) {
 			default:
 				// all other errors
 				if s.durationSinceStart() > subscriptionTimeout {
-					s.logger.Errorw("failed to subscribe, triggering error handler", err,
+					s.logger.Warnw("failed to subscribe, triggering error handler", err,
 						"attempt", numAttempts,
 					)
 					s.maybeRecordError(m.params.Telemetry, m.params.Participant.ID(), err, false)
@@ -365,7 +369,7 @@ func (m *SubscriptionManager) reconcileSubscription(s *trackSubscription) {
 
 	if s.needsUnsubscribe() {
 		if err := m.unsubscribe(s); err != nil {
-			s.logger.Errorw("failed to unsubscribe", err)
+			s.logger.Warnw("failed to unsubscribe", err)
 		} else {
 			// successfully unsubscribed, remove from map
 			m.lock.Lock()
@@ -383,7 +387,7 @@ func (m *SubscriptionManager) reconcileSubscription(s *trackSubscription) {
 		// if a publisher leaves or closes the source track, SubscribedTrack will be closed as well and it will go
 		// back to needsSubscribe state
 		if s.durationSinceStart() > subscriptionTimeout {
-			s.logger.Errorw("track not bound after timeout", nil)
+			s.logger.Warnw("track not bound after timeout", nil)
 			s.maybeRecordError(m.params.Telemetry, m.params.Participant.ID(), ErrTrackNotBound, false)
 			m.params.OnSubscriptionError(s.trackID, true, ErrTrackNotBound)
 		}
@@ -493,8 +497,6 @@ func (m *SubscriptionManager) subscribe(s *trackSubscription) error {
 
 	s.setPublisher(res.PublisherIdentity, res.PublisherID)
 
-	// since hasPermission defaults to true, we will want to send a message to the client the first time
-	// that we discover permissions were denied
 	permChanged := s.setHasPermission(res.HasPermission)
 	if permChanged {
 		m.params.Participant.SubscriptionPermissionUpdate(s.getPublisherID(), trackID, res.HasPermission)
@@ -573,7 +575,7 @@ func (m *SubscriptionManager) subscribe(s *trackSubscription) error {
 	m.lock.Unlock()
 
 	if changedCB != nil && firstSubscribe {
-		go changedCB(publisherID, true)
+		changedCB(publisherID, true)
 	}
 	return nil
 }
@@ -628,9 +630,11 @@ func (m *SubscriptionManager) handleSubscribedTrackClose(s *trackSubscription, w
 	var relieveFromLimits bool
 	switch subTrack.MediaTrack().Kind() {
 	case livekit.TrackType_VIDEO:
-		relieveFromLimits = m.params.SubscriptionLimitVideo > 0 && m.subscribedVideoCount.Dec() == m.params.SubscriptionLimitVideo-1
+		videoCount := m.subscribedVideoCount.Dec()
+		relieveFromLimits = m.params.SubscriptionLimitVideo > 0 && videoCount == m.params.SubscriptionLimitVideo-1
 	case livekit.TrackType_AUDIO:
-		relieveFromLimits = m.params.SubscriptionLimitAudio > 0 && m.subscribedAudioCount.Dec() == m.params.SubscriptionLimitAudio-1
+		audioCount := m.subscribedAudioCount.Dec()
+		relieveFromLimits = m.params.SubscriptionLimitAudio > 0 && audioCount == m.params.SubscriptionLimitAudio-1
 	}
 
 	// remove from subscribedTo
@@ -662,7 +666,7 @@ func (m *SubscriptionManager) handleSubscribedTrackClose(s *trackSubscription, w
 			context.Background(),
 			m.params.Participant.ID(),
 			&livekit.TrackInfo{Sid: string(s.trackID), Type: subTrack.MediaTrack().Kind()},
-			!willBeResumed && !m.params.Participant.IsClosed(),
+			!willBeResumed,
 		)
 
 		dt := subTrack.DownTrack()
@@ -716,19 +720,20 @@ type trackSubscription struct {
 	trackID      livekit.TrackID
 	logger       logger.Logger
 
-	lock              sync.RWMutex
-	desired           bool
-	publisherID       livekit.ParticipantID
-	publisherIdentity livekit.ParticipantIdentity
-	settings          *livekit.UpdateTrackSettings
-	changedNotifier   types.ChangeNotifier
-	removedNotifier   types.ChangeNotifier
-	hasPermission     bool
-	subscribedTrack   types.SubscribedTrack
-	eventSent         atomic.Bool
-	numAttempts       atomic.Int32
-	bound             bool
-	kind              atomic.Pointer[livekit.TrackType]
+	lock                     sync.RWMutex
+	desired                  bool
+	publisherID              livekit.ParticipantID
+	publisherIdentity        livekit.ParticipantIdentity
+	settings                 *livekit.UpdateTrackSettings
+	changedNotifier          types.ChangeNotifier
+	removedNotifier          types.ChangeNotifier
+	hasPermissionInitialized bool
+	hasPermission            bool
+	subscribedTrack          types.SubscribedTrack
+	eventSent                atomic.Bool
+	numAttempts              atomic.Int32
+	bound                    bool
+	kind                     atomic.Pointer[livekit.TrackType]
 
 	// the later of when subscription was requested OR when the first failure was encountered OR when permission is granted
 	// this timestamp determines when failures are reported
@@ -740,8 +745,6 @@ func newTrackSubscription(subscriberID livekit.ParticipantID, trackID livekit.Tr
 		subscriberID: subscriberID,
 		trackID:      trackID,
 		logger:       l,
-		// default allow
-		hasPermission: true,
 	}
 }
 
@@ -790,9 +793,11 @@ func (s *trackSubscription) setDesired(desired bool) bool {
 func (s *trackSubscription) setHasPermission(perm bool) bool {
 	s.lock.Lock()
 	defer s.lock.Unlock()
-	if s.hasPermission == perm {
+	if s.hasPermissionInitialized && s.hasPermission == perm {
 		return false
 	}
+
+	s.hasPermissionInitialized = true
 	s.hasPermission = perm
 	if s.hasPermission {
 		// when permission is granted, reset the timer so it has sufficient time to reconcile
@@ -823,8 +828,8 @@ func (s *trackSubscription) setSubscribedTrack(track types.SubscribedTrack) {
 	s.lock.Unlock()
 
 	if settings != nil && track != nil {
-		s.logger.Debugw("restoring subscriber settings", "settings", settings)
-		track.UpdateSubscriberSettings(settings)
+		s.logger.Debugw("restoring subscriber settings", "settings", logger.Proto(settings))
+		track.UpdateSubscriberSettings(settings, true)
 	}
 	if oldTrack != nil {
 		oldTrack.OnClose(nil)
@@ -895,7 +900,7 @@ func (s *trackSubscription) setSettings(settings *livekit.UpdateTrackSettings) {
 	subTrack := s.subscribedTrack
 	s.lock.Unlock()
 	if subTrack != nil {
-		subTrack.UpdateSubscriberSettings(settings)
+		subTrack.UpdateSubscriberSettings(settings, false)
 	}
 }
 

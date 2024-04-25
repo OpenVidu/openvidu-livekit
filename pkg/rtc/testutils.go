@@ -45,7 +45,7 @@ func NewMockParticipant(identity livekit.ParticipantIdentity, protocol types.Pro
 		Identity:    string(identity),
 		State:       livekit.ParticipantInfo_JOINED,
 		IsPublisher: publisher,
-	}, utils.TimedVersion{})
+	}, utils.TimedVersion(0))
 
 	p.SetMetadataCalls(func(m string) {
 		var f func(participant types.LocalParticipant)
@@ -83,5 +83,9 @@ func NewMockTrack(kind livekit.TrackType, name string) *typesfakes.FakeMediaTrac
 	t.IDReturns(livekit.TrackID(utils.NewGuid(utils.TrackPrefix)))
 	t.KindReturns(kind)
 	t.NameReturns(name)
+	t.ToProtoReturns(&livekit.TrackInfo{
+		Type: kind,
+		Name: name,
+	})
 	return t
 }

@@ -25,7 +25,8 @@ import (
 )
 
 const (
-	frameMarking = "urn:ietf:params:rtp-hdrext:framemarking"
+	frameMarking        = "urn:ietf:params:rtp-hdrext:framemarking"
+	repairedRTPStreamID = "urn:ietf:params:rtp-hdrext:sdes:repaired-rtp-stream-id"
 )
 
 type WebRTCConfig struct {
@@ -38,7 +39,8 @@ type WebRTCConfig struct {
 }
 
 type ReceiverConfig struct {
-	PacketBufferSize int
+	PacketBufferSizeVideo int
+	PacketBufferSizeAudio int
 }
 
 type RTPHeaderExtensionConfig struct {
@@ -71,6 +73,12 @@ func NewWebRTCConfig(conf *config.Config) (*WebRTCConfig, error) {
 	if rtcConf.PacketBufferSize == 0 {
 		rtcConf.PacketBufferSize = 500
 	}
+	if rtcConf.PacketBufferSizeVideo == 0 {
+		rtcConf.PacketBufferSizeVideo = rtcConf.PacketBufferSize
+	}
+	if rtcConf.PacketBufferSizeAudio == 0 {
+		rtcConf.PacketBufferSizeAudio = rtcConf.PacketBufferSize
+	}
 
 	// publisher configuration
 	publisherConfig := DirectionConfig{
@@ -87,6 +95,7 @@ func NewWebRTCConfig(conf *config.Config) (*WebRTCConfig, error) {
 				sdp.TransportCCURI,
 				frameMarking,
 				dd.ExtensionURI,
+				repairedRTPStreamID,
 			},
 		},
 		RTCPFeedback: RTCPFeedbackConfig{
@@ -127,7 +136,8 @@ func NewWebRTCConfig(conf *config.Config) (*WebRTCConfig, error) {
 	return &WebRTCConfig{
 		WebRTCConfig: *webRTCConfig,
 		Receiver: ReceiverConfig{
-			PacketBufferSize: rtcConf.PacketBufferSize,
+			PacketBufferSizeVideo: rtcConf.PacketBufferSizeVideo,
+			PacketBufferSizeAudio: rtcConf.PacketBufferSizeAudio,
 		},
 		Publisher:  publisherConfig,
 		Subscriber: subscriberConfig,

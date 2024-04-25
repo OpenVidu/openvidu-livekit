@@ -17,6 +17,7 @@ package rtc
 import (
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,18 +35,24 @@ import (
 	"github.com/pkg/errors"
 	"go.uber.org/atomic"
 
-	"github.com/livekit/livekit-server/pkg/config"
-	"github.com/livekit/livekit-server/pkg/rtc/types"
-	"github.com/livekit/livekit-server/pkg/sfu/pacer"
-	"github.com/livekit/livekit-server/pkg/sfu/rtpextension"
-	"github.com/livekit/livekit-server/pkg/sfu/streamallocator"
-	"github.com/livekit/livekit-server/pkg/telemetry"
-	"github.com/livekit/livekit-server/pkg/telemetry/prometheus"
-	sutils "github.com/livekit/livekit-server/pkg/utils"
+	lkinterceptor "github.com/livekit/mediatransportutil/pkg/interceptor"
+	lktwcc "github.com/livekit/mediatransportutil/pkg/twcc"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/protocol/logger/pionlogger"
 	lksdp "github.com/livekit/protocol/sdp"
+
+	"github.com/livekit/livekit-server/pkg/config"
+	"github.com/livekit/livekit-server/pkg/rtc/transport"
+	"github.com/livekit/livekit-server/pkg/rtc/types"
+	sfuinterceptor "github.com/livekit/livekit-server/pkg/sfu/interceptor"
+	"github.com/livekit/livekit-server/pkg/sfu/pacer"
+	"github.com/livekit/livekit-server/pkg/sfu/rtpextension"
+	"github.com/livekit/livekit-server/pkg/sfu/streamallocator"
+	sfuutils "github.com/livekit/livekit-server/pkg/sfu/utils"
+	"github.com/livekit/livekit-server/pkg/telemetry/prometheus"
+	"github.com/livekit/livekit-server/pkg/utils"
+	sutils "github.com/livekit/livekit-server/pkg/utils"
 )
 
 const (
@@ -77,9 +84,6 @@ var (
 	ErrIceRestartOnClosedPeerConnection = errors.New("ICE restart on closed peer connection")
 	ErrNoTransceiver                    = errors.New("no transceiver")
 	ErrNoSender                         = errors.New("no sender")
-	ErrNoICECandidateHandler            = errors.New("no ICE candidate handler")
-	ErrNoOfferHandler                   = errors.New("no offer handler")
-	ErrNoAnswerHandler                  = errors.New("no answer handler")
 	ErrMidNotFound                      = errors.New("mid not found")
 )
 
@@ -128,31 +132,6 @@ func (e event) String() string {
 
 // -------------------------------------------------------
 
-type NegotiationState int
-
-const (
-	NegotiationStateNone NegotiationState = iota
-	// waiting for remote description
-	NegotiationStateRemote
-	// need to Negotiate again
-	NegotiationStateRetry
-)
-
-func (n NegotiationState) String() string {
-	switch n {
-	case NegotiationStateNone:
-		return "NONE"
-	case NegotiationStateRemote:
-		return "WAITING_FOR_REMOTE"
-	case NegotiationStateRetry:
-		return "RETRY"
-	default:
-		return fmt.Sprintf("%d", int(n))
-	}
-}
-
-// -------------------------------------------------------
-
 type SimulcastTrackInfo struct {
 	Mid string
 	Rid string
@@ -175,7 +154,6 @@ type PCTransport struct {
 	reliableDCOpened bool
 	lossyDC          *webrtc.DataChannel
 	lossyDCOpened    bool
-	onDataPacket     func(kind livekit.DataPacket_Kind, data []byte)
 
 	iceStartedAt               time.Time
 	iceConnectedAt             time.Time
@@ -186,18 +164,10 @@ type PCTransport struct {
 	resetShortConnOnICERestart atomic.Bool
 	signalingRTT               atomic.Uint32 // milliseconds
 
-	onFullyEstablished func()
-
 	debouncedNegotiate func(func())
 	debouncePending    bool
 
-	onICECandidate            func(c *webrtc.ICECandidate) error
-	onOffer                   func(offer webrtc.SessionDescription) error
-	onAnswer                  func(answer webrtc.SessionDescription) error
-	onInitialConnected        func()
-	onFailed                  func(isShortLived bool)
-	onNegotiationStateChanged func(state NegotiationState)
-	onNegotiationFailed       func()
+	onNegotiationStateChanged func(state transport.NegotiationState)
 
 	// stream allocator for subscriber PC
 	streamAllocator *streamallocator.StreamAllocator
@@ -213,8 +183,7 @@ type PCTransport struct {
 	preferTCP atomic.Bool
 	isClosed  atomic.Bool
 
-	eventChMu sync.RWMutex
-	eventCh   chan event
+	eventsQueue *sutils.OpsQueue
 
 	// the following should be accessed only in event processing go routine
 	cacheLocalCandidates      bool
@@ -222,7 +191,7 @@ type PCTransport struct {
 	pendingRemoteCandidates   []*webrtc.ICECandidateInit
 	restartAfterGathering     bool
 	restartAtNextOffer        bool
-	negotiationState          NegotiationState
+	negotiationState          transport.NegotiationState
 	negotiateCounter          atomic.Int32
 	signalStateCheckTimer     *time.Timer
 	currentOfferIceCredential string // ice user:pwd, for publish side ice restart checking
@@ -232,13 +201,14 @@ type PCTransport struct {
 }
 
 type TransportParams struct {
+	Handler                      transport.Handler
 	ParticipantID                livekit.ParticipantID
 	ParticipantIdentity          livekit.ParticipantIdentity
 	ProtocolVersion              types.ProtocolVersion
 	Config                       *WebRTCConfig
+	Twcc                         *lktwcc.Responder
 	DirectionConfig              DirectionConfig
 	CongestionControlConfig      config.CongestionControlConfig
-	Telemetry                    telemetry.TelemetryService
 	EnabledCodecs                []*livekit.Codec
 	Logger                       logger.Logger
 	Transport                    livekit.SignalTarget
@@ -355,15 +325,53 @@ func newPeerConnection(params TransportParams, onBandwidthEstimator func(estimat
 				}
 			}
 		}
+	} else {
+		// sfu only use interceptor to send XR but don't read response from it (use buffer instead),
+		// so use a empty callback here
+		ir.Add(lkinterceptor.NewRTTFromXRFactory(func(rtt uint32) {}))
 	}
 	if len(params.SimTracks) > 0 {
 		f, err := NewUnhandleSimulcastInterceptorFactory(UnhandleSimulcastTracks(params.SimTracks))
 		if err != nil {
-			params.Logger.Errorw("NewUnhandleSimulcastInterceptorFactory failed", err)
+			params.Logger.Warnw("NewUnhandleSimulcastInterceptorFactory failed", err)
 		} else {
 			ir.Add(f)
 		}
 	}
+
+	setTWCCForVideo := func(info *interceptor.StreamInfo) {
+		if !strings.HasPrefix(info.MimeType, "video") {
+			return
+		}
+		// rtx stream don't have rtcp feedback, always set twcc for rtx stream
+		twccFb := strings.HasSuffix(info.MimeType, "rtx")
+		if !twccFb {
+			for _, fb := range info.RTCPFeedback {
+				if fb.Type == webrtc.TypeRTCPFBTransportCC {
+					twccFb = true
+					break
+				}
+			}
+		}
+		if !twccFb {
+			return
+		}
+
+		twccExtID := sfuutils.GetHeaderExtensionID(info.RTPHeaderExtensions, webrtc.RTPHeaderExtensionCapability{URI: sdp.TransportCCURI})
+		if twccExtID != 0 {
+			if buffer := params.Config.BufferFactory.GetBuffer(info.SSRC); buffer != nil {
+				params.Logger.Debugw("set rtx twcc and ext id", "ssrc", info.SSRC, "twccExtID", twccExtID)
+				buffer.SetTWCCAndExtID(params.Twcc, uint8(twccExtID))
+			} else {
+				params.Logger.Warnw("failed to get buffer for rtx stream", nil, "ssrc", info.SSRC)
+			}
+		}
+	}
+	// put rtx interceptor behind unhandle simulcast interceptor so it can get the correct mid & rid
+	ir.Add(sfuinterceptor.NewRTXInfoExtractorFactory(setTWCCForVideo, func(repair, base uint32) {
+		params.Logger.Debugw("rtx pair found from extension", "repair", repair, "base", base)
+		params.Config.BufferFactory.SetRTXPair(repair, base)
+	}, params.Logger))
 	api := webrtc.NewAPI(
 		webrtc.WithMediaEngine(me),
 		webrtc.WithSettingEngine(se),
@@ -378,10 +386,14 @@ func NewPCTransport(params TransportParams) (*PCTransport, error) {
 		params.Logger = logger.GetLogger()
 	}
 	t := &PCTransport{
-		params:                   params,
-		debouncedNegotiate:       debounce.New(negotiationFrequency),
-		negotiationState:         NegotiationStateNone,
-		eventCh:                  make(chan event, 100),
+		params:             params,
+		debouncedNegotiate: debounce.New(negotiationFrequency),
+		negotiationState:   transport.NegotiationStateNone,
+		eventsQueue: sutils.NewOpsQueue(utils.OpsQueueParams{
+			Name:    "transport",
+			MinSize: 64,
+			Logger:  params.Logger,
+		}),
 		previousTrackDescription: make(map[string]*trackDescription),
 		canReuseTransceiver:      true,
 		connectionDetails:        types.NewICEConnectionDetails(params.Transport, params.Logger),
@@ -391,6 +403,7 @@ func NewPCTransport(params TransportParams) (*PCTransport, error) {
 			Config: params.CongestionControlConfig,
 			Logger: params.Logger.WithComponent(sutils.ComponentCongestionControl),
 		})
+		t.streamAllocator.OnStreamStateChange(params.Handler.OnStreamStateChange)
 		t.streamAllocator.Start()
 		t.pacer = pacer.NewPassThrough(params.Logger)
 	}
@@ -399,7 +412,7 @@ func NewPCTransport(params TransportParams) (*PCTransport, error) {
 		return nil, err
 	}
 
-	go t.processEvents()
+	t.eventsQueue.Start()
 
 	return t, nil
 }
@@ -421,6 +434,7 @@ func (t *PCTransport) createPeerConnection() error {
 	t.pc.OnConnectionStateChange(t.onPeerConnectionStateChange)
 
 	t.pc.OnDataChannel(t.onDataChannel)
+	t.pc.OnTrack(t.params.Handler.OnTrack)
 
 	t.me = me
 
@@ -600,19 +614,11 @@ func (t *PCTransport) handleConnectionFailed(forceShortConn bool) {
 		isShort, duration = t.IsShortConnection(time.Now())
 		if isShort {
 			pair, err := t.getSelectedPair()
-			if err != nil {
-				t.params.Logger.Errorw("short ICE connection", err, "duration", duration)
-			} else {
-				t.params.Logger.Infow("short ICE connection", "pair", pair, "duration", duration)
-			}
+			t.params.Logger.Debugw("short ICE connection", "error", err, "pair", pair, "duration", duration)
 		}
-	} else {
-		t.params.Logger.Infow("force short ICE connection")
 	}
 
-	if onFailed := t.getOnFailed(); onFailed != nil {
-		onFailed(isShort)
-	}
+	t.params.Handler.OnFailed(isShort)
 }
 
 func (t *PCTransport) onICEConnectionStateChange(state webrtc.ICEConnectionState) {
@@ -631,11 +637,6 @@ func (t *PCTransport) onICEConnectionStateChange(state webrtc.ICEConnectionState
 
 	case webrtc.ICEConnectionStateChecking:
 		t.setICEStartedAt(time.Now())
-
-	case webrtc.ICEConnectionStateDisconnected:
-		t.params.Logger.Infow("ice connection state change unexpected", "state", state.String())
-	case webrtc.ICEConnectionStateFailed:
-		t.params.Logger.Debugw("ice connection state change unexpected", "state", state.String())
 	}
 }
 
@@ -646,14 +647,11 @@ func (t *PCTransport) onPeerConnectionStateChange(state webrtc.PeerConnectionSta
 		t.clearConnTimer()
 		isInitialConnection := t.setConnectedAt(time.Now())
 		if isInitialConnection {
-			if onInitialConnected := t.getOnInitialConnected(); onInitialConnected != nil {
-				onInitialConnected()
-			}
+			t.params.Handler.OnInitialConnected()
 
 			t.maybeNotifyFullyEstablished()
 		}
 	case webrtc.PeerConnectionStateFailed:
-		t.params.Logger.Infow("peer connection failed")
 		t.clearConnTimer()
 		t.handleConnectionFailed(false)
 	}
@@ -668,9 +666,7 @@ func (t *PCTransport) onDataChannel(dc *webrtc.DataChannel) {
 		t.reliableDCOpened = true
 		t.lock.Unlock()
 		dc.OnMessage(func(msg webrtc.DataChannelMessage) {
-			if onDataPacket := t.getOnDataPacket(); onDataPacket != nil {
-				onDataPacket(livekit.DataPacket_RELIABLE, msg.Data)
-			}
+			t.params.Handler.OnDataPacket(livekit.DataPacket_RELIABLE, msg.Data)
 		})
 
 		t.maybeNotifyFullyEstablished()
@@ -680,9 +676,7 @@ func (t *PCTransport) onDataChannel(dc *webrtc.DataChannel) {
 		t.lossyDCOpened = true
 		t.lock.Unlock()
 		dc.OnMessage(func(msg webrtc.DataChannelMessage) {
-			if onDataPacket := t.getOnDataPacket(); onDataPacket != nil {
-				onDataPacket(livekit.DataPacket_LOSSY, msg.Data)
-			}
+			t.params.Handler.OnDataPacket(livekit.DataPacket_LOSSY, msg.Data)
 		})
 
 		t.maybeNotifyFullyEstablished()
@@ -693,9 +687,7 @@ func (t *PCTransport) onDataChannel(dc *webrtc.DataChannel) {
 
 func (t *PCTransport) maybeNotifyFullyEstablished() {
 	if t.isFullyEstablished() {
-		if onFullyEstablished := t.getOnFullyEstablished(); onFullyEstablished != nil {
-			onFullyEstablished()
-		}
+		t.params.Handler.OnFullyEstablished()
 	}
 }
 
@@ -808,16 +800,27 @@ func (t *PCTransport) CreateDataChannel(label string, dci *webrtc.DataChannelIni
 	if err != nil {
 		return err
 	}
+	var (
+		dcPtr   **webrtc.DataChannel
+		dcReady *bool
+	)
+	switch dc.Label() {
+	default:
+		// TODO: Appears that it's never called, so not sure what needs to be done here. We just keep the DC open?
+		//       Maybe just add "reliable" parameter instead of checking the label.
+		t.params.Logger.Warnw("unknown data channel label", nil, "label", dc.Label())
+		return nil
+	case ReliableDataChannel:
+		dcPtr = &t.reliableDC
+		dcReady = &t.reliableDCOpened
+	case LossyDataChannel:
+		dcPtr = &t.lossyDC
+		dcReady = &t.lossyDCOpened
+	}
 
 	dcReadyHandler := func() {
 		t.lock.Lock()
-		switch dc.Label() {
-		case ReliableDataChannel:
-			t.reliableDCOpened = true
-
-		case LossyDataChannel:
-			t.lossyDCOpened = true
-		}
+		*dcReady = true
 		t.lock.Unlock()
 		t.params.Logger.Debugw(dc.Label() + " data channel open")
 
@@ -830,35 +833,20 @@ func (t *PCTransport) CreateDataChannel(label string, dci *webrtc.DataChannelIni
 
 	dcErrorHandler := func(err error) {
 		if !errors.Is(err, sctp.ErrResetPacketInStateNotExist) && !errors.Is(err, sctp.ErrChunk) {
-			t.params.Logger.Errorw(dc.Label()+" data channel error", err)
+			t.params.Logger.Warnw(dc.Label()+" data channel error", err)
 		}
 	}
 
 	t.lock.Lock()
-	switch dc.Label() {
-	case ReliableDataChannel:
-		t.reliableDC = dc
-		if t.params.DirectionConfig.StrictACKs {
-			t.reliableDC.OnOpen(dcReadyHandler)
-		} else {
-			t.reliableDC.OnDial(dcReadyHandler)
-		}
-		t.reliableDC.OnClose(dcCloseHandler)
-		t.reliableDC.OnError(dcErrorHandler)
-	case LossyDataChannel:
-		t.lossyDC = dc
-		if t.params.DirectionConfig.StrictACKs {
-			t.lossyDC.OnOpen(dcReadyHandler)
-		} else {
-			t.lossyDC.OnDial(dcReadyHandler)
-		}
-		t.lossyDC.OnClose(dcCloseHandler)
-		t.lossyDC.OnError(dcErrorHandler)
-	default:
-		t.params.Logger.Errorw("unknown data channel label", nil, "label", dc.Label())
+	defer t.lock.Unlock()
+	*dcPtr = dc
+	if t.params.DirectionConfig.StrictACKs {
+		dc.OnOpen(dcReadyHandler)
+	} else {
+		dc.OnDial(dcReadyHandler)
 	}
-	t.lock.Unlock()
-
+	dc.OnClose(dcCloseHandler)
+	dc.OnError(dcErrorHandler)
 	return nil
 }
 
@@ -871,7 +859,7 @@ func (t *PCTransport) CreateDataChannelIfEmpty(dcLabel string, dci *webrtc.DataC
 	case LossyDataChannel:
 		dc = t.lossyDC
 	default:
-		t.params.Logger.Errorw("unknown data channel label", nil, "label", label)
+		t.params.Logger.Warnw("unknown data channel label", nil, "label", label)
 		err = errors.New("unknown data channel label")
 	}
 	t.lock.RUnlock()
@@ -912,10 +900,10 @@ func (t *PCTransport) WriteRTCP(pkts []rtcp.Packet) error {
 	return t.pc.WriteRTCP(pkts)
 }
 
-func (t *PCTransport) SendDataPacket(dp *livekit.DataPacket, data []byte) error {
+func (t *PCTransport) SendDataPacket(kind livekit.DataPacket_Kind, encoded []byte) error {
 	var dc *webrtc.DataChannel
 	t.lock.RLock()
-	if dp.Kind == livekit.DataPacket_RELIABLE {
+	if kind == livekit.DataPacket_RELIABLE {
 		dc = t.reliableDC
 	} else {
 		dc = t.lossyDC
@@ -934,18 +922,16 @@ func (t *PCTransport) SendDataPacket(dp *livekit.DataPacket, data []byte) error 
 		return ErrDataChannelBufferFull
 	}
 
-	return dc.Send(data)
+	return dc.Send(encoded)
 }
 
 func (t *PCTransport) Close() {
-	t.eventChMu.Lock()
 	if t.isClosed.Swap(true) {
-		t.eventChMu.Unlock()
 		return
 	}
 
-	close(t.eventCh)
-	t.eventChMu.Unlock()
+	<-t.eventsQueue.Stop()
+	t.clearSignalStateCheckTimer()
 
 	if t.streamAllocator != nil {
 		t.streamAllocator.Stop()
@@ -979,132 +965,17 @@ func (t *PCTransport) HandleRemoteDescription(sd webrtc.SessionDescription) {
 	})
 }
 
-func (t *PCTransport) OnICECandidate(f func(c *webrtc.ICECandidate) error) {
-	t.lock.Lock()
-	t.onICECandidate = f
-	t.lock.Unlock()
-}
-
-func (t *PCTransport) getOnICECandidate() func(c *webrtc.ICECandidate) error {
-	t.lock.RLock()
-	defer t.lock.RUnlock()
-
-	return t.onICECandidate
-}
-
-func (t *PCTransport) OnInitialConnected(f func()) {
-	t.lock.Lock()
-	t.onInitialConnected = f
-	t.lock.Unlock()
-
-	if f != nil {
-		if t.pc.ConnectionState() == webrtc.PeerConnectionStateConnected {
-			go f()
-		}
-	}
-}
-
-func (t *PCTransport) getOnInitialConnected() func() {
-	t.lock.RLock()
-	defer t.lock.RUnlock()
-
-	return t.onInitialConnected
-}
-
-func (t *PCTransport) OnFullyEstablished(f func()) {
-	t.lock.Lock()
-	t.onFullyEstablished = f
-	t.lock.Unlock()
-}
-
-func (t *PCTransport) getOnFullyEstablished() func() {
-	t.lock.RLock()
-	defer t.lock.RUnlock()
-
-	return t.onFullyEstablished
-}
-
-func (t *PCTransport) OnFailed(f func(isShortLived bool)) {
-	t.lock.Lock()
-	t.onFailed = f
-	t.lock.Unlock()
-}
-
-func (t *PCTransport) getOnFailed() func(isShortLived bool) {
-	t.lock.RLock()
-	defer t.lock.RUnlock()
-
-	return t.onFailed
-}
-
-func (t *PCTransport) OnTrack(f func(track *webrtc.TrackRemote, rtpReceiver *webrtc.RTPReceiver)) {
-	t.pc.OnTrack(f)
-}
-
-func (t *PCTransport) OnDataPacket(f func(kind livekit.DataPacket_Kind, data []byte)) {
-	t.lock.Lock()
-	t.onDataPacket = f
-	t.lock.Unlock()
-}
-
-func (t *PCTransport) getOnDataPacket() func(kind livekit.DataPacket_Kind, data []byte) {
-	t.lock.RLock()
-	defer t.lock.RUnlock()
-
-	return t.onDataPacket
-}
-
-// OnOffer is called when the PeerConnection starts negotiation and prepares an offer
-func (t *PCTransport) OnOffer(f func(sd webrtc.SessionDescription) error) {
-	t.lock.Lock()
-	t.onOffer = f
-	t.lock.Unlock()
-}
-
-func (t *PCTransport) getOnOffer() func(sd webrtc.SessionDescription) error {
-	t.lock.RLock()
-	defer t.lock.RUnlock()
-
-	return t.onOffer
-}
-
-func (t *PCTransport) OnAnswer(f func(sd webrtc.SessionDescription) error) {
-	t.lock.Lock()
-	t.onAnswer = f
-	t.lock.Unlock()
-}
-
-func (t *PCTransport) getOnAnswer() func(sd webrtc.SessionDescription) error {
-	t.lock.RLock()
-	defer t.lock.RUnlock()
-
-	return t.onAnswer
-}
-
-func (t *PCTransport) OnNegotiationStateChanged(f func(state NegotiationState)) {
+func (t *PCTransport) OnNegotiationStateChanged(f func(state transport.NegotiationState)) {
 	t.lock.Lock()
 	t.onNegotiationStateChanged = f
 	t.lock.Unlock()
 }
 
-func (t *PCTransport) getOnNegotiationStateChanged() func(state NegotiationState) {
+func (t *PCTransport) getOnNegotiationStateChanged() func(state transport.NegotiationState) {
 	t.lock.RLock()
 	defer t.lock.RUnlock()
 
 	return t.onNegotiationStateChanged
-}
-
-func (t *PCTransport) OnNegotiationFailed(f func()) {
-	t.lock.Lock()
-	t.onNegotiationFailed = f
-	t.lock.Unlock()
-}
-
-func (t *PCTransport) getOnNegotiationFailed() func() {
-	t.lock.RLock()
-	defer t.lock.RUnlock()
-
-	return t.onNegotiationFailed
 }
 
 func (t *PCTransport) Negotiate(force bool) {
@@ -1155,14 +1026,6 @@ func (t *PCTransport) ICERestart() error {
 
 func (t *PCTransport) ResetShortConnOnICERestart() {
 	t.resetShortConnOnICERestart.Store(true)
-}
-
-func (t *PCTransport) OnStreamStateChange(f func(update *streamallocator.StreamStateUpdate) error) {
-	if t.streamAllocator == nil {
-		return
-	}
-
-	t.streamAllocator.OnStreamStateChange(f)
 }
 
 func (t *PCTransport) AddTrackToStreamAllocator(subTrack types.SubscribedTrack) {
@@ -1296,7 +1159,7 @@ func (t *PCTransport) initPCWithPreviousAnswer(previousAnswer webrtc.SessionDesc
 			// because sdp can negotiate multi times before migration.(it will sticky to the last m-line atfirst negotiate)
 			// so use a dummy pc to negotiate sdp to fixed the datachannel's mid at same position with previous answer
 			if err := t.preparePC(previousAnswer); err != nil {
-				t.params.Logger.Errorw("prepare pc for migration failed", err)
+				t.params.Logger.Warnw("prepare pc for migration failed", err)
 				return senders, err
 			}
 			continue
@@ -1326,9 +1189,7 @@ func (t *PCTransport) initPCWithPreviousAnswer(previousAnswer webrtc.SessionDesc
 func (t *PCTransport) SetPreviousSdp(offer, answer *webrtc.SessionDescription) {
 	// when there is no previous answer, cannot migrate, force a full reconnect
 	if answer == nil {
-		if onNegotiationFailed := t.getOnNegotiationFailed(); onNegotiationFailed != nil {
-			onNegotiationFailed()
-		}
+		t.params.Handler.OnNegotiationFailed()
 		return
 	}
 
@@ -1336,18 +1197,16 @@ func (t *PCTransport) SetPreviousSdp(offer, answer *webrtc.SessionDescription) {
 	if t.pc.RemoteDescription() == nil && t.previousAnswer == nil {
 		t.previousAnswer = answer
 		if senders, err := t.initPCWithPreviousAnswer(*t.previousAnswer); err != nil {
-			t.params.Logger.Errorw("initPCWithPreviousAnswer failed", err)
+			t.params.Logger.Warnw("initPCWithPreviousAnswer failed", err)
 			t.lock.Unlock()
 
-			if onNegotiationFailed := t.getOnNegotiationFailed(); onNegotiationFailed != nil {
-				onNegotiationFailed()
-			}
+			t.params.Handler.OnNegotiationFailed()
 			return
 		} else if offer != nil {
 			// in migration case, can't reuse transceiver before negotiated except track subscribed at previous node
 			t.canReuseTransceiver = false
 			if err := t.parseTrackMid(*offer, senders); err != nil {
-				t.params.Logger.Errorw("parse previous offer failed", err, "offer", offer.SDP)
+				t.params.Logger.Warnw("parse previous offer failed", err, "offer", offer.SDP)
 			}
 		}
 	}
@@ -1383,41 +1242,15 @@ func (t *PCTransport) parseTrackMid(offer webrtc.SessionDescription, senders map
 }
 
 func (t *PCTransport) postEvent(event event) {
-	t.eventChMu.RLock()
-	if t.isClosed.Load() {
-		t.eventChMu.RUnlock()
-		return
-	}
-
-	select {
-	case t.eventCh <- event:
-	default:
-		t.params.Logger.Warnw("event queue full", nil, "event", event.String())
-	}
-	t.eventChMu.RUnlock()
-}
-
-func (t *PCTransport) processEvents() {
-	for event := range t.eventCh {
-		if t.isClosed.Load() {
-			// just drain the channel without processing events
-			continue
-		}
-
+	t.eventsQueue.Enqueue(func() {
 		err := t.handleEvent(&event)
 		if err != nil {
 			if !t.isClosed.Load() {
-				t.params.Logger.Errorw("error handling event", err, "event", event.String())
-				if onNegotiationFailed := t.getOnNegotiationFailed(); onNegotiationFailed != nil {
-					onNegotiationFailed()
-				}
+				t.params.Logger.Warnw("error handling event", err, "event", event.String())
+				t.params.Handler.OnNegotiationFailed()
 			}
-			break
 		}
-	}
-
-	t.clearSignalStateCheckTimer()
-	t.params.Logger.Debugw("leaving events processor")
+	})
 }
 
 func (t *PCTransport) handleEvent(e *event) error {
@@ -1483,17 +1316,12 @@ func (t *PCTransport) localDescriptionSent() error {
 	cachedLocalCandidates := t.cachedLocalCandidates
 	t.cachedLocalCandidates = nil
 
-	if onICECandidate := t.getOnICECandidate(); onICECandidate != nil {
-		for _, c := range cachedLocalCandidates {
-			if err := onICECandidate(c); err != nil {
-				return err
-			}
+	for _, c := range cachedLocalCandidates {
+		if err := t.params.Handler.OnICECandidate(c, t.params.Transport); err != nil {
+			return err
 		}
-
-		return nil
 	}
-
-	return ErrNoICECandidateHandler
+	return nil
 }
 
 func (t *PCTransport) clearLocalDescriptionSent() {
@@ -1508,10 +1336,7 @@ func (t *PCTransport) handleLocalICECandidate(e *event) error {
 	filtered := false
 	if c != nil {
 		if t.preferTCP.Load() && c.Protocol != webrtc.ICEProtocolTCP {
-			t.params.Logger.Debugw("filtering out local candidate",
-				"candidate", func() interface{} {
-					return c.String()
-				})
+			t.params.Logger.Debugw("filtering out local candidate", "candidate", c.String())
 			filtered = true
 		}
 		t.connectionDetails.AddLocalCandidate(c, filtered)
@@ -1526,11 +1351,7 @@ func (t *PCTransport) handleLocalICECandidate(e *event) error {
 		return nil
 	}
 
-	if onICECandidate := t.getOnICECandidate(); onICECandidate != nil {
-		return onICECandidate(c)
-	}
-
-	return ErrNoICECandidateHandler
+	return t.params.Handler.OnICECandidate(c, t.params.Transport)
 }
 
 func (t *PCTransport) handleRemoteICECandidate(e *event) error {
@@ -1559,7 +1380,7 @@ func (t *PCTransport) handleRemoteICECandidate(e *event) error {
 	return nil
 }
 
-func (t *PCTransport) setNegotiationState(state NegotiationState) {
+func (t *PCTransport) setNegotiationState(state transport.NegotiationState) {
 	t.negotiationState = state
 	if onNegotiationStateChanged := t.getOnNegotiationStateChanged(); onNegotiationStateChanged != nil {
 		onNegotiationStateChanged(t.negotiationState)
@@ -1569,7 +1390,7 @@ func (t *PCTransport) setNegotiationState(state NegotiationState) {
 func (t *PCTransport) filterCandidates(sd webrtc.SessionDescription, preferTCP bool) webrtc.SessionDescription {
 	parsed, err := sd.Unmarshal()
 	if err != nil {
-		t.params.Logger.Errorw("could not unmarshal SDP to filter candidates", err)
+		t.params.Logger.Warnw("could not unmarshal SDP to filter candidates", err)
 		return sd
 	}
 
@@ -1599,7 +1420,7 @@ func (t *PCTransport) filterCandidates(sd webrtc.SessionDescription, preferTCP b
 
 	bytes, err := parsed.Marshal()
 	if err != nil {
-		t.params.Logger.Errorw("could not marshal SDP to filter candidates", err)
+		t.params.Logger.Warnw("could not marshal SDP to filter candidates", err)
 		return sd
 	}
 	sd.SDP = string(bytes)
@@ -1620,7 +1441,7 @@ func (t *PCTransport) setupSignalStateCheckTimer() {
 	t.signalStateCheckTimer = time.AfterFunc(negotiationFailedTimeout, func() {
 		t.clearSignalStateCheckTimer()
 
-		failed := t.negotiationState != NegotiationStateNone
+		failed := t.negotiationState != transport.NegotiationStateNone
 
 		if t.negotiateCounter.Load() == negotiateVersion && failed && t.pc.ConnectionState() == webrtc.PeerConnectionStateConnected {
 			t.params.Logger.Infow(
@@ -1630,9 +1451,7 @@ func (t *PCTransport) setupSignalStateCheckTimer() {
 				"remoteCurrent", t.pc.CurrentRemoteDescription(),
 				"remotePending", t.pc.PendingRemoteDescription(),
 			)
-			if onNegotiationFailed := t.getOnNegotiationFailed(); onNegotiationFailed != nil {
-				onNegotiationFailed()
-			}
+			t.params.Handler.OnNegotiationFailed()
 		}
 	})
 }
@@ -1644,11 +1463,11 @@ func (t *PCTransport) createAndSendOffer(options *webrtc.OfferOptions) error {
 	}
 
 	// when there's an ongoing negotiation, let it finish and not disrupt its state
-	if t.negotiationState == NegotiationStateRemote {
+	if t.negotiationState == transport.NegotiationStateRemote {
 		t.params.Logger.Debugw("skipping negotiation, trying again later")
-		t.setNegotiationState(NegotiationStateRetry)
+		t.setNegotiationState(transport.NegotiationStateRetry)
 		return nil
-	} else if t.negotiationState == NegotiationStateRetry {
+	} else if t.negotiationState == transport.NegotiationStateRetry {
 		// already set to retry, we can safely skip this attempt
 		return nil
 	}
@@ -1718,21 +1537,17 @@ func (t *PCTransport) createAndSendOffer(options *webrtc.OfferOptions) error {
 	}
 
 	// indicate waiting for remote
-	t.setNegotiationState(NegotiationStateRemote)
+	t.setNegotiationState(transport.NegotiationStateRemote)
 
 	t.setupSignalStateCheckTimer()
 
-	if onOffer := t.getOnOffer(); onOffer != nil {
-		if err := onOffer(offer); err != nil {
-			prometheus.ServiceOperationCounter.WithLabelValues("offer", "error", "write_message").Add(1)
-			return errors.Wrap(err, "could not send offer")
-		}
-
-		prometheus.ServiceOperationCounter.WithLabelValues("offer", "success", "").Add(1)
-		return t.localDescriptionSent()
+	if err := t.params.Handler.OnOffer(offer); err != nil {
+		prometheus.ServiceOperationCounter.WithLabelValues("offer", "error", "write_message").Add(1)
+		return errors.Wrap(err, "could not send offer")
 	}
 
-	return ErrNoOfferHandler
+	prometheus.ServiceOperationCounter.WithLabelValues("offer", "success", "").Add(1)
+	return t.localDescriptionSent()
 }
 
 func (t *PCTransport) handleSendOffer(_ *event) error {
@@ -1748,11 +1563,7 @@ func (t *PCTransport) handleRemoteDescriptionReceived(e *event) error {
 	}
 }
 
-func (t *PCTransport) isRemoteOfferRestartICE(sd *webrtc.SessionDescription) (string, bool, error) {
-	parsed, err := sd.Unmarshal()
-	if err != nil {
-		return "", false, err
-	}
+func (t *PCTransport) isRemoteOfferRestartICE(parsed *sdp.SessionDescription) (string, bool, error) {
 	user, pwd, err := lksdp.ExtractICECredential(parsed)
 	if err != nil {
 		return "", false, err
@@ -1839,21 +1650,21 @@ func (t *PCTransport) createAndSendAnswer() error {
 		t.params.Logger.Debugw("local answer (filtered)", "sdp", answer.SDP)
 	}
 
-	if onAnswer := t.getOnAnswer(); onAnswer != nil {
-		if err := onAnswer(answer); err != nil {
-			prometheus.ServiceOperationCounter.WithLabelValues("answer", "error", "write_message").Add(1)
-			return errors.Wrap(err, "could not send answer")
-		}
-
-		prometheus.ServiceOperationCounter.WithLabelValues("answer", "success", "").Add(1)
-		return t.localDescriptionSent()
+	if err := t.params.Handler.OnAnswer(answer); err != nil {
+		prometheus.ServiceOperationCounter.WithLabelValues("answer", "error", "write_message").Add(1)
+		return errors.Wrap(err, "could not send answer")
 	}
 
-	return ErrNoAnswerHandler
+	prometheus.ServiceOperationCounter.WithLabelValues("answer", "success", "").Add(1)
+	return t.localDescriptionSent()
 }
 
 func (t *PCTransport) handleRemoteOfferReceived(sd *webrtc.SessionDescription) error {
-	iceCredential, offerRestartICE, err := t.isRemoteOfferRestartICE(sd)
+	parsed, err := sd.Unmarshal()
+	if err != nil {
+		return nil
+	}
+	iceCredential, offerRestartICE, err := t.isRemoteOfferRestartICE(parsed)
 	if err != nil {
 		return errors.Wrap(err, "check remote offer restart ice failed")
 	}
@@ -1874,6 +1685,13 @@ func (t *PCTransport) handleRemoteOfferReceived(sd *webrtc.SessionDescription) e
 
 	if err := t.setRemoteDescription(*sd); err != nil {
 		return err
+	}
+	rtxRepairs := nonSimulcastRTXRepairsFromSDP(parsed, t.params.Logger)
+	if len(rtxRepairs) > 0 {
+		t.params.Logger.Debugw("rtx pairs found from sdp", "ssrcs", rtxRepairs)
+		for repair, base := range rtxRepairs {
+			t.params.Config.BufferFactory.SetRTXPair(repair, base)
+		}
 	}
 
 	if t.currentOfferIceCredential == "" || offerRestartICE {
@@ -1896,14 +1714,14 @@ func (t *PCTransport) handleRemoteAnswerReceived(sd *webrtc.SessionDescription) 
 		}
 	}
 
-	if t.negotiationState == NegotiationStateRetry {
-		t.setNegotiationState(NegotiationStateNone)
+	if t.negotiationState == transport.NegotiationStateRetry {
+		t.setNegotiationState(transport.NegotiationStateNone)
 
 		t.params.Logger.Debugw("re-negotiate after receiving answer")
 		return t.createAndSendOffer(nil)
 	}
 
-	t.setNegotiationState(NegotiationStateNone)
+	t.setNegotiationState(transport.NegotiationStateNone)
 	return nil
 }
 
@@ -1924,7 +1742,7 @@ func (t *PCTransport) doICERestart() error {
 		t.resetShortConn()
 	}
 
-	if t.negotiationState == NegotiationStateNone {
+	if t.negotiationState == transport.NegotiationStateNone {
 		return t.createAndSendOffer(&webrtc.OfferOptions{ICERestart: true})
 	}
 
@@ -1938,18 +1756,15 @@ func (t *PCTransport) doICERestart() error {
 			return ErrIceRestartWithoutLocalSDP
 		} else {
 			t.params.Logger.Infow("deferring ice restart to next offer")
-			t.setNegotiationState(NegotiationStateRetry)
+			t.setNegotiationState(transport.NegotiationStateRetry)
 			t.restartAtNextOffer = true
-			if onOffer := t.getOnOffer(); onOffer != nil {
-				err := onOffer(*offer)
-				if err != nil {
-					prometheus.ServiceOperationCounter.WithLabelValues("offer", "error", "write_message").Add(1)
-				} else {
-					prometheus.ServiceOperationCounter.WithLabelValues("offer", "success", "").Add(1)
-				}
-				return err
+			err := t.params.Handler.OnOffer(*offer)
+			if err != nil {
+				prometheus.ServiceOperationCounter.WithLabelValues("offer", "error", "write_message").Add(1)
+			} else {
+				prometheus.ServiceOperationCounter.WithLabelValues("offer", "success", "").Add(1)
 			}
-			return ErrNoOfferHandler
+			return err
 		}
 	} else {
 		// recover by re-applying the last answer
@@ -1958,7 +1773,7 @@ func (t *PCTransport) doICERestart() error {
 			prometheus.ServiceOperationCounter.WithLabelValues("offer", "error", "remote_description").Add(1)
 			return errors.Wrap(err, "set remote description failed")
 		} else {
-			t.setNegotiationState(NegotiationStateNone)
+			t.setNegotiationState(transport.NegotiationStateNone)
 			return t.createAndSendOffer(&webrtc.OfferOptions{ICERestart: true})
 		}
 	}
@@ -2000,4 +1815,49 @@ func configureAudioTransceiver(tr *webrtc.RTPTransceiver, stereo bool, nack bool
 	}
 
 	tr.SetCodecPreferences(configCodecs)
+}
+
+func nonSimulcastRTXRepairsFromSDP(s *sdp.SessionDescription, logger logger.Logger) map[uint32]uint32 {
+	rtxRepairFlows := map[uint32]uint32{}
+	for _, media := range s.MediaDescriptions {
+		// extract rtx repair flows from the media section for non-simulcast stream,
+		// pion will handle simulcast streams by rid probe, don't need handle it here.
+		var ridFound bool
+		rtxPairs := make(map[uint32]uint32)
+	findRTX:
+		for _, attr := range media.Attributes {
+			switch attr.Key {
+			case "rid":
+				ridFound = true
+				break findRTX
+			case sdp.AttrKeySSRCGroup:
+				split := strings.Split(attr.Value, " ")
+				if split[0] == sdp.SemanticTokenFlowIdentification {
+					// Essentially lines like `a=ssrc-group:FID 2231627014 632943048` are processed by this section
+					// as this declares that the second SSRC (632943048) is a rtx repair flow (RFC4588) for the first
+					// (2231627014) as specified in RFC5576
+					if len(split) == 3 {
+						baseSsrc, err := strconv.ParseUint(split[1], 10, 32)
+						if err != nil {
+							logger.Warnw("Failed to parse SSRC", err, "ssrc", split[1])
+							continue
+						}
+						rtxRepairFlow, err := strconv.ParseUint(split[2], 10, 32)
+						if err != nil {
+							logger.Warnw("Failed to parse SSRC", err, "ssrc", split[2])
+							continue
+						}
+						rtxPairs[uint32(rtxRepairFlow)] = uint32(baseSsrc)
+					}
+				}
+			}
+		}
+		if !ridFound {
+			for rtx, base := range rtxPairs {
+				rtxRepairFlows[rtx] = base
+			}
+		}
+	}
+
+	return rtxRepairFlows
 }

@@ -103,11 +103,14 @@ func (t *MediaTrackSubscriptions) AddSubscriber(sub types.LocalParticipant, wr *
 	t.subscribedTracksMu.Unlock()
 
 	var rtcpFeedback []webrtc.RTCPFeedback
+	var maxTrack int
 	switch t.params.MediaTrack.Kind() {
 	case livekit.TrackType_AUDIO:
 		rtcpFeedback = t.params.SubscriberConfig.RTCPFeedback.Audio
+		maxTrack = t.params.ReceiverConfig.PacketBufferSizeAudio
 	case livekit.TrackType_VIDEO:
 		rtcpFeedback = t.params.SubscriberConfig.RTCPFeedback.Video
+		maxTrack = t.params.ReceiverConfig.PacketBufferSizeVideo
 	}
 	codecs := wr.Codecs()
 	for _, c := range codecs {
@@ -130,11 +133,12 @@ func (t *MediaTrackSubscriptions) AddSubscriber(sub types.LocalParticipant, wr *
 		BufferFactory:     sub.GetBufferFactory(),
 		SubID:             subscriberID,
 		StreamID:          streamID,
-		MaxTrack:          t.params.ReceiverConfig.PacketBufferSize,
+		MaxTrack:          maxTrack,
 		PlayoutDelayLimit: sub.GetPlayoutDelayConfig(),
 		Pacer:             sub.GetPacer(),
 		Trailer:           trailer,
 		Logger:            LoggerWithTrack(sub.GetLogger().WithComponent(sutils.ComponentSub), trackID, t.params.IsRelayed),
+		RTCPWriter:        sub.WriteSubscriberRTCP,
 	})
 	if err != nil {
 		return nil, err
@@ -187,7 +191,7 @@ func (t *MediaTrackSubscriptions) AddSubscriber(sub types.LocalParticipant, wr *
 
 	downTrack.OnMaxLayerChanged(func(dt *sfu.DownTrack, layer int32) {
 		if t.onSubscriberMaxQualityChange != nil {
-			t.onSubscriberMaxQualityChange(subscriberID, dt.Codec(), layer)
+			t.onSubscriberMaxQualityChange(dt.SubscriberID(), dt.Codec(), layer)
 		}
 	})
 
@@ -196,7 +200,7 @@ func (t *MediaTrackSubscriptions) AddSubscriber(sub types.LocalParticipant, wr *
 	})
 
 	downTrack.AddReceiverReportListener(func(dt *sfu.DownTrack, report *rtcp.ReceiverReport) {
-		sub.OnReceiverReport(dt, report)
+		sub.HandleReceiverReport(dt, report)
 	})
 
 	var transceiver *webrtc.RTPTransceiver
@@ -318,13 +322,6 @@ func (t *MediaTrackSubscriptions) closeSubscribedTrack(subTrack types.Subscribed
 
 	if willBeResumed {
 		dt.CloseWithFlush(false)
-
-		// cache transceiver for potential re-use on resume
-		tr := dt.GetTransceiver()
-		if tr != nil {
-			sub := subTrack.Subscriber()
-			sub.CacheDownTrack(subTrack.ID(), tr, dt.GetState())
-		}
 	} else {
 		// flushing blocks, avoid blocking when publisher removes all its subscribers
 		go dt.CloseWithFlush(true)
@@ -404,10 +401,7 @@ func (t *MediaTrackSubscriptions) DebugInfo() []map[string]interface{} {
 	subscribedTrackInfo := make([]map[string]interface{}, 0)
 	for _, val := range t.getAllSubscribedTracks() {
 		if st, ok := val.(*SubscribedTrack); ok {
-			dt := st.DownTrack().DebugInfo()
-			dt["PubMuted"] = st.pubMuted.Load()
-			dt["SubMuted"] = st.subMuted.Load()
-			subscribedTrackInfo = append(subscribedTrackInfo, dt)
+			subscribedTrackInfo = append(subscribedTrackInfo, st.DownTrack().DebugInfo())
 		}
 	}
 
@@ -419,12 +413,27 @@ func (t *MediaTrackSubscriptions) downTrackClosed(
 	willBeResumed bool,
 ) {
 	subscriberID := sub.ID()
-	t.subscribedTracksMu.Lock()
+	t.subscribedTracksMu.RLock()
 	subTrack := t.subscribedTracks[subscriberID]
-	delete(t.subscribedTracks, subscriberID)
-	t.subscribedTracksMu.Unlock()
+	t.subscribedTracksMu.RUnlock()
 
 	if subTrack != nil {
+		// Cache transceiver for potential re-use on resume.
+		// To ensure subscription manager does not re-subscribe before caching,
+		// delete the subscribed track only after caching.
+		if willBeResumed {
+			dt := subTrack.DownTrack()
+			tr := dt.GetTransceiver()
+			if tr != nil {
+				sub := subTrack.Subscriber()
+				sub.CacheDownTrack(subTrack.ID(), tr, dt.GetState())
+			}
+		}
+
+		t.subscribedTracksMu.Lock()
+		delete(t.subscribedTracks, subscriberID)
+		t.subscribedTracksMu.Unlock()
+
 		subTrack.Close(willBeResumed)
 	}
 }

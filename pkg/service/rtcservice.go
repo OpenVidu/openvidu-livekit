@@ -32,6 +32,7 @@ import (
 	"go.uber.org/atomic"
 	"golang.org/x/exp/maps"
 
+	"github.com/livekit/livekit-server/pkg/agent"
 	"github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/livekit-server/pkg/routing"
 	"github.com/livekit/livekit-server/pkg/routing/selector"
@@ -40,7 +41,6 @@ import (
 	"github.com/livekit/livekit-server/pkg/telemetry/prometheus"
 	"github.com/livekit/livekit-server/pkg/utils"
 	"github.com/livekit/protocol/livekit"
-	putil "github.com/livekit/protocol/utils"
 	"github.com/livekit/psrpc"
 )
 
@@ -54,7 +54,7 @@ type RTCService struct {
 	isDev         bool
 	limits        config.LimitConfig
 	parser        *uaparser.Parser
-	agentClient   rtc.AgentClient
+	agentClient   agent.Client
 	telemetry     telemetry.TelemetryService
 
 	mu          sync.Mutex
@@ -67,7 +67,7 @@ func NewRTCService(
 	store ServiceStore,
 	router routing.MessageRouter,
 	currentNode routing.LocalNode,
-	agentClient rtc.AgentClient,
+	agentClient agent.Client,
 	telemetry telemetry.TelemetryService,
 ) *RTCService {
 	s := &RTCService{
@@ -219,14 +219,10 @@ func (s *RTCService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var cr connectionResult
 	var initialResponse *livekit.SignalResponse
 	for i := 0; i < 3; i++ {
-		if err = r.Context().Err(); err != nil {
-			break
-		}
-
 		connectionTimeout := 3 * time.Second * time.Duration(i+1)
 		ctx := utils.ContextWithAttempt(r.Context(), i)
 		cr, initialResponse, err = s.startConnection(ctx, roomName, pi, connectionTimeout)
-		if err == nil {
+		if err == nil || errors.Is(err, context.Canceled) {
 			break
 		}
 		if i < 2 {
@@ -247,12 +243,10 @@ func (s *RTCService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		pi.ID = livekit.ParticipantID(initialResponse.GetJoin().GetParticipant().GetSid())
 	}
 
-	var signalStats *telemetry.BytesTrackStats
-	if pi.ID != "" {
-		signalStats = telemetry.NewBytesTrackStats(
-			telemetry.BytesTrackIDForParticipantID(telemetry.BytesTrackTypeSignal, pi.ID),
-			pi.ID,
-			s.telemetry)
+	signalStats := telemetry.NewBytesSignalStats(r.Context(), s.telemetry)
+	if join := initialResponse.GetJoin(); join != nil {
+		signalStats.ResolveRoom(join.GetRoom())
+		signalStats.ResolveParticipant(join.GetParticipant())
 	}
 
 	pLogger := rtc.LoggerWithParticipant(
@@ -274,9 +268,7 @@ func (s *RTCService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		cr.RequestSink.Close()
 		close(done)
 
-		if signalStats != nil {
-			signalStats.Stop()
-		}
+		signalStats.Stop()
 	}()
 
 	// upgrade only once the basics are good to go
@@ -303,9 +295,8 @@ func (s *RTCService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		pLogger.Warnw("could not write initial response", err)
 		return
 	}
-	if signalStats != nil {
-		signalStats.AddBytes(uint64(count), true)
-	}
+	signalStats.AddBytes(uint64(count), true)
+
 	pLogger.Debugw("new client WS connected",
 		"connID", cr.ConnectionID,
 		"reconnect", pi.Reconnect,
@@ -349,20 +340,17 @@ func (s *RTCService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					pLogger.Debugw("sending offer", "offer", m)
 				case *livekit.SignalResponse_Answer:
 					pLogger.Debugw("sending answer", "answer", m)
-				}
-
-				if pi.ID == "" && res.GetJoin() != nil {
-					pi.ID = livekit.ParticipantID(res.GetJoin().GetParticipant().GetSid())
-					signalStats = telemetry.NewBytesTrackStats(
-						telemetry.BytesTrackIDForParticipantID(telemetry.BytesTrackTypeSignal, pi.ID),
-						pi.ID,
-						s.telemetry)
+				case *livekit.SignalResponse_Join:
+					signalStats.ResolveRoom(m.Join.GetRoom())
+					signalStats.ResolveParticipant(m.Join.GetParticipant())
+				case *livekit.SignalResponse_RoomUpdate:
+					signalStats.ResolveRoom(m.RoomUpdate.GetRoom())
 				}
 
 				if count, err := sigConn.WriteResponse(res); err != nil {
 					pLogger.Warnw("error writing to websocket", err)
 					return
-				} else if signalStats != nil {
+				} else {
 					signalStats.AddBytes(uint64(count), true)
 				}
 			}
@@ -390,9 +378,7 @@ func (s *RTCService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		if signalStats != nil {
-			signalStats.AddBytes(uint64(count), false)
-		}
+		signalStats.AddBytes(uint64(count), false)
 
 		switch m := req.Message.(type) {
 		case *livekit.SignalRequest_Ping:
@@ -405,7 +391,7 @@ func (s *RTCService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					Pong: time.Now().UnixMilli(),
 				},
 			})
-			if perr == nil && signalStats != nil {
+			if perr == nil {
 				signalStats.AddBytes(uint64(count), true)
 			}
 		case *livekit.SignalRequest_PingReq:
@@ -417,7 +403,7 @@ func (s *RTCService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			})
-			if perr == nil && signalStats != nil {
+			if perr == nil {
 				signalStats.AddBytes(uint64(count), true)
 			}
 		}
@@ -538,6 +524,13 @@ func (s *RTCService) startConnection(
 		return cr, nil, err
 	}
 
+	if created && s.agentClient != nil {
+		go s.agentClient.LaunchJob(ctx, &agent.JobDescription{
+			JobType: livekit.JobType_JT_ROOM,
+			Room:    cr.Room,
+		})
+	}
+
 	// this needs to be started first *before* using router functions on this node
 	cr.StartParticipantSignalResults, err = s.router.StartParticipantSignal(ctx, roomName, pi)
 	if err != nil {
@@ -553,16 +546,6 @@ func (s *RTCService) startConnection(
 		cr.RequestSink.Close()
 		cr.ResponseSource.Close()
 		return cr, nil, err
-	}
-
-	if created && s.agentClient != nil {
-		go func() {
-			s.agentClient.JobRequest(ctx, &livekit.Job{
-				Id:   putil.NewGuid("JR_"),
-				Type: livekit.JobType_JT_ROOM,
-				Room: cr.Room,
-			})
-		}()
 	}
 
 	return cr, initialResponse, nil

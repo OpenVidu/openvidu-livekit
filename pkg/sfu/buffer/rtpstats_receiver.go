@@ -28,6 +28,34 @@ import (
 
 const (
 	cHistorySize = 4096
+
+	// RTCP Sender Reports are re-based to SFU time base so that all subscriber side
+	// can have the same time base (i. e. SFU time base). To convert publisher side
+	// RTCP Sender Reports to SFU timebase, a propagation delay is maintained.
+	//    propagation_delay = time_of_report_reception - ntp_timestamp_in_report
+	//
+	// Propagation delay is adapted continuously. If it falls, adapt quickly to the
+	// lower value as that could be the real propagation delay. If it rises, adapt slowly
+	// as it might be a temporary change or slow drift. See below for handling of high deltas
+	// which could be a result of a path change.
+	cPropagationDelayFallFactor = float64(0.9)
+	cPropagationDelayRiseFactor = float64(0.1)
+
+	cPropagationDelaySpikeAdaptationFactor = float64(0.5)
+
+	// To account for path changes mid-stream, if the delta of the propagation delay is consistently higher, reset.
+	// Reset at whichever of the below happens later.
+	//   1. 10 seconds of persistent high delta.
+	//   2. at least 2 consecutive reports with high delta.
+	//
+	// A long term estimate of delta of propagation delay is maintained and delta propagation delay exceeding
+	// a factor of the long term estimate is considered a sharp increase. That will trigger the start of the
+	// path change condition and if it persists, propagation delay will be reset.
+	cPropagationDelayDeltaThresholdMin                = 10 * time.Millisecond
+	cPropagationDelayDeltaThresholdMaxFactor          = 2
+	cPropagationDelayDeltaHighResetNumReports         = 2
+	cPropagationDelayDeltaHighResetWait               = 10 * time.Second
+	cPropagationDelayDeltaLongTermAdaptationThreshold = 50 * time.Millisecond
 )
 
 type RTPFlowState struct {
@@ -52,6 +80,12 @@ type RTPStatsReceiver struct {
 	timestamp *utils.WrapAround[uint32, uint64]
 
 	history *protoutils.Bitmap[uint64]
+
+	propagationDelay                   time.Duration
+	longTermDeltaPropagationDelay      time.Duration
+	propagationDelayDeltaHighCount     int
+	propagationDelayDeltaHighStartTime time.Time
+	propagationDelaySpike              time.Duration
 
 	clockSkewCount               int
 	outOfOrderSsenderReportCount int
@@ -251,9 +285,10 @@ func (r *RTPStatsReceiver) SetRtcpSenderReportData(srData *RTCPSenderReportData)
 	// prevent against extreme case of anachronous sender reports
 	if r.srNewest != nil && r.srNewest.NTPTimestamp > srData.NTPTimestamp {
 		r.logger.Infow(
-			"received anachronous sender report",
-			"last", r.srNewest.ToString(),
-			"current", srData.ToString(),
+			"received sender report, anachronous, dropping",
+			"first", r.srFirst,
+			"last", r.srNewest,
+			"current", srData,
 		)
 		return
 	}
@@ -264,12 +299,34 @@ func (r *RTPStatsReceiver) SetRtcpSenderReportData(srData *RTCPSenderReportData)
 		if (srData.RTPTimestamp-r.srNewest.RTPTimestamp) < (1<<31) && srData.RTPTimestamp < r.srNewest.RTPTimestamp {
 			tsCycles += (1 << 32)
 		}
+
+		if tsCycles >= (1 << 32) {
+			if (srData.RTPTimestamp-r.srNewest.RTPTimestamp) >= (1<<31) && srData.RTPTimestamp > r.srNewest.RTPTimestamp {
+				tsCycles -= (1 << 32)
+			}
+		}
 	}
 
 	srDataCopy := *srData
 	srDataCopy.RTPTimestampExt = uint64(srDataCopy.RTPTimestamp) + tsCycles
 
-	r.maybeAdjustFirstPacketTime(srDataCopy.RTPTimestamp, r.timestamp.GetStart())
+	if r.srNewest != nil && srDataCopy.RTPTimestampExt < r.srNewest.RTPTimestampExt {
+		// This can happen when a track is replaced with a null and then restored -
+		// i. e. muting replacing with null and unmute restoring the original track.
+		// Or it could be due bad report generation.
+		// In any case, ignore out-of-order reports.
+		if r.outOfOrderSsenderReportCount%10 == 0 {
+			r.logger.Infow(
+				"received sender report, out-of-order, skipping",
+				"first", r.srFirst,
+				"last", r.srNewest,
+				"current", &srDataCopy,
+				"count", r.outOfOrderSsenderReportCount,
+			)
+		}
+		r.outOfOrderSsenderReportCount++
+		return
+	}
 
 	if r.srNewest != nil {
 		timeSinceLast := srData.NTPTimestamp.Time().Sub(r.srNewest.NTPTimestamp.Time()).Seconds()
@@ -284,11 +341,15 @@ func (r *RTPStatsReceiver) SetRtcpSenderReportData(srData *RTCPSenderReportData)
 			(timeSinceFirst > 0.2 && math.Abs(float64(r.params.ClockRate)-calculatedClockRateFromFirst) > 0.2*float64(r.params.ClockRate)) {
 			if r.clockSkewCount%100 == 0 {
 				r.logger.Infow(
-					"clock rate skew",
-					"first", r.srFirst.ToString(),
-					"last", r.srNewest.ToString(),
-					"current", srDataCopy.ToString(),
+					"received sender report, clock skew",
+					"first", r.srFirst,
+					"last", r.srNewest,
+					"current", &srDataCopy,
+					"timeSinceFirst", timeSinceFirst,
+					"rtpDiffSinceFirst", rtpDiffSinceFirst,
 					"calculatedFirst", calculatedClockRateFromFirst,
+					"timeSinceLast", timeSinceLast,
+					"rtpDiffSinceLast", rtpDiffSinceLast,
 					"calculatedLast", calculatedClockRateFromLast,
 					"count", r.clockSkewCount,
 				)
@@ -297,44 +358,104 @@ func (r *RTPStatsReceiver) SetRtcpSenderReportData(srData *RTCPSenderReportData)
 		}
 	}
 
-	if r.srNewest != nil && srDataCopy.RTPTimestampExt < r.srNewest.RTPTimestampExt {
-		// This can happen when a track is replaced with a null and then restored -
-		// i. e. muting replacing with null and unmute restoring the original track.
-		// Under such a condition reset the sender reports to start from this point.
-		// Resetting will ensure sample rate calculations do not go haywire due to negative time.
-		if r.outOfOrderSsenderReportCount%10 == 0 {
-			r.logger.Infow(
-				"received sender report, out-of-order, resetting",
-				"last", r.srNewest.ToString(),
-				"current", srDataCopy.ToString(),
-				"count", r.outOfOrderSsenderReportCount,
-			)
+	var propagationDelay time.Duration
+	var deltaPropagationDelay time.Duration
+	getPropagationFields := func() []interface{} {
+		return []interface{}{
+			"propagationDelay", r.propagationDelay.String(),
+			"receivedPropagationDelay", propagationDelay.String(),
+			"longTermDeltaPropagationDelay", r.longTermDeltaPropagationDelay.String(),
+			"receivedDeltaPropagationDelay", deltaPropagationDelay.String(),
+			"deltaHighCount", r.propagationDelayDeltaHighCount,
+			"sinceDeltaHighStart", time.Since(r.propagationDelayDeltaHighStartTime).String(),
+			"propagationDelaySpike", r.propagationDelaySpike.String(),
+			"first", r.srFirst,
+			"last", r.srNewest,
+			"current", &srDataCopy,
 		}
-		r.outOfOrderSsenderReportCount++
+	}
+	resetDelta := func() {
+		r.propagationDelayDeltaHighCount = 0
+		r.propagationDelayDeltaHighStartTime = time.Time{}
+		r.propagationDelaySpike = 0
+	}
+	initPropagationDelay := func(pd time.Duration) {
+		r.propagationDelay = pd
 
-		r.srFirst = nil
+		r.longTermDeltaPropagationDelay = 0
+
+		resetDelta()
 	}
 
-	r.srNewest = &srDataCopy
+	ntpTime := srDataCopy.NTPTimestamp.Time()
+	propagationDelay = srDataCopy.At.Sub(ntpTime)
 	if r.srFirst == nil {
 		r.srFirst = &srDataCopy
+		initPropagationDelay(propagationDelay)
+		r.logger.Debugw("initializing propagation delay", getPropagationFields()...)
+	} else {
+		deltaPropagationDelay = propagationDelay - r.propagationDelay
+		if deltaPropagationDelay > cPropagationDelayDeltaThresholdMin { // ignore small changes for path change consideration
+			if r.longTermDeltaPropagationDelay != 0 &&
+				deltaPropagationDelay > 0 &&
+				deltaPropagationDelay > r.longTermDeltaPropagationDelay*time.Duration(cPropagationDelayDeltaThresholdMaxFactor) {
+				r.logger.Debugw("sharp increase in propagation delay", getPropagationFields()...)
+				r.propagationDelayDeltaHighCount++
+				if r.propagationDelayDeltaHighStartTime.IsZero() {
+					r.propagationDelayDeltaHighStartTime = time.Now()
+				}
+				if r.propagationDelaySpike == 0 {
+					r.propagationDelaySpike = propagationDelay
+				} else {
+					r.propagationDelaySpike += time.Duration(cPropagationDelaySpikeAdaptationFactor * float64(propagationDelay-r.propagationDelaySpike))
+				}
+
+				if r.propagationDelayDeltaHighCount >= cPropagationDelayDeltaHighResetNumReports && time.Since(r.propagationDelayDeltaHighStartTime) >= cPropagationDelayDeltaHighResetWait {
+					r.logger.Debugw("re-initializing propagation delay", append(getPropagationFields(), "newPropagationDelay", propagationDelay.String())...)
+					initPropagationDelay(r.propagationDelaySpike)
+				}
+			} else {
+				resetDelta()
+			}
+		} else {
+			resetDelta()
+
+			factor := cPropagationDelayFallFactor
+			if propagationDelay > r.propagationDelay {
+				factor = cPropagationDelayRiseFactor
+			}
+			r.propagationDelay += time.Duration(factor * float64(propagationDelay-r.propagationDelay))
+		}
+
+		if r.longTermDeltaPropagationDelay == 0 {
+			r.longTermDeltaPropagationDelay = deltaPropagationDelay
+		} else {
+			if deltaPropagationDelay < cPropagationDelayDeltaLongTermAdaptationThreshold {
+				// do not adapt to large +ve spikes, can happen when channel is congested and reports are delivered very late
+				// if the spike is in fact a path change, it will persist and handled by path change detection above
+				sinceLastReport := srDataCopy.NTPTimestamp.Time().Sub(r.srNewest.NTPTimestamp.Time())
+				adaptationFactor := min(1.0, float64(sinceLastReport)/float64(cPropagationDelayDeltaHighResetWait))
+				r.longTermDeltaPropagationDelay += time.Duration(adaptationFactor * float64(deltaPropagationDelay-r.longTermDeltaPropagationDelay))
+			}
+		}
 	}
+	// adjust receive time to estimated propagation delay
+	srDataCopy.AtAdjusted = ntpTime.Add(r.propagationDelay)
+	r.srNewest = &srDataCopy
+
+	r.maybeAdjustFirstPacketTime(r.srNewest, 0, r.timestamp.GetExtendedStart())
 }
 
-func (r *RTPStatsReceiver) GetRtcpSenderReportData() (srFirst *RTCPSenderReportData, srNewest *RTCPSenderReportData) {
+func (r *RTPStatsReceiver) GetRtcpSenderReportData() *RTCPSenderReportData {
 	r.lock.RLock()
 	defer r.lock.RUnlock()
 
-	if r.srFirst != nil {
-		srFirstCopy := *r.srFirst
-		srFirst = &srFirstCopy
+	if r.srNewest == nil {
+		return nil
 	}
 
-	if r.srNewest != nil {
-		srNewestCopy := *r.srNewest
-		srNewest = &srNewestCopy
-	}
-	return
+	srNewestCopy := *r.srNewest
+	return &srNewestCopy
 }
 
 func (r *RTPStatsReceiver) GetRtcpReceptionReport(ssrc uint32, proxyFracLost uint8, snapshotID uint32) *rtcp.ReceptionReport {

@@ -100,7 +100,13 @@ func (p *ParticipantImpl) SendParticipantUpdate(participantsToUpdate []*livekit.
 			// this is a message delivered out of order, a more recent version of the message had already been
 			// sent.
 			if pi.Version < lastVersion.version {
-				p.params.Logger.Debugw("skipping outdated participant update", "otherParticipant", pi.Identity, "otherPID", pi.Sid, "version", pi.Version, "lastVersion", lastVersion)
+				p.params.Logger.Debugw(
+					"skipping outdated participant update",
+					"otherParticipant", pi.Identity,
+					"otherPID", pi.Sid,
+					"version", pi.Version,
+					"lastVersion", lastVersion,
+				)
 				isValid = false
 			}
 		}
@@ -310,4 +316,46 @@ func (p *ParticipantImpl) CloseSignalConnection(reason types.SignallingCloseReas
 		sink.Close()
 		p.SetResponseSink(nil)
 	}
+}
+
+func (p *ParticipantImpl) sendLeaveRequest(
+	reason types.ParticipantCloseReason,
+	isExpectedToResume bool,
+	isExpectedToReconnect bool,
+	sendOnlyIfSupportingLeaveRequestWithAction bool,
+) error {
+	var leave *livekit.LeaveRequest
+	if p.ProtocolVersion().SupportsRegionsInLeaveRequest() {
+		leave = &livekit.LeaveRequest{
+			Reason: reason.ToDisconnectReason(),
+		}
+		switch {
+		case isExpectedToResume:
+			leave.Action = livekit.LeaveRequest_RESUME
+		case isExpectedToReconnect:
+			leave.Action = livekit.LeaveRequest_RECONNECT
+		default:
+			leave.Action = livekit.LeaveRequest_DISCONNECT
+		}
+		if leave.Action != livekit.LeaveRequest_DISCONNECT && p.params.GetRegionSettings != nil {
+			// sending region settings even for RESUME just in case client wants to a full reconnect despite server saying RESUME
+			leave.Regions = p.params.GetRegionSettings(p.params.ClientInfo.Address)
+		}
+	} else {
+		if !sendOnlyIfSupportingLeaveRequestWithAction {
+			leave = &livekit.LeaveRequest{
+				CanReconnect: isExpectedToReconnect,
+				Reason:       reason.ToDisconnectReason(),
+			}
+		}
+	}
+	if leave != nil {
+		return p.writeMessage(&livekit.SignalResponse{
+			Message: &livekit.SignalResponse_Leave{
+				Leave: leave,
+			},
+		})
+	}
+
+	return nil
 }

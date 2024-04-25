@@ -17,17 +17,17 @@ package service
 import (
 	"context"
 	"strconv"
-	"time"
 
+	"github.com/avast/retry-go/v4"
 	"github.com/pkg/errors"
 	"github.com/twitchtv/twirp"
 
+	"github.com/livekit/livekit-server/pkg/agent"
 	"github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/livekit-server/pkg/routing"
 	"github.com/livekit/livekit-server/pkg/rtc"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/rpc"
-	"github.com/livekit/protocol/utils"
 	"github.com/livekit/psrpc"
 )
 
@@ -39,7 +39,7 @@ type RoomService struct {
 	router            routing.MessageRouter
 	roomAllocator     RoomAllocator
 	roomStore         ServiceStore
-	agentClient       rtc.AgentClient
+	agentClient       agent.Client
 	egressLauncher    rtc.EgressLauncher
 	topicFormatter    rpc.TopicFormatter
 	roomClient        rpc.TypedRoomClient
@@ -53,7 +53,7 @@ func NewRoomService(
 	router routing.MessageRouter,
 	roomAllocator RoomAllocator,
 	serviceStore ServiceStore,
-	agentClient rtc.AgentClient,
+	agentClient agent.Client,
 	egressLauncher rtc.EgressLauncher,
 	topicFormatter rpc.TopicFormatter,
 	roomClient rpc.TypedRoomClient,
@@ -100,27 +100,11 @@ func (s *RoomService) CreateRoom(ctx context.Context, req *livekit.CreateRoomReq
 	defer res.RequestSink.Close()
 	defer res.ResponseSource.Close()
 
-	// ensure it's created correctly
-	err = s.confirmExecution(func() error {
-		_, _, err := s.roomStore.LoadRoom(ctx, livekit.RoomName(req.Name), false)
-		if err != nil {
-			return ErrOperationFailed
-		} else {
-			return nil
-		}
-	})
-	if err != nil {
-		return nil, err
-	}
-
 	if created {
-		go func() {
-			s.agentClient.JobRequest(ctx, &livekit.Job{
-				Id:   utils.NewGuid("JR_"),
-				Type: livekit.JobType_JT_ROOM,
-				Room: rm,
-			})
-		}()
+		go s.agentClient.LaunchJob(ctx, &agent.JobDescription{
+			JobType: livekit.JobType_JT_ROOM,
+			Room:    rm,
+		})
 
 		if req.Egress != nil && req.Egress.Room != nil {
 			_, err = s.egressLauncher.StartEgress(ctx, &rpc.StartEgressRequest{
@@ -299,7 +283,7 @@ func (s *RoomService) UpdateRoomMetadata(ctx context.Context, req *livekit.Updat
 		return nil, err
 	}
 
-	err = s.confirmExecution(func() error {
+	err = s.confirmExecution(ctx, func() error {
 		room, _, err = s.roomStore.LoadRoom(ctx, livekit.RoomName(req.Room), false)
 		if err != nil {
 			return err
@@ -314,31 +298,23 @@ func (s *RoomService) UpdateRoomMetadata(ctx context.Context, req *livekit.Updat
 	}
 
 	if created {
-		go func() {
-			s.agentClient.JobRequest(ctx, &livekit.Job{
-				Id:   utils.NewGuid("JR_"),
-				Type: livekit.JobType_JT_ROOM,
-				Room: room,
-			})
-		}()
+		go s.agentClient.LaunchJob(ctx, &agent.JobDescription{
+			JobType: livekit.JobType_JT_ROOM,
+			Room:    room,
+		})
 	}
 
 	return room, nil
 }
 
-func (s *RoomService) confirmExecution(f func() error) error {
-	expired := time.After(s.apiConf.ExecutionTimeout)
-	var err error
-	for {
-		select {
-		case <-expired:
-			return err
-		default:
-			err = f()
-			if err == nil {
-				return nil
-			}
-			time.Sleep(s.apiConf.CheckInterval)
-		}
-	}
+func (s *RoomService) confirmExecution(ctx context.Context, f func() error) error {
+	ctx, cancel := context.WithTimeout(ctx, s.apiConf.ExecutionTimeout)
+	defer cancel()
+	return retry.Do(
+		f,
+		retry.Context(ctx),
+		retry.Delay(s.apiConf.CheckInterval),
+		retry.MaxDelay(s.apiConf.MaxCheckInterval),
+		retry.DelayType(retry.BackOffDelay),
+	)
 }

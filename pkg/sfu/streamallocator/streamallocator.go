@@ -31,6 +31,7 @@ import (
 	"github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/livekit-server/pkg/sfu"
 	"github.com/livekit/livekit-server/pkg/sfu/buffer"
+	"github.com/livekit/livekit-server/pkg/utils"
 )
 
 const (
@@ -84,8 +85,8 @@ const (
 	streamAllocatorSignalResume
 	streamAllocatorSignalSetAllowPause
 	streamAllocatorSignalSetChannelCapacity
-	streamAllocatorSignalNACK
-	streamAllocatorSignalRTCPReceiverReport
+	// STREAM-ALLOCATOR-DATA streamAllocatorSignalNACK
+	// STREAM-ALLOCATOR-DATA streamAllocatorSignalRTCPReceiverReport
 )
 
 func (s streamAllocatorSignal) String() string {
@@ -110,10 +111,12 @@ func (s streamAllocatorSignal) String() string {
 		return "SET_ALLOW_PAUSE"
 	case streamAllocatorSignalSetChannelCapacity:
 		return "SET_CHANNEL_CAPACITY"
-	case streamAllocatorSignalNACK:
-		return "NACK"
-	case streamAllocatorSignalRTCPReceiverReport:
-		return "RTCP_RECEIVER_REPORT"
+		/* STREAM-ALLOCATOR-DATA
+		case streamAllocatorSignalNACK:
+			return "NACK"
+		case streamAllocatorSignalRTCPReceiverReport:
+			return "RTCP_RECEIVER_REPORT"
+		*/
 	default:
 		return fmt.Sprintf("%d", int(s))
 	}
@@ -156,7 +159,7 @@ type StreamAllocator struct {
 	prober *Prober
 
 	channelObserver *ChannelObserver
-	rateMonitor     *RateMonitor
+	// STREAM-ALLOCATOR-DATA rateMonitor     *RateMonitor
 
 	videoTracksMu        sync.RWMutex
 	videoTracks          map[livekit.TrackID]*Track
@@ -165,8 +168,7 @@ type StreamAllocator struct {
 
 	state streamAllocatorState
 
-	eventChMu sync.RWMutex
-	eventCh   chan Event
+	eventsQueue *utils.OpsQueue
 
 	isStopped atomic.Bool
 }
@@ -178,9 +180,13 @@ func NewStreamAllocator(params StreamAllocatorParams) *StreamAllocator {
 		prober: NewProber(ProberParams{
 			Logger: params.Logger,
 		}),
-		rateMonitor: NewRateMonitor(),
+		// STREAM-ALLOCATOR-DATA rateMonitor: NewRateMonitor(),
 		videoTracks: make(map[livekit.TrackID]*Track),
-		eventCh:     make(chan Event, 1000),
+		eventsQueue: utils.NewOpsQueue(utils.OpsQueueParams{
+			Name:    "stream-allocator",
+			MinSize: 64,
+			Logger:  params.Logger,
+		}),
 	}
 
 	s.probeController = NewProbeController(ProbeControllerParams{
@@ -197,19 +203,18 @@ func NewStreamAllocator(params StreamAllocatorParams) *StreamAllocator {
 }
 
 func (s *StreamAllocator) Start() {
-	go s.processEvents()
+	s.eventsQueue.Start()
 	go s.ping()
 }
 
 func (s *StreamAllocator) Stop() {
-	s.eventChMu.Lock()
 	if s.isStopped.Swap(true) {
-		s.eventChMu.Unlock()
 		return
 	}
 
-	close(s.eventCh)
-	s.eventChMu.Unlock()
+	// wait for eventsQueue to be done
+	<-s.eventsQueue.Stop()
+	s.probeController.StopProbe()
 }
 
 func (s *StreamAllocator) OnStreamStateChange(f func(update *StreamStateUpdate) error) {
@@ -238,9 +243,15 @@ func (s *StreamAllocator) AddTrack(downTrack *sfu.DownTrack, params AddTrackPara
 	track := NewTrack(downTrack, params.Source, params.IsSimulcast, params.PublisherID, s.params.Logger)
 	track.SetPriority(params.Priority)
 
+	trackID := livekit.TrackID(downTrack.ID())
 	s.videoTracksMu.Lock()
-	s.videoTracks[livekit.TrackID(downTrack.ID())] = track
+	oldTrack := s.videoTracks[trackID]
+	s.videoTracks[trackID] = track
 	s.videoTracksMu.Unlock()
+
+	if oldTrack != nil {
+		oldTrack.DownTrack().SetStreamAllocatorListener(nil)
+	}
 
 	downTrack.SetStreamAllocatorListener(s)
 	if s.prober.IsRunning() {
@@ -452,6 +463,7 @@ func (s *StreamAllocator) OnPacketsSent(downTrack *sfu.DownTrack, size int) {
 	s.prober.PacketsSent(size)
 }
 
+/* STREAM-ALLOCATOR-DATA
 // called by a video DownTrack when it processes NACKs
 func (s *StreamAllocator) OnNACK(downTrack *sfu.DownTrack, nackInfos []sfu.NackInfo) {
 	s.postEvent(Event{
@@ -470,6 +482,7 @@ func (s *StreamAllocator) OnRTCPReceiverReport(downTrack *sfu.DownTrack, rr rtcp
 		Data:    rr,
 	})
 }
+*/
 
 // called when prober wants to send packet(s)
 func (s *StreamAllocator) OnSendProbe(bytesToSend int) {
@@ -546,30 +559,9 @@ func (s *StreamAllocator) maybePostEventAllocateTrack(downTrack *sfu.DownTrack) 
 }
 
 func (s *StreamAllocator) postEvent(event Event) {
-	s.eventChMu.RLock()
-	if s.isStopped.Load() {
-		s.eventChMu.RUnlock()
-		return
-	}
-
-	select {
-	case s.eventCh <- event:
-	default:
-		s.params.Logger.Warnw("stream allocator: event queue full", nil, "event", event.String())
-	}
-	s.eventChMu.RUnlock()
-}
-
-func (s *StreamAllocator) processEvents() {
-	for event := range s.eventCh {
-		if s.isStopped.Load() {
-			break
-		}
-
+	s.eventsQueue.Enqueue(func() {
 		s.handleEvent(&event)
-	}
-
-	s.probeController.StopProbe()
+	})
 }
 
 func (s *StreamAllocator) ping() {
@@ -610,10 +602,12 @@ func (s *StreamAllocator) handleEvent(event *Event) {
 		s.handleSignalSetAllowPause(event)
 	case streamAllocatorSignalSetChannelCapacity:
 		s.handleSignalSetChannelCapacity(event)
-	case streamAllocatorSignalNACK:
-		s.handleSignalNACK(event)
-	case streamAllocatorSignalRTCPReceiverReport:
-		s.handleSignalRTCPReceiverReport(event)
+		/* STREAM-ALLOCATOR-DATA
+		case streamAllocatorSignalNACK:
+			s.handleSignalNACK(event)
+		case streamAllocatorSignalRTCPReceiverReport:
+			s.handleSignalRTCPReceiverReport(event)
+		*/
 	}
 }
 
@@ -647,7 +641,7 @@ func (s *StreamAllocator) handleSignalAdjustState(event *Event) {
 func (s *StreamAllocator) handleSignalEstimate(event *Event) {
 	receivedEstimate, _ := event.Data.(int64)
 	s.lastReceivedEstimate = receivedEstimate
-	s.monitorRate(receivedEstimate)
+	// s.monitorRate(receivedEstimate)
 
 	// while probing, maintain estimate separately to enable keeping current committed estimate if probe fails
 	if s.probeController.IsInProbe() {
@@ -674,7 +668,7 @@ func (s *StreamAllocator) handleSignalPeriodicPing(event *Event) {
 		s.maybeProbe()
 	}
 
-	s.updateTracksHistory()
+	// s.updateTracksHistory()
 }
 
 func (s *StreamAllocator) handleSignalSendProbe(event *Event) {
@@ -731,6 +725,7 @@ func (s *StreamAllocator) handleSignalSetChannelCapacity(event *Event) {
 	}
 }
 
+/* STREAM-ALLOCATOR-DATA
 func (s *StreamAllocator) handleSignalNACK(event *Event) {
 	nackInfos := event.Data.([]sfu.NackInfo)
 
@@ -754,6 +749,7 @@ func (s *StreamAllocator) handleSignalRTCPReceiverReport(event *Event) {
 		track.ProcessRTCPReceiverReport(rr)
 	}
 }
+*/
 
 func (s *StreamAllocator) setState(state streamAllocatorState) {
 	if s.state == state {
@@ -835,6 +831,7 @@ func (s *StreamAllocator) handleNewEstimateInNonProbe() {
 		"commitThreshold(bps)", commitThreshold,
 		"channel", s.channelObserver.ToString(),
 	)
+	/* STREAM-ALLOCATOR-DATA
 	s.params.Logger.Debugw(
 		fmt.Sprintf("stream allocator: channel congestion detected, %s channel capacity: experimental", action),
 		"rateHistory", s.rateMonitor.GetHistory(),
@@ -842,6 +839,7 @@ func (s *StreamAllocator) handleNewEstimateInNonProbe() {
 		"nackHistory", s.channelObserver.GetNackHistory(),
 		"trackHistory", s.getTracksHistory(),
 	)
+	*/
 	if estimateToCommit > commitThreshold {
 		// estimate to commit is either higher or within tolerance of expected uage, skip committing and re-allocating
 		return
@@ -1419,6 +1417,7 @@ func (s *StreamAllocator) getMaxDistanceSortedDeficient() MaxDistanceSorter {
 	return maxDistanceSorter
 }
 
+/* STREAM-ALLOCATOR-DATA
 // STREAM-ALLOCATOR-EXPERIMENTAL-TODO
 // Monitor sent rate vs estimate to figure out queuing on congestion.
 // Idea here is to pause all managed tracks on congestion detection immediately till queue drains.
@@ -1461,6 +1460,7 @@ func (s *StreamAllocator) getTracksHistory() map[livekit.TrackID]string {
 
 	return history
 }
+*/
 
 // ------------------------------------------------
 

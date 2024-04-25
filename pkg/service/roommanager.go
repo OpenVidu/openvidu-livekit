@@ -24,14 +24,14 @@ import (
 	"github.com/pkg/errors"
 	"golang.org/x/exp/maps"
 
-	"github.com/livekit/livekit-server/pkg/telemetry/prometheus"
-	"github.com/livekit/livekit-server/version"
+	"github.com/livekit/livekit-server/pkg/agent"
 	"github.com/livekit/mediatransportutil/pkg/rtcconfig"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/protocol/rpc"
 	"github.com/livekit/protocol/utils"
+	"github.com/livekit/protocol/utils/must"
 	"github.com/livekit/psrpc"
 
 	"github.com/livekit/livekit-server/pkg/clientconfiguration"
@@ -40,6 +40,8 @@ import (
 	"github.com/livekit/livekit-server/pkg/rtc"
 	"github.com/livekit/livekit-server/pkg/rtc/types"
 	"github.com/livekit/livekit-server/pkg/telemetry"
+	"github.com/livekit/livekit-server/pkg/telemetry/prometheus"
+	"github.com/livekit/livekit-server/version"
 )
 
 const (
@@ -69,7 +71,7 @@ type RoomManager struct {
 	roomStore         ObjectStore
 	telemetry         telemetry.TelemetryService
 	clientConfManager clientconfiguration.ClientConfigurationManager
-	agentClient       rtc.AgentClient
+	agentClient       agent.Client
 	egressLauncher    rtc.EgressLauncher
 	versionGenerator  utils.TimedVersionGenerator
 	turnAuthHandler   *TURNAuthHandler
@@ -90,7 +92,7 @@ func NewLocalRoomManager(
 	router routing.Router,
 	telemetry telemetry.TelemetryService,
 	clientConfManager clientconfiguration.ClientConfigurationManager,
-	agentClient rtc.AgentClient,
+	agentClient agent.Client,
 	egressLauncher rtc.EgressLauncher,
 	versionGenerator utils.TimedVersionGenerator,
 	turnAuthHandler *TURNAuthHandler,
@@ -120,11 +122,12 @@ func NewLocalRoomManager(
 		iceConfigCache: make(map[livekit.ParticipantIdentity]*iceConfigCacheEntry),
 
 		serverInfo: &livekit.ServerInfo{
-			Edition:  livekit.ServerInfo_Standard,
-			Version:  version.Version,
-			Protocol: types.CurrentProtocol,
-			Region:   conf.Region,
-			NodeId:   currentNode.Id,
+			Edition:       livekit.ServerInfo_Standard,
+			Version:       version.Version,
+			Protocol:      types.CurrentProtocol,
+			AgentProtocol: agent.CurrentProtocol,
+			Region:        conf.Region,
+			NodeId:        currentNode.Id,
 		},
 	}, nil
 }
@@ -213,10 +216,7 @@ func (r *RoomManager) Stop() {
 	r.lock.RUnlock()
 
 	for _, room := range rooms {
-		for _, p := range room.GetParticipants() {
-			_ = p.Close(true, types.ParticipantCloseReasonRoomManagerStop, false)
-		}
-		room.Close()
+		room.Close(types.ParticipantCloseReasonRoomManagerStop)
 	}
 
 	r.roomServers.Kill()
@@ -458,7 +458,7 @@ func (r *RoomManager) StartSession(
 	}
 
 	participantTopic := rpc.FormatParticipantTopic(roomName, participant.Identity())
-	participantServer := utils.Must(rpc.NewTypedParticipantServer(r, r.bus))
+	participantServer := must.Get(rpc.NewTypedParticipantServer(r, r.bus))
 	killParticipantServer := r.participantServers.Replace(participantTopic, participantServer)
 	if err := participantServer.RegisterAllParticipantTopics(participantTopic); err != nil {
 		killParticipantServer()
@@ -472,7 +472,7 @@ func (r *RoomManager) StartSession(
 	}
 
 	persistRoomForParticipantCount := func(proto *livekit.Room) {
-		if !participant.Hidden() {
+		if !participant.Hidden() && !room.IsClosed() {
 			err = r.roomStore.StoreRoom(ctx, proto, room.Internal())
 			if err != nil {
 				logger.Errorw("could not store room", err)
@@ -547,10 +547,10 @@ func (r *RoomManager) getOrCreateRoom(ctx context.Context, roomName livekit.Room
 	}
 
 	// construct ice servers
-	newRoom := rtc.NewRoom(ri, internal, *r.rtcConfig, &r.config.Audio, r.serverInfo, r.telemetry, r.agentClient, r.egressLauncher)
+	newRoom := rtc.NewRoom(ri, internal, *r.rtcConfig, r.config.Room, &r.config.Audio, r.serverInfo, r.telemetry, r.agentClient, r.egressLauncher)
 
 	roomTopic := rpc.FormatRoomTopic(roomName)
-	roomServer := utils.Must(rpc.NewTypedRoomServer(r, r.bus))
+	roomServer := must.Get(rpc.NewTypedRoomServer(r, r.bus))
 	killRoomServer := r.roomServers.Replace(roomTopic, roomServer)
 	if err := roomServer.RegisterAllRoomTopics(roomTopic); err != nil {
 		killRoomServer()
@@ -727,10 +727,7 @@ func (r *RoomManager) DeleteRoom(ctx context.Context, req *livekit.DeleteRoomReq
 		}
 	} else {
 		room.Logger.Infow("deleting room")
-		for _, p := range room.GetParticipants() {
-			_ = p.Close(true, types.ParticipantCloseReasonServiceRequestDeleteRoom, false)
-		}
-		room.Close()
+		room.Close(types.ParticipantCloseReasonServiceRequestDeleteRoom)
 	}
 	return &livekit.DeleteRoomResponse{}, nil
 }
@@ -758,13 +755,18 @@ func (r *RoomManager) SendData(ctx context.Context, req *livekit.SendDataRequest
 	}
 
 	room.Logger.Debugw("api send data", "size", len(req.Data))
-	up := &livekit.UserPacket{
-		Payload:               req.Data,
-		DestinationSids:       req.DestinationSids,
+	room.SendDataPacket(&livekit.DataPacket{
+		Kind:                  req.Kind,
 		DestinationIdentities: req.DestinationIdentities,
-		Topic:                 req.Topic,
-	}
-	room.SendDataPacket(up, req.Kind)
+		Value: &livekit.DataPacket_User{
+			User: &livekit.UserPacket{
+				Payload:               req.Data,
+				DestinationSids:       req.DestinationSids,
+				DestinationIdentities: req.DestinationIdentities,
+				Topic:                 req.Topic,
+			},
+		},
+	}, req.Kind)
 	return &livekit.SendDataResponse{}, nil
 }
 

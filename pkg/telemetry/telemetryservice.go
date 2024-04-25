@@ -19,7 +19,10 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/exp/maps"
+
 	"github.com/livekit/livekit-server/pkg/config"
+	"github.com/livekit/livekit-server/pkg/utils"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/protocol/webhook"
@@ -82,18 +85,19 @@ type TelemetryService interface {
 }
 
 const (
-	workerCleanupWait  = 3 * time.Minute
-	jobQueueBufferSize = 10000
+	workerCleanupWait = 3 * time.Minute
+	jobsQueueMinSize  = 2048
 )
 
 type telemetryService struct {
 	AnalyticsService
 
-	notifier webhook.QueuedNotifier
-	jobsChan chan func()
+	notifier  webhook.QueuedNotifier
+	jobsQueue *utils.OpsQueue
 
-	lock    sync.RWMutex
-	workers map[livekit.ParticipantID]*StatsWorker
+	lock          sync.RWMutex
+	workers       map[livekit.ParticipantID]*StatsWorker
+	workersShadow []*StatsWorker
 }
 
 func NewTelemetryService(notifier webhook.QueuedNotifier, analytics AnalyticsService) TelemetryService {
@@ -101,20 +105,27 @@ func NewTelemetryService(notifier webhook.QueuedNotifier, analytics AnalyticsSer
 		AnalyticsService: analytics,
 
 		notifier: notifier,
-		jobsChan: make(chan func(), jobQueueBufferSize),
-		workers:  make(map[livekit.ParticipantID]*StatsWorker),
+		jobsQueue: utils.NewOpsQueue(utils.OpsQueueParams{
+			Name:        "telemetry",
+			MinSize:     jobsQueueMinSize,
+			FlushOnStop: true,
+			Logger:      logger.GetLogger(),
+		}),
+		workers: make(map[livekit.ParticipantID]*StatsWorker),
 	}
 
+	t.jobsQueue.Start()
 	go t.run()
 
 	return t
 }
 
 func (t *telemetryService) FlushStats() {
-	t.lock.Lock()
-	defer t.lock.Unlock()
+	t.lock.RLock()
+	workersShadow := t.workersShadow
+	t.lock.RUnlock()
 
-	for _, worker := range t.workers {
+	for _, worker := range workersShadow {
 		worker.Flush()
 	}
 }
@@ -132,19 +143,12 @@ func (t *telemetryService) run() {
 			t.FlushStats()
 		case <-cleanupTicker.C:
 			t.cleanupWorkers()
-		case op := <-t.jobsChan:
-			op()
 		}
 	}
 }
 
 func (t *telemetryService) enqueue(op func()) {
-	select {
-	case t.jobsChan <- op:
-	// success
-	default:
-		logger.Warnw("telemetry queue full", nil)
-	}
+	t.jobsQueue.Enqueue(op)
 }
 
 func (t *telemetryService) getWorker(participantID livekit.ParticipantID) (worker *StatsWorker, ok bool) {
@@ -155,12 +159,19 @@ func (t *telemetryService) getWorker(participantID livekit.ParticipantID) (worke
 	return
 }
 
-func (t *telemetryService) createWorker(ctx context.Context,
+func (t *telemetryService) getOrCreateWorker(ctx context.Context,
 	roomID livekit.RoomID,
 	roomName livekit.RoomName,
 	participantID livekit.ParticipantID,
 	participantIdentity livekit.ParticipantIdentity,
-) *StatsWorker {
+) (*StatsWorker, bool) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	if worker, ok := t.workers[participantID]; ok {
+		return worker, true
+	}
+
 	worker := newStatsWorker(
 		ctx,
 		t,
@@ -170,23 +181,38 @@ func (t *telemetryService) createWorker(ctx context.Context,
 		participantIdentity,
 	)
 
-	t.lock.Lock()
 	t.workers[participantID] = worker
-	t.lock.Unlock()
-	return worker
+	t.workersShadow = maps.Values(t.workers)
+
+	return worker, false
 }
 
 func (t *telemetryService) cleanupWorkers() {
-	t.lock.Lock()
-	defer t.lock.Unlock()
+	t.lock.RLock()
+	workersShadow := t.workersShadow
+	t.lock.RUnlock()
 
-	for participantID, worker := range t.workers {
+	toReap := make([]livekit.ParticipantID, 0, len(workersShadow))
+	for _, worker := range workersShadow {
 		closedAt := worker.ClosedAt()
 		if !closedAt.IsZero() && time.Since(closedAt) > workerCleanupWait {
-			logger.Debugw("reaping analytics worker for participant", "pID", participantID)
-			delete(t.workers, participantID)
+			worker.Flush()
+
+			toReap = append(toReap, worker.ParticipantID())
 		}
 	}
+
+	if len(toReap) == 0 {
+		return
+	}
+
+	t.lock.Lock()
+	logger.Debugw("reaping analytics worker for participants", "pID", toReap)
+	for _, pID := range toReap {
+		delete(t.workers, pID)
+	}
+	t.workersShadow = maps.Values(t.workers)
+	t.lock.Unlock()
 }
 
 func (t *telemetryService) LocalRoomState(ctx context.Context, info *livekit.AnalyticsNodeRooms) {

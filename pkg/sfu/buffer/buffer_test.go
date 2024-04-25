@@ -48,15 +48,8 @@ var opusCodec = webrtc.RTPCodecParameters{
 }
 
 func TestNack(t *testing.T) {
-	pool := &sync.Pool{
-		New: func() interface{} {
-			b := make([]byte, 1500)
-			return &b
-		},
-	}
-
 	t.Run("nack normal", func(t *testing.T) {
-		buff := NewBuffer(123, pool, pool)
+		buff := NewBuffer(123, 1, 1)
 		buff.codecType = webrtc.RTPCodecTypeVideo
 		require.NotNil(t, buff)
 		var wg sync.WaitGroup
@@ -101,7 +94,7 @@ func TestNack(t *testing.T) {
 	})
 
 	t.Run("nack with seq wrap", func(t *testing.T) {
-		buff := NewBuffer(123, pool, pool)
+		buff := NewBuffer(123, 1, 1)
 		buff.codecType = webrtc.RTPCodecTypeVideo
 		require.NotNil(t, buff)
 		var wg sync.WaitGroup
@@ -193,13 +186,7 @@ func TestNewBuffer(t *testing.T) {
 					},
 				},
 			}
-			pool := &sync.Pool{
-				New: func() interface{} {
-					b := make([]byte, 1500)
-					return &b
-				},
-			}
-			buff := NewBuffer(123, pool, pool)
+			buff := NewBuffer(123, 1, 1)
 			buff.codecType = webrtc.RTPCodecTypeVideo
 			require.NotNil(t, buff)
 			buff.OnRtcpFeedback(func(_ []rtcp.Packet) {})
@@ -219,17 +206,14 @@ func TestNewBuffer(t *testing.T) {
 }
 
 func TestFractionLostReport(t *testing.T) {
-	pool := &sync.Pool{
-		New: func() interface{} {
-			b := make([]byte, 1500)
-			return &b
-		},
-	}
-	buff := NewBuffer(123, pool, pool)
+	buff := NewBuffer(123, 1, 1)
 	require.NotNil(t, buff)
-	buff.codecType = webrtc.RTPCodecTypeVideo
+
 	var wg sync.WaitGroup
+
+	// with loss proxying
 	wg.Add(1)
+	buff.SetAudioLossProxying(true)
 	buff.SetLastFractionLostReport(55)
 	buff.OnRtcpFeedback(func(fb []rtcp.Packet) {
 		for _, pkt := range fb {
@@ -260,4 +244,47 @@ func TestFractionLostReport(t *testing.T) {
 		require.NoError(t, err)
 	}
 	wg.Wait()
+
+	wg.Add(1)
+	buff.SetAudioLossProxying(false)
+	buff.OnRtcpFeedback(func(fb []rtcp.Packet) {
+		for _, pkt := range fb {
+			switch p := pkt.(type) {
+			case *rtcp.ReceiverReport:
+				for _, v := range p.Reports {
+					require.EqualValues(t, 0, v.FractionLost)
+				}
+				wg.Done()
+			}
+		}
+	})
+	buff.Bind(webrtc.RTPParameters{
+		HeaderExtensions: nil,
+		Codecs:           []webrtc.RTPCodecParameters{opusCodec},
+	}, opusCodec.RTPCodecCapability)
+	for i := 0; i < 15; i++ {
+		pkt := rtp.Packet{
+			Header:  rtp.Header{SequenceNumber: uint16(i), Timestamp: uint32(i)},
+			Payload: []byte{0xff, 0xff, 0xff, 0xfd, 0xb4, 0x9f, 0x94, 0x1},
+		}
+		b, err := pkt.Marshal()
+		require.NoError(t, err)
+		if i == 1 {
+			time.Sleep(1 * time.Second)
+		}
+		_, err = buff.Write(b)
+		require.NoError(t, err)
+	}
+	wg.Wait()
+}
+
+func BenchmarkMemcpu(b *testing.B) {
+	buf := make([]byte, 1500*1500*10)
+	buf2 := make([]byte, 1500*1500*20)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		copy(buf2, buf)
+	}
+
 }

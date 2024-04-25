@@ -29,7 +29,6 @@ import (
 
 	"github.com/livekit/livekit-server/pkg/rtc"
 	"github.com/livekit/livekit-server/pkg/telemetry/prometheus"
-	"github.com/livekit/mediatransportutil/pkg/rtcconfig"
 	"github.com/livekit/protocol/logger"
 
 	"github.com/livekit/livekit-server/pkg/config"
@@ -209,11 +208,7 @@ func getConfig(c *cli.Context) (*config.Config, error) {
 	}
 	config.InitLoggerFromConfig(&conf.Logging)
 
-	if c.String("config") == "" && c.String("config-body") == "" && conf.Development {
-		// use single port UDP when no config is provided
-		conf.RTC.UDPPort = rtcconfig.PortRange{Start: 7882}
-		conf.RTC.ICEPortRangeStart = 0
-		conf.RTC.ICEPortRangeEnd = 0
+	if conf.Development {
 		logger.Infow("starting in development mode")
 
 		if len(conf.Keys) == 0 {
@@ -252,10 +247,6 @@ func getConfig(c *cli.Context) (*config.Config, error) {
 }
 
 func startServer(c *cli.Context) error {
-	rand.Seed(time.Now().UnixNano())
-
-	memProfile := c.String("memprofile")
-
 	conf, err := getConfig(c)
 	if err != nil {
 		return err
@@ -267,7 +258,7 @@ func startServer(c *cli.Context) error {
 		return err
 	}
 
-	if memProfile != "" {
+	if memProfile := c.String("memprofile"); memProfile != "" {
 		if f, err := os.Create(memProfile); err != nil {
 			return err
 		} else {
@@ -285,7 +276,9 @@ func startServer(c *cli.Context) error {
 		return err
 	}
 
-	prometheus.Init(currentNode.Id, currentNode.Type, conf.Environment)
+	if err := prometheus.Init(currentNode.Id, currentNode.Type); err != nil {
+		return err
+	}
 
 	server, err := service.InitializeServer(conf, currentNode)
 	if err != nil {

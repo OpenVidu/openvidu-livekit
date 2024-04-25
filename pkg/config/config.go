@@ -37,8 +37,10 @@ import (
 	// END OPENVIDU BLOCK
 )
 
-type CongestionControlProbeMode string
-type StreamTrackerType string
+type (
+	CongestionControlProbeMode string
+	StreamTrackerType          string
+)
 
 const (
 	generatedCLIFlagUsage = "generated"
@@ -49,8 +51,9 @@ const (
 	StreamTrackerTypePacket StreamTrackerType = "packet"
 	StreamTrackerTypeFrame  StreamTrackerType = "frame"
 
-	StatsUpdateInterval          = time.Second * 10
-	TelemetryStatsUpdateInterval = time.Second * 30
+	StatsUpdateInterval                  = time.Second * 10
+	TelemetryStatsUpdateInterval         = time.Second * 30
+	TelemetryNonMediaStatsUpdateInterval = time.Minute * 5
 )
 
 var (
@@ -62,7 +65,6 @@ type Config struct {
 	Port           uint32                   `yaml:"port,omitempty"`
 	BindAddresses  []string                 `yaml:"bind_addresses,omitempty"`
 	PrometheusPort uint32                   `yaml:"prometheus_port,omitempty"`
-	Environment    string                   `yaml:"environment,omitempty"`
 	RTC            RTCConfig                `yaml:"rtc,omitempty"`
 	Redis          redisLiveKit.RedisConfig `yaml:"redis,omitempty"`
 	Audio          AudioConfig              `yaml:"audio,omitempty"`
@@ -78,7 +80,7 @@ type Config struct {
 	Region         string                   `yaml:"region,omitempty"`
 	SignalRelay    SignalRelayConfig        `yaml:"signal_relay,omitempty"`
 	PSRPC          rpc.PSRPCConfig          `yaml:"psrpc,omitempty"`
-	// LogLevel is deprecated
+	// Deprecated: LogLevel is deprecated
 	LogLevel string        `yaml:"log_level,omitempty"`
 	Logging  LoggingConfig `yaml:"logging,omitempty"`
 	Limit    LimitConfig   `yaml:"limit,omitempty"`
@@ -97,8 +99,12 @@ type RTCConfig struct {
 
 	StrictACKs bool `yaml:"strict_acks,omitempty"`
 
-	// Number of packets to buffer for NACK
+	// Deprecated: use PacketBufferSizeVideo and PacketBufferSizeAudio
 	PacketBufferSize int `yaml:"packet_buffer_size,omitempty"`
+	// Number of packets to buffer for NACK - video
+	PacketBufferSizeVideo int `yaml:"packet_buffer_size_video,omitempty"`
+	// Number of packets to buffer for NACK - audio
+	PacketBufferSizeAudio int `yaml:"packet_buffer_size_audio,omitempty"`
 
 	// Throttle periods for pli/fir rtcp packets
 	PLIThrottle PLIThrottleConfig `yaml:"pli_throttle,omitempty"`
@@ -192,6 +198,8 @@ type AudioConfig struct {
 	SmoothIntervals uint32 `yaml:"smooth_intervals,omitempty"`
 	// enable red encoding downtrack for opus only audio up track
 	ActiveREDEncoding bool `yaml:"active_red_encoding,omitempty"`
+	// enable proxying weakest subscriber loss to publisher in RTCP Receiver Report
+	EnableLossProxying bool `yaml:"enable_loss_proxying,omitempty"`
 }
 
 type StreamTrackerPacketConfig struct {
@@ -233,6 +241,7 @@ type RoomConfig struct {
 	EnabledCodecs      []CodecSpec        `yaml:"enabled_codecs,omitempty"`
 	MaxParticipants    uint32             `yaml:"max_participants,omitempty"`
 	EmptyTimeout       uint32             `yaml:"empty_timeout,omitempty"`
+	DepartureTimeout   uint32             `yaml:"departure_timeout,omitempty"`
 	EnableRemoteUnmute bool               `yaml:"enable_remote_unmute,omitempty"`
 	MaxMetadataSize    uint32             `yaml:"max_metadata_size,omitempty"`
 	PlayoutDelay       PlayoutDelayConfig `yaml:"playout_delay,omitempty"`
@@ -302,22 +311,24 @@ type IngressConfig struct {
 	WHIPBaseURL string `yaml:"whip_base_url,omitempty"`
 }
 
-type SIPConfig struct {
-}
+type SIPConfig struct{}
 
-// not exposed to YAML
 type APIConfig struct {
 	// amount of time to wait for API to execute, default 2s
-	ExecutionTimeout time.Duration
+	ExecutionTimeout time.Duration `yaml:"execution_timeout,omitempty"`
 
-	// amount of time to wait before checking for operation complete
-	CheckInterval time.Duration
+	// min amount of time to wait before checking for operation complete
+	CheckInterval time.Duration `yaml:"check_interval,omitempty"`
+
+	// max amount of time to wait before checking for operation complete
+	MaxCheckInterval time.Duration `yaml:"max_check_interval,omitempty"`
 }
 
 func DefaultAPIConfig() APIConfig {
 	return APIConfig{
 		ExecutionTimeout: 2 * time.Second,
 		CheckInterval:    100 * time.Millisecond,
+		MaxCheckInterval: 300 * time.Second,
 	}
 }
 
@@ -331,8 +342,10 @@ var DefaultConfig = Config{
 			ICEPortRangeEnd:   0,
 			STUNServers:       []string{},
 		},
-		PacketBufferSize: 500,
-		StrictACKs:       true,
+		PacketBufferSize:      500,
+		PacketBufferSizeVideo: 500,
+		PacketBufferSizeAudio: 200,
+		StrictACKs:            true,
 		PLIThrottle: PLIThrottleConfig{
 			LowQuality:  500 * time.Millisecond,
 			MidQuality:  time.Second,
@@ -479,7 +492,8 @@ var DefaultConfig = Config{
 			{Mime: webrtc.MimeTypeVP9},
 			{Mime: webrtc.MimeTypeAV1},
 		},
-		EmptyTimeout: 5 * 60,
+		EmptyTimeout:     5 * 60,
+		DepartureTimeout: 20,
 	},
 	Logging: LoggingConfig{
 		PionLevel: "error",
@@ -524,14 +538,14 @@ func NewConfig(confString string, strictMode bool, c *cli.Context, baseFlags []c
 		}
 	}
 
-	if err := conf.RTC.Validate(conf.Development); err != nil {
-		return nil, fmt.Errorf("could not validate RTC config: %v", err)
-	}
-
 	if c != nil {
 		if err := conf.updateFromCLI(c, baseFlags); err != nil {
 			return nil, err
 		}
+	}
+
+	if err := conf.RTC.Validate(conf.Development); err != nil {
+		return nil, fmt.Errorf("could not validate RTC config: %v", err)
 	}
 
 	// expand env vars in filenames
@@ -565,10 +579,6 @@ func NewConfig(confString string, strictMode bool, c *cli.Context, baseFlags []c
 		}
 		conf.Logging.ComponentLevels["transport.pion"] = conf.Logging.PionLevel
 		conf.Logging.ComponentLevels["pion"] = conf.Logging.PionLevel
-	}
-
-	if conf.Development {
-		conf.Environment = "dev"
 	}
 
 	return &conf, nil
@@ -644,10 +654,10 @@ func (conf *Config) ToCLIFlagNames(existingFlags []cli.Flag) map[string]reflect.
 func (conf *Config) ValidateKeys() error {
 	// prefer keyfile if set
 	if conf.KeyFile != "" {
-		var otherFilter os.FileMode = 0007
+		var otherFilter os.FileMode = 0o007
 		if st, err := os.Stat(conf.KeyFile); err != nil {
 			return err
-		} else if st.Mode().Perm()&otherFilter != 0000 {
+		} else if st.Mode().Perm()&otherFilter != 0o000 {
 			return ErrKeyFileIncorrectPermission
 		}
 		f, err := os.Open(conf.KeyFile)
@@ -750,6 +760,9 @@ func GenerateCLIFlags(existingFlags []cli.Flag, hidden bool) ([]cli.Flag, error)
 			// TODO
 			continue
 		case reflect.Map:
+			// TODO
+			continue
+		case reflect.Struct:
 			// TODO
 			continue
 		default:

@@ -102,6 +102,7 @@ type MediaTrackReceiver struct {
 	trackInfo       *livekit.TrackInfo
 	potentialCodecs []webrtc.RTPCodecParameters
 	state           mediaTrackReceiverState
+	willBeResumed   bool
 
 	onSetupReceiver     func(mime string)
 	onMediaLossFeedback func(dt *sfu.DownTrack, report *rtcp.ReceiverReport)
@@ -160,19 +161,23 @@ func (t *MediaTrackReceiver) SetupReceiver(receiver sfu.TrackReceiver, priority 
 	receivers := slices.Clone(t.receivers)
 
 	// codec position maybe taken by DummyReceiver, check and upgrade to WebRTCReceiver
-	var upgradeReceiver bool
-	for _, r := range receivers {
+	receiverToAdd := receiver
+	idx := -1
+	for i, r := range receivers {
 		if strings.EqualFold(r.Codec().MimeType, receiver.Codec().MimeType) {
-			if d, ok := r.TrackReceiver.(*DummyReceiver); ok {
-				d.Upgrade(receiver)
-				upgradeReceiver = true
-				break
-			}
+			idx = i
+			break
 		}
 	}
-	if !upgradeReceiver {
-		receivers = append(receivers, &simulcastReceiver{TrackReceiver: receiver, priority: priority})
+	if idx != -1 {
+		if d, ok := receivers[idx].TrackReceiver.(*DummyReceiver); ok {
+			d.Upgrade(receiver)
+			receiverToAdd = d
+		}
+		// replace receiver
+		receivers = slices.Delete(receivers, idx, idx+1)
 	}
+	receivers = append(receivers, &simulcastReceiver{TrackReceiver: receiverToAdd, priority: priority})
 
 	sort.Slice(receivers, func(i, j int) bool {
 		return receivers[i].Priority() < receivers[j].Priority()
@@ -259,6 +264,7 @@ func (t *MediaTrackReceiver) ClearReceiver(mime string, willBeResumed bool) {
 	for idx, receiver := range receivers {
 		if strings.EqualFold(receiver.Codec().MimeType, mime) {
 			receivers[idx] = receivers[len(receivers)-1]
+			receivers[len(receivers)-1] = nil
 			receivers = receivers[:len(receivers)-1]
 			break
 		}
@@ -274,6 +280,8 @@ func (t *MediaTrackReceiver) ClearAllReceivers(willBeResumed bool) {
 	t.lock.Lock()
 	receivers := t.receivers
 	t.receivers = nil
+
+	t.willBeResumed = willBeResumed
 	t.lock.Unlock()
 
 	for _, r := range receivers {
@@ -315,15 +323,21 @@ func (t *MediaTrackReceiver) TryClose() bool {
 		return true
 	}
 
+	numActiveReceivers := 0
 	for _, receiver := range t.receivers {
-		if dr, _ := receiver.TrackReceiver.(*DummyReceiver); dr != nil && dr.Receiver() != nil {
-			t.lock.RUnlock()
-			return false
+		dr, ok := receiver.TrackReceiver.(*DummyReceiver)
+		if !ok || dr.Receiver() != nil {
+			// !ok means real receiver OR
+			// dummy receiver with a regular receiver attached
+			numActiveReceivers++
 		}
 	}
 	t.lock.RUnlock()
-	t.Close()
+	if numActiveReceivers != 0 {
+		return false
+	}
 
+	t.Close()
 	return true
 }
 
@@ -481,7 +495,24 @@ func (t *MediaTrackReceiver) AddSubscriber(sub types.LocalParticipant) (types.Su
 		Logger:         tLogger,
 		DisableRed:     t.trackInfo.GetDisableRed() || !t.params.AudioConfig.ActiveREDEncoding,
 	})
-	return t.MediaTrackSubscriptions.AddSubscriber(sub, wr)
+	subTrack, err := t.MediaTrackSubscriptions.AddSubscriber(sub, wr)
+
+	// media track could have been closed while adding subscription
+	remove := false
+	willBeResumed := false
+	t.lock.RLock()
+	if t.state != mediaTrackReceiverStateOpen {
+		willBeResumed = t.willBeResumed
+		remove = true
+	}
+	t.lock.RUnlock()
+
+	if remove {
+		_ = t.MediaTrackSubscriptions.RemoveSubscriber(sub.ID(), willBeResumed)
+		return nil, ErrNotOpen
+	}
+
+	return subTrack, err
 }
 
 // RemoveSubscriber removes participant from subscription
