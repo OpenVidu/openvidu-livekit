@@ -13,7 +13,7 @@
       "mode": "debug",
       "program": "${workspaceFolder}/cmd/server",
       "env": {
-        "LIVEKIT_KEYS": "key1: abcdefghijklmnopqrstuvwxyz123456"
+        "LIVEKIT_KEYS": "devkey: secret"
       },
       "args": ["--config", "${workspaceFolder}/config.yaml"]
     }
