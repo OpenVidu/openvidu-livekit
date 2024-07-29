@@ -26,13 +26,18 @@ import (
 	"github.com/livekit/protocol/ingress"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/utils"
+	"github.com/livekit/protocol/utils/guid"
 
 	"github.com/livekit/livekit-server/pkg/service"
 )
 
+func redisStore(t testing.TB) *service.RedisStore {
+	return service.NewRedisStore(redisClient(t))
+}
+
 func TestRoomInternal(t *testing.T) {
 	ctx := context.Background()
-	rs := service.NewRedisStore(redisClient())
+	rs := redisStore(t)
 
 	room := &livekit.Room{
 		Sid:  "123",
@@ -60,7 +65,7 @@ func TestRoomInternal(t *testing.T) {
 
 func TestParticipantPersistence(t *testing.T) {
 	ctx := context.Background()
-	rs := service.NewRedisStore(redisClient())
+	rs := redisStore(t)
 
 	roomName := livekit.RoomName("room1")
 	_ = rs.DeleteRoom(ctx, roomName)
@@ -107,7 +112,7 @@ func TestParticipantPersistence(t *testing.T) {
 
 func TestRoomLock(t *testing.T) {
 	ctx := context.Background()
-	rs := service.NewRedisStore(redisClient())
+	rs := redisStore(t)
 	lockInterval := 5 * time.Millisecond
 	roomName := livekit.RoomName("myroom")
 
@@ -157,15 +162,14 @@ func TestRoomLock(t *testing.T) {
 
 func TestEgressStore(t *testing.T) {
 	ctx := context.Background()
-	rc := redisClient()
-	rs := service.NewRedisStore(rc)
+	rs := redisStore(t)
 
 	roomName := "egress-test"
 
 	// store egress info
 	info := &livekit.EgressInfo{
-		EgressId: utils.NewGuid(utils.EgressPrefix),
-		RoomId:   utils.NewGuid(utils.RoomPrefix),
+		EgressId: guid.New(utils.EgressPrefix),
+		RoomId:   guid.New(utils.RoomPrefix),
 		RoomName: roomName,
 		Status:   livekit.EgressStatus_EGRESS_STARTING,
 		Request: &livekit.EgressInfo_RoomComposite{
@@ -184,8 +188,8 @@ func TestEgressStore(t *testing.T) {
 
 	// store another
 	info2 := &livekit.EgressInfo{
-		EgressId: utils.NewGuid(utils.EgressPrefix),
-		RoomId:   utils.NewGuid(utils.RoomPrefix),
+		EgressId: guid.New(utils.EgressPrefix),
+		RoomId:   guid.New(utils.RoomPrefix),
 		RoomName: "another-egress-test",
 		Status:   livekit.EgressStatus_EGRESS_STARTING,
 		Request: &livekit.EgressInfo_RoomComposite{
@@ -228,7 +232,7 @@ func TestEgressStore(t *testing.T) {
 
 func TestIngressStore(t *testing.T) {
 	ctx := context.Background()
-	rs := service.NewRedisStore(redisClient())
+	rs := redisStore(t)
 
 	info := &livekit.IngressInfo{
 		IngressId: "ingressId",

@@ -61,6 +61,7 @@ type windowStat struct {
 	bytes             uint64
 	rttMax            uint32
 	jitterMax         float64
+	lastRTCPAt        time.Time
 }
 
 func (w *windowStat) calculatePacketScore(plw float64, includeRTT bool, includeJitter bool) float64 {
@@ -123,18 +124,18 @@ func (w *windowStat) calculatePacketScore(plw float64, includeRTT bool, includeJ
 	return score
 }
 
-func (w *windowStat) calculateBitrateScore(expectedBitrate int64, isEnabled bool) float64 {
-	if expectedBitrate == 0 || !isEnabled {
+func (w *windowStat) calculateBitrateScore(expectedBits int64, isEnabled bool) float64 {
+	if expectedBits == 0 || !isEnabled {
 		// unsupported mode OR all layers stopped
 		return cMaxScore
 	}
 
 	var score float64
 	if w.bytes != 0 {
-		// using the ratio of expectedBitrate / actualBitrate
+		// using the ratio of expectedBits / actualBits
 		// the quality inflection points are approximately
 		// GOOD at ~2.7x, POOR at ~20.1x
-		score = cMaxScore - 20*math.Log(float64(expectedBitrate)/float64(w.bytes*8))
+		score = cMaxScore - 20*math.Log(float64(expectedBits)/float64(w.bytes*8))
 		if score > cMaxScore {
 			score = cMaxScore
 		}
@@ -147,7 +148,7 @@ func (w *windowStat) calculateBitrateScore(expectedBitrate int64, isEnabled bool
 }
 
 func (w *windowStat) String() string {
-	return fmt.Sprintf("start: %+v, dur: %+v, pe: %d, pl: %d, pm: %d, pooo: %d, b: %d, rtt: %d, jitter: %0.2f",
+	return fmt.Sprintf("start: %+v, dur: %+v, pe: %d, pl: %d, pm: %d, pooo: %d, b: %d, rtt: %d, jitter: %0.2f, lastRTCP: %+v",
 		w.startedAt,
 		w.duration,
 		w.packetsExpected,
@@ -157,6 +158,7 @@ func (w *windowStat) String() string {
 		w.bytes,
 		w.rttMax,
 		w.jitterMax,
+		w.lastRTCPAt,
 	)
 }
 
@@ -174,6 +176,7 @@ func (w *windowStat) MarshalLogObject(e zapcore.ObjectEncoder) error {
 	e.AddUint64("bytes", w.bytes)
 	e.AddUint32("rttMax", w.rttMax)
 	e.AddFloat64("jitterMax", w.jitterMax)
+	e.AddTime("lastRTCPAt", w.lastRTCPAt)
 	return nil
 }
 
@@ -366,7 +369,7 @@ func (q *qualityScorer) AddLayerTransition(distance float64) {
 
 func (q *qualityScorer) updateAtLocked(stat *windowStat, at time.Time) {
 	// always update transitions
-	expectedBitrate, _, err := q.aggregateBitrate.GetAggregateAndRestartAt(at)
+	expectedBits, _, err := q.aggregateBitrate.GetAggregateAndRestartAt(at)
 	if err != nil {
 		q.params.Logger.Warnw("error getting expected bitrate", err)
 	}
@@ -393,11 +396,16 @@ func (q *qualityScorer) updateAtLocked(stat *windowStat, at time.Time) {
 	reason := "none"
 	var score float64
 	if stat.packetsExpected == 0 {
-		reason = "dry"
-		score = qualityTransitionScore[livekit.ConnectionQuality_LOST]
+		if !stat.lastRTCPAt.IsZero() && at.Sub(stat.lastRTCPAt) > stat.duration {
+			reason = "dry"
+			score = qualityTransitionScore[livekit.ConnectionQuality_LOST]
+		} else {
+			reason = "rtcp"
+			score = qualityTransitionScore[livekit.ConnectionQuality_POOR]
+		}
 	} else {
 		packetScore := stat.calculatePacketScore(plw, q.params.IncludeRTT, q.params.IncludeJitter)
-		bitrateScore := stat.calculateBitrateScore(expectedBitrate, q.params.EnableBitrateScore)
+		bitrateScore := stat.calculateBitrateScore(expectedBits, q.params.EnableBitrateScore)
 		layerScore := math.Max(math.Min(cMaxScore, cMaxScore-(expectedDistance*distanceWeight)), 0.0)
 
 		minScore := math.Min(packetScore, bitrateScore)
@@ -432,7 +440,7 @@ func (q *qualityScorer) updateAtLocked(stat *windowStat, at time.Time) {
 	prevCQ := scoreToConnectionQuality(q.score)
 	currCQ := scoreToConnectionQuality(score)
 	if utils.IsConnectionQualityLower(prevCQ, currCQ) {
-		q.params.Logger.Infow(
+		q.params.Logger.Debugw(
 			"quality drop",
 			"reason", reason,
 			"prevScore", q.score,
@@ -443,7 +451,7 @@ func (q *qualityScorer) updateAtLocked(stat *windowStat, at time.Time) {
 			"stat", stat,
 			"packetLossWeight", plw,
 			"maxPPS", q.maxPPS,
-			"expectedBitrate", expectedBitrate,
+			"expectedBits", expectedBits,
 			"expectedDistance", expectedDistance,
 		)
 	}

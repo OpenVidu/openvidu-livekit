@@ -25,12 +25,15 @@ import (
 	"golang.org/x/exp/maps"
 
 	"github.com/livekit/livekit-server/pkg/agent"
+	"github.com/livekit/livekit-server/pkg/sfu"
+	sutils "github.com/livekit/livekit-server/pkg/utils"
 	"github.com/livekit/mediatransportutil/pkg/rtcconfig"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/protocol/rpc"
 	"github.com/livekit/protocol/utils"
+	"github.com/livekit/protocol/utils/guid"
 	"github.com/livekit/protocol/utils/must"
 	"github.com/livekit/psrpc"
 
@@ -48,14 +51,13 @@ const (
 	roomPurgeSeconds     = 24 * 60 * 60
 	tokenRefreshInterval = 5 * time.Minute
 	tokenDefaultTTL      = 10 * time.Minute
-	iceConfigTTL         = 5 * time.Minute
 )
 
 var affinityEpoch = time.Date(2000, 0, 0, 0, 0, 0, 0, time.UTC)
 
-type iceConfigCacheEntry struct {
-	iceConfig  *livekit.ICEConfig
-	modifiedAt time.Time
+type iceConfigCacheKey struct {
+	roomName            livekit.RoomName
+	participantIdentity livekit.ParticipantIdentity
 }
 
 // RoomManager manages rooms and its interaction with participants.
@@ -82,7 +84,9 @@ type RoomManager struct {
 	roomServers        utils.MultitonService[rpc.RoomTopic]
 	participantServers utils.MultitonService[rpc.ParticipantTopic]
 
-	iceConfigCache map[livekit.ParticipantIdentity]*iceConfigCacheEntry
+	iceConfigCache *sutils.IceConfigCache[iceConfigCacheKey]
+
+	forwardStats *sfu.ForwardStats
 }
 
 func NewLocalRoomManager(
@@ -97,6 +101,7 @@ func NewLocalRoomManager(
 	versionGenerator utils.TimedVersionGenerator,
 	turnAuthHandler *TURNAuthHandler,
 	bus psrpc.MessageBus,
+	forwardStats *sfu.ForwardStats,
 ) (*RoomManager, error) {
 	rtcConf, err := rtc.NewWebRTCConfig(conf)
 	if err != nil {
@@ -116,10 +121,11 @@ func NewLocalRoomManager(
 		versionGenerator:  versionGenerator,
 		turnAuthHandler:   turnAuthHandler,
 		bus:               bus,
+		forwardStats:      forwardStats,
 
 		rooms: make(map[livekit.RoomName]*rtc.Room),
 
-		iceConfigCache: make(map[livekit.ParticipantIdentity]*iceConfigCacheEntry),
+		iceConfigCache: sutils.NewIceConfigCache[iceConfigCacheKey](0),
 
 		serverInfo: &livekit.ServerInfo{
 			Edition:       livekit.ServerInfo_Standard,
@@ -230,6 +236,12 @@ func (r *RoomManager) Stop() {
 			_ = r.rtcConfig.TCPMuxListener.Close()
 		}
 	}
+
+	r.iceConfigCache.Stop()
+
+	if r.forwardStats != nil {
+		r.forwardStats.Stop()
+	}
 }
 
 // StartSession starts WebRTC session when a new participant is connected, takes place on RTC node
@@ -303,14 +315,12 @@ func (r *RoomManager) StartSession(
 				"reason", pi.ReconnectReason,
 				"numParticipants", room.GetParticipantCount(),
 			)
-			iceConfig := r.getIceConfig(participant)
-			if iceConfig == nil {
-				iceConfig = &livekit.ICEConfig{}
-			}
+			iceConfig := r.getIceConfig(roomName, participant)
 			if err = room.ResumeParticipant(
 				participant,
 				requestSource,
 				responseSink,
+				iceConfig,
 				r.iceServersForParticipant(
 					apiKey,
 					participant,
@@ -369,7 +379,7 @@ func (r *RoomManager) StartSession(
 	pv := types.ProtocolVersion(pi.Client.Protocol)
 	rtcConf := *r.rtcConfig
 	rtcConf.SetBufferFactory(room.GetBufferFactory())
-	sid := livekit.ParticipantID(utils.NewGuid(utils.ParticipantPrefix))
+	sid := livekit.ParticipantID(guid.New(utils.ParticipantPrefix))
 	pLogger := rtc.LoggerWithParticipant(
 		rtc.LoggerWithRoom(logger.GetLogger(), room.Name(), room.ID()),
 		pi.Identity,
@@ -423,6 +433,7 @@ func (r *RoomManager) StartSession(
 		AdaptiveStream:          pi.AdaptiveStream,
 		AllowTCPFallback:        allowFallback,
 		TURNSEnabled:            r.config.IsTURNSEnabled(),
+		MaxAttributesSize:       r.config.Limit.MaxAttributesSize,
 		GetParticipantInfo: func(pID livekit.ParticipantID) *livekit.ParticipantInfo {
 			if p := room.GetParticipantByID(pID); p != nil {
 				return p.ToProto()
@@ -440,11 +451,12 @@ func (r *RoomManager) StartSession(
 		SubscriptionLimitVideo:       r.config.Limit.SubscriptionLimitVideo,
 		PlayoutDelay:                 roomInternal.GetPlayoutDelay(),
 		SyncStreams:                  roomInternal.GetSyncStreams(),
+		ForwardStats:                 r.forwardStats,
 	})
 	if err != nil {
 		return err
 	}
-	iceConfig := r.setIceConfig(participant)
+	iceConfig := r.setIceConfig(roomName, participant)
 
 	// join room
 	opts := rtc.ParticipantOptions{
@@ -504,12 +516,7 @@ func (r *RoomManager) StartSession(
 		}
 	})
 	participant.OnICEConfigChanged(func(participant types.LocalParticipant, iceConfig *livekit.ICEConfig) {
-		r.lock.Lock()
-		r.iceConfigCache[participant.Identity()] = &iceConfigCacheEntry{
-			iceConfig:  iceConfig,
-			modifiedAt: time.Now(),
-		}
-		r.lock.Unlock()
+		r.iceConfigCache.Put(iceConfigCacheKey{roomName, participant.Identity()}, iceConfig)
 	})
 
 	go r.rtcSessionWorker(room, participant, requestSource)
@@ -620,15 +627,10 @@ func (r *RoomManager) rtcSessionWorker(room *rtc.Room, participant types.LocalPa
 	_ = r.refreshToken(participant)
 	tokenTicker := time.NewTicker(tokenRefreshInterval)
 	defer tokenTicker.Stop()
-	stateCheckTicker := time.NewTicker(time.Millisecond * 500)
-	defer stateCheckTicker.Stop()
 	for {
 		select {
-		case <-stateCheckTicker.C:
-			// periodic check to ensure participant didn't become disconnected
-			if participant.IsDisconnected() {
-				return
-			}
+		case <-participant.Disconnected():
+			return
 		case <-tokenTicker.C:
 			// refresh token with the first API Key/secret pair
 			if err := r.refreshToken(participant); err != nil {
@@ -707,8 +709,14 @@ func (r *RoomManager) UpdateParticipant(ctx context.Context, req *livekit.Update
 	}
 
 	participant.GetLogger().Debugw("updating participant",
-		"metadata", req.Metadata, "permission", req.Permission)
-	room.UpdateParticipantMetadata(participant, req.Name, req.Metadata)
+		"metadata", req.Metadata,
+		"permission", req.Permission,
+		"attributes", req.Attributes,
+	)
+	err = room.UpdateParticipantMetadata(participant, req.Name, req.Metadata, req.Attributes)
+	if err != nil {
+		return nil, err
+	}
 	if req.Permission != nil {
 		participant.SetPermission(req.Permission)
 	}
@@ -876,24 +884,14 @@ func (r *RoomManager) refreshToken(participant types.LocalParticipant) error {
 	return nil
 }
 
-func (r *RoomManager) setIceConfig(participant types.LocalParticipant) *livekit.ICEConfig {
-	iceConfig := r.getIceConfig(participant)
-	if iceConfig == nil {
-		return &livekit.ICEConfig{}
-	}
+func (r *RoomManager) setIceConfig(roomName livekit.RoomName, participant types.LocalParticipant) *livekit.ICEConfig {
+	iceConfig := r.getIceConfig(roomName, participant)
 	participant.SetICEConfig(iceConfig)
 	return iceConfig
 }
 
-func (r *RoomManager) getIceConfig(participant types.LocalParticipant) *livekit.ICEConfig {
-	r.lock.Lock()
-	defer r.lock.Unlock()
-	iceConfigCacheEntry, ok := r.iceConfigCache[participant.Identity()]
-	if !ok || time.Since(iceConfigCacheEntry.modifiedAt) > iceConfigTTL {
-		delete(r.iceConfigCache, participant.Identity())
-		return nil
-	}
-	return iceConfigCacheEntry.iceConfig
+func (r *RoomManager) getIceConfig(roomName livekit.RoomName, participant types.LocalParticipant) *livekit.ICEConfig {
+	return r.iceConfigCache.Get(iceConfigCacheKey{roomName, participant.Identity()})
 }
 
 func (r *RoomManager) getFirstKeyPair() (string, string, error) {

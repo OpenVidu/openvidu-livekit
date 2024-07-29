@@ -12,6 +12,7 @@ import (
 	"github.com/livekit/livekit-server/pkg/clientconfiguration"
 	"github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/livekit-server/pkg/routing"
+	"github.com/livekit/livekit-server/pkg/sfu"
 	"github.com/livekit/livekit-server/pkg/telemetry"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
@@ -35,7 +36,7 @@ import (
 // Injectors from wire.go:
 
 func InitializeServer(conf *config.Config, currentNode routing.LocalNode) (*LivekitServer, error) {
-	roomConfig := getRoomConf(conf)
+	limitConfig := getLimitConf(conf)
 	apiConfig := config.DefaultAPIConfig()
 	psrpcConfig := getPSRPCConfig(conf)
 	universalClient, err := createRedisClient(conf)
@@ -95,7 +96,7 @@ func InitializeServer(conf *config.Config, currentNode routing.LocalNode) (*Live
 	if err != nil {
 		return nil, err
 	}
-	roomService, err := NewRoomService(roomConfig, apiConfig, psrpcConfig, router, roomAllocator, objectStore, client, rtcEgressLauncher, topicFormatter, roomClient, participantClient)
+	roomService, err := NewRoomService(limitConfig, apiConfig, psrpcConfig, router, roomAllocator, objectStore, client, rtcEgressLauncher, topicFormatter, roomClient, participantClient)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +121,8 @@ func InitializeServer(conf *config.Config, currentNode routing.LocalNode) (*Live
 	clientConfigurationManager := createClientConfiguration()
 	timedVersionGenerator := utils.NewDefaultTimedVersionGenerator()
 	turnAuthHandler := NewTURNAuthHandler(keyProvider)
-	roomManager, err := NewLocalRoomManager(conf, objectStore, currentNode, router, telemetryService, clientConfigurationManager, client, rtcEgressLauncher, timedVersionGenerator, turnAuthHandler, messageBus)
+	forwardStats := createForwardStats(conf)
+	roomManager, err := NewLocalRoomManager(conf, objectStore, currentNode, router, telemetryService, clientConfigurationManager, client, rtcEgressLauncher, timedVersionGenerator, turnAuthHandler, messageBus, forwardStats)
 	if err != nil {
 		return nil, err
 	}
@@ -270,8 +272,8 @@ func createClientConfiguration() clientconfiguration.ClientConfigurationManager 
 	return clientconfiguration.NewStaticClientConfigurationManager(clientconfiguration.StaticConfigurations)
 }
 
-func getRoomConf(config2 *config.Config) config.RoomConfig {
-	return config2.Room
+func getLimitConf(config2 *config.Config) config.LimitConfig {
+	return config2.Limit
 }
 
 func getSignalRelayConfig(config2 *config.Config) config.SignalRelayConfig {
@@ -284,6 +286,13 @@ func getPSRPCConfig(config2 *config.Config) rpc.PSRPCConfig {
 
 func getPSRPCClientParams(config2 rpc.PSRPCConfig, bus psrpc.MessageBus) rpc.ClientParams {
 	return rpc.NewClientParams(config2, bus, logger.GetLogger(), rpc.PSRPCMetricsObserver{})
+}
+
+func createForwardStats(conf *config.Config) *sfu.ForwardStats {
+	if conf.RTC.ForwardStats.SummaryInterval == 0 || conf.RTC.ForwardStats.ReportInterval == 0 || conf.RTC.ForwardStats.ReportWindow == 0 {
+		return nil
+	}
+	return sfu.NewForwardStats(conf.RTC.ForwardStats.SummaryInterval, conf.RTC.ForwardStats.ReportInterval, conf.RTC.ForwardStats.ReportWindow)
 }
 
 func newInProcessTurnServer(conf *config.Config, authHandler turn.AuthHandler) (*turn.Server, error) {

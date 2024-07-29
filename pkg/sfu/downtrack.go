@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -35,9 +36,10 @@ import (
 
 	"github.com/livekit/livekit-server/pkg/sfu/buffer"
 	"github.com/livekit/livekit-server/pkg/sfu/connectionquality"
-	dd "github.com/livekit/livekit-server/pkg/sfu/dependencydescriptor"
 	"github.com/livekit/livekit-server/pkg/sfu/pacer"
-	"github.com/livekit/livekit-server/pkg/sfu/rtpextension"
+	act "github.com/livekit/livekit-server/pkg/sfu/rtpextension/abscapturetime"
+	dd "github.com/livekit/livekit-server/pkg/sfu/rtpextension/dependencydescriptor"
+	pd "github.com/livekit/livekit-server/pkg/sfu/rtpextension/playoutdelay"
 	"github.com/livekit/livekit-server/pkg/sfu/utils"
 )
 
@@ -61,6 +63,7 @@ type TrackSender interface {
 		layer int32,
 		publisherSRData *buffer.RTCPSenderReportData,
 	) error
+	Resync()
 }
 
 // -------------------------------------------------------------------
@@ -200,6 +203,7 @@ type ReceiverReportListener func(dt *DownTrack, report *rtcp.ReceiverReport)
 
 type DowntrackParams struct {
 	Codecs            []webrtc.RTPCodecParameters
+	Source            livekit.TrackSource
 	Receiver          TrackReceiver
 	BufferFactory     *buffer.Factory
 	SubID             livekit.ParticipantID
@@ -237,6 +241,7 @@ type DownTrack struct {
 	transportWideExtID        int
 	dependencyDescriptorExtID int
 	playoutDelayExtID         int
+	absCaptureTimeExtID       int
 	transceiver               atomic.Pointer[webrtc.RTPTransceiver]
 	writeStream               webrtc.TrackLocalWriter
 	rtcpReader                *buffer.RTCPReader
@@ -291,7 +296,7 @@ type DownTrack struct {
 	onStatsUpdate               func(dt *DownTrack, stat *livekit.AnalyticsStat)
 	onMaxSubscribedLayerChanged func(dt *DownTrack, layer int32)
 	onRttUpdate                 func(dt *DownTrack, rtt uint32)
-	onCloseHandler              func(willBeResumed bool)
+	onCloseHandler              func(isExpectedToResume bool)
 
 	createdAt int64
 }
@@ -553,7 +558,7 @@ func (d *DownTrack) SetRTPHeaderExtensions(rtpHeaderExtensions []webrtc.RTPHeade
 			}
 		case dd.ExtensionURI:
 			d.dependencyDescriptorExtID = ext.ID
-		case rtpextension.PlayoutDelayURI:
+		case pd.PlayoutDelayURI:
 			d.playoutDelayExtID = ext.ID
 		case sdp.TransportCCURI:
 			if isBWEEnabled {
@@ -561,6 +566,8 @@ func (d *DownTrack) SetRTPHeaderExtensions(rtpHeaderExtensions []webrtc.RTPHeade
 			} else {
 				d.transportWideExtID = 0
 			}
+		case act.AbsCaptureTimeURI:
+			d.absCaptureTimeExtID = ext.ID
 		}
 	}
 }
@@ -621,21 +628,23 @@ func (d *DownTrack) keyFrameRequester() {
 		return time.Duration(interval) * time.Millisecond
 	}
 
-	interval := getInterval()
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	timer := time.NewTimer(math.MaxInt64)
+	timer.Stop()
 
-	for {
-		if d.IsClosed() {
-			return
-		}
+	defer timer.Stop()
+
+	for !d.IsClosed() {
+		timer.Reset(getInterval())
 
 		select {
 		case _, more := <-d.keyFrameRequesterCh:
 			if !more {
 				return
 			}
-		case <-ticker.C:
+			if !timer.Stop() {
+				<-timer.C
+			}
+		case <-timer.C:
 		}
 
 		locked, layer := d.forwarder.CheckSync()
@@ -644,8 +653,6 @@ func (d *DownTrack) keyFrameRequester() {
 			d.params.Receiver.SendPLI(layer, false)
 			d.rtpStats.UpdateLayerLockPliAndTime(1)
 		}
-
-		ticker.Reset(getInterval())
 	}
 }
 
@@ -708,18 +715,14 @@ func (d *DownTrack) WriteRTP(extPkt *buffer.ExtPacket, layer int32) error {
 
 	poolEntity := PacketFactory.Get().(*[]byte)
 	payload := *poolEntity
-	shouldForward, incomingHeaderSize, outgoingHeaderSize, err := d.forwarder.TranslateCodecHeader(extPkt, &tp.rtp, payload)
-	if !shouldForward {
-		PacketFactory.Put(poolEntity)
-		return err
-	}
-	n := copy(payload[outgoingHeaderSize:], extPkt.Packet.Payload[incomingHeaderSize:])
-	if n != len(extPkt.Packet.Payload[incomingHeaderSize:]) {
-		d.params.Logger.Errorw("payload overflow", nil, "want", len(extPkt.Packet.Payload[incomingHeaderSize:]), "have", n)
+	copy(payload, tp.codecBytes)
+	n := copy(payload[len(tp.codecBytes):], extPkt.Packet.Payload[tp.incomingHeaderSize:])
+	if n != len(extPkt.Packet.Payload[tp.incomingHeaderSize:]) {
+		d.params.Logger.Errorw("payload overflow", nil, "want", len(extPkt.Packet.Payload[tp.incomingHeaderSize:]), "have", n)
 		PacketFactory.Put(poolEntity)
 		return ErrPayloadOverflow
 	}
-	payload = payload[:outgoingHeaderSize+n]
+	payload = payload[:len(tp.codecBytes)+n]
 
 	hdr, err := d.getTranslatedRTPHeader(extPkt, &tp)
 	if err != nil {
@@ -730,13 +733,59 @@ func (d *DownTrack) WriteRTP(extPkt *buffer.ExtPacket, layer int32) error {
 
 	var extensions []pacer.ExtensionData
 	if tp.ddBytes != nil {
-		extensions = []pacer.ExtensionData{{ID: uint8(d.dependencyDescriptorExtID), Payload: tp.ddBytes}}
+		extensions = append(
+			extensions,
+			pacer.ExtensionData{
+				ID:      uint8(d.dependencyDescriptorExtID),
+				Payload: tp.ddBytes,
+			},
+		)
 	}
 	if d.playoutDelayExtID != 0 && d.playoutDelay != nil {
 		if val := d.playoutDelay.GetDelayExtension(hdr.SequenceNumber); val != nil {
-			extensions = append(extensions, pacer.ExtensionData{ID: uint8(d.playoutDelayExtID), Payload: val})
+			extensions = append(
+				extensions,
+				pacer.ExtensionData{
+					ID:      uint8(d.playoutDelayExtID),
+					Payload: val,
+				},
+			)
+
+			// NOTE: play out delay extension is not cached in sequencer,
+			// i. e. they will not be added to retransmitted packet.
+			// But, it is okay as the extension is added till a RTCP Receiver Report for
+			// the corresponding sequence number is received.
+			// The extreme case is all packets containing the play out delay are lost and
+			// all of them retransmitted and an RTCP Receiver Report received for those
+			// retransmited sequence numbers. But, that is highly improbable, if not impossible.
 		}
 	}
+	var actBytes []byte
+	if extPkt.AbsCaptureTimeExt != nil && d.absCaptureTimeExtID != 0 {
+		// normalize capture time to SFU clock.
+		// NOTE: even if there is estimated offset populated, just re-map the
+		// absolute capture time stamp as it should be the same RTCP sender report
+		// clock domain of publisher. SFU is normalising sender reports of publisher
+		// to SFU clock before sending to subscribers. So, capture time should be
+		// normalized to the same clock. Clear out any offset.
+		_, _, refSenderReport := d.forwarder.GetSenderReportParams()
+		if refSenderReport != nil {
+			actExtCopy := *extPkt.AbsCaptureTimeExt
+			if err = actExtCopy.Rewrite(refSenderReport.PropagationDelay()); err == nil {
+				actBytes, err = actExtCopy.Marshal()
+				if err == nil {
+					extensions = append(
+						extensions,
+						pacer.ExtensionData{
+							ID:      uint8(d.absCaptureTimeExtID),
+							Payload: actBytes,
+						},
+					)
+				}
+			}
+		}
+	}
+
 	if d.sequencer != nil {
 		d.sequencer.push(
 			extPkt.Arrival,
@@ -745,9 +794,10 @@ func (d *DownTrack) WriteRTP(extPkt *buffer.ExtPacket, layer int32) error {
 			tp.rtp.extTimestamp,
 			hdr.Marker,
 			int8(layer),
-			payload[:outgoingHeaderSize],
-			incomingHeaderSize,
+			payload[:len(tp.codecBytes)],
+			tp.incomingHeaderSize,
 			tp.ddBytes,
+			actBytes,
 		)
 	}
 
@@ -1119,14 +1169,14 @@ func (d *DownTrack) UpTrackBitrateReport(availableLayers []int32, bitrates Bitra
 }
 
 // OnCloseHandler method to be called on remote tracked removed
-func (d *DownTrack) OnCloseHandler(fn func(willBeResumed bool)) {
+func (d *DownTrack) OnCloseHandler(fn func(isExpectedToResume bool)) {
 	d.cbMu.Lock()
 	defer d.cbMu.Unlock()
 
 	d.onCloseHandler = fn
 }
 
-func (d *DownTrack) getOnCloseHandler() func(willBeResumed bool) {
+func (d *DownTrack) getOnCloseHandler() func(isExpectedToResume bool) {
 	d.cbMu.RLock()
 	defer d.cbMu.RUnlock()
 
@@ -1453,15 +1503,16 @@ func (d *DownTrack) getVP8BlankFrame(frameEndNeeded bool) ([]byte, error) {
 	// Used even when closing out a previous frame. Looks like receivers
 	// do not care about content (it will probably end up being an undecodable
 	// frame, but that should be okay as there are key frames following)
-	payload := make([]byte, 1000)
-	n, err := d.forwarder.GetPadding(frameEndNeeded, payload)
+	header, err := d.forwarder.GetPadding(frameEndNeeded)
 	if err != nil {
 		return nil, err
 	}
 
-	copy(payload[n:], VP8KeyFrame8x8)
-	trailerLen := d.maybeAddTrailer(payload[n+len(VP8KeyFrame8x8):])
-	return payload[:n+len(VP8KeyFrame8x8)+trailerLen], nil
+	payload := make([]byte, 1000)
+	copy(payload, header)
+	copy(payload[len(header):], VP8KeyFrame8x8)
+	trailerLen := d.maybeAddTrailer(payload[len(header)+len(VP8KeyFrame8x8):])
+	return payload[:len(header)+len(VP8KeyFrame8x8)+trailerLen], nil
 }
 
 func (d *DownTrack) getH264BlankFrame(_frameEndNeeded bool) ([]byte, error) {
@@ -1551,9 +1602,12 @@ func (d *DownTrack) handleRTCP(bytes []byte) {
 				*/
 
 				if d.playoutDelay != nil {
-					jitterMs := uint64(r.Jitter*1e3) / uint64(d.codec.ClockRate)
 					d.playoutDelay.OnSeqAcked(uint16(r.LastSequenceNumber))
-					d.playoutDelay.SetJitter(uint32(jitterMs))
+					// screen share track has inaccuracy jitter due to its low frame rate and bursty traffic
+					if d.params.Source != livekit.TrackSource_SCREEN_SHARE {
+						jitterMs := uint64(r.Jitter*1e3) / uint64(d.codec.ClockRate)
+						d.playoutDelay.SetJitter(uint32(jitterMs))
+					}
 				}
 			}
 			if len(rr.Reports) > 0 {
@@ -1715,11 +1769,30 @@ func (d *DownTrack) retransmitPackets(nacks []uint16) {
 			payload = payload[:int(epm.numCodecBytesOut)+len(pkt.Payload)-int(epm.numCodecBytesIn)]
 		}
 
-		var ddBytes []byte
-		if len(epm.ddBytesSlice) != 0 {
-			ddBytes = epm.ddBytesSlice
-		} else {
-			ddBytes = epm.ddBytes[:epm.ddBytesSize]
+		var extensions []pacer.ExtensionData
+		if d.dependencyDescriptorExtID != 0 {
+			var ddBytes []byte
+			if len(epm.ddBytesSlice) != 0 {
+				ddBytes = epm.ddBytesSlice
+			} else {
+				ddBytes = epm.ddBytes[:epm.ddBytesSize]
+			}
+			extensions = append(
+				extensions,
+				pacer.ExtensionData{
+					ID:      uint8(d.dependencyDescriptorExtID),
+					Payload: ddBytes,
+				},
+			)
+		}
+		if d.absCaptureTimeExtID != 0 && len(epm.actBytes) != 0 {
+			extensions = append(
+				extensions,
+				pacer.ExtensionData{
+					ID:      uint8(d.absCaptureTimeExtID),
+					Payload: epm.actBytes,
+				},
+			)
 		}
 
 		d.sendingPacket(
@@ -1735,7 +1808,7 @@ func (d *DownTrack) retransmitPackets(nacks []uint16) {
 		)
 		d.pacer.Enqueue(pacer.Packet{
 			Header:             &pkt.Header,
-			Extensions:         []pacer.ExtensionData{{ID: uint8(d.dependencyDescriptorExtID), Payload: ddBytes}},
+			Extensions:         extensions,
 			Payload:            payload,
 			AbsSendTimeExtID:   uint8(d.absSendTimeExtID),
 			TransportWideExtID: uint8(d.transportWideExtID),

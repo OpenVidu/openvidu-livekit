@@ -22,6 +22,8 @@ import (
 
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
+	"github.com/livekit/protocol/rpc"
+	"github.com/livekit/protocol/utils/guid"
 
 	"github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/livekit-server/pkg/routing"
@@ -43,9 +45,9 @@ type analyticsService struct {
 	nodeID         string
 	sequenceNumber atomic.Uint64
 
-	events    livekit.AnalyticsRecorderService_IngestEventsClient
-	stats     livekit.AnalyticsRecorderService_IngestStatsClient
-	nodeRooms livekit.AnalyticsRecorderService_IngestNodeRoomStatesClient
+	events    rpc.AnalyticsRecorderService_IngestEventsClient
+	stats     rpc.AnalyticsRecorderService_IngestStatsClient
+	nodeRooms rpc.AnalyticsRecorderService_IngestNodeRoomStatesClient
 }
 
 func NewAnalyticsService(_ *config.Config, currentNode routing.LocalNode) AnalyticsService {
@@ -65,6 +67,7 @@ func (a *analyticsService) SendStats(_ context.Context, stats []*livekit.Analyti
 	}
 
 	for _, stat := range stats {
+		stat.Id = guid.New("AS_")
 		stat.AnalyticsKey = a.analyticsKey
 		stat.Node = a.nodeID
 	}
@@ -78,6 +81,8 @@ func (a *analyticsService) SendEvent(_ context.Context, event *livekit.Analytics
 		return
 	}
 
+	event.Id = guid.New("AE_")
+	event.NodeId = a.nodeID
 	event.AnalyticsKey = a.analyticsKey
 	if err := a.events.Send(&livekit.AnalyticsEvents{
 		Events: []*livekit.AnalyticsEvent{event},
