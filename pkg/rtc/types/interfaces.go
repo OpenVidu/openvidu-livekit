@@ -39,6 +39,7 @@ type WebsocketClient interface {
 	ReadMessage() (messageType int, p []byte, err error)
 	WriteMessage(messageType int, data []byte) error
 	WriteControl(messageType int, data []byte, deadline time.Time) error
+	Close() error
 }
 
 type AddSubscriberParams struct {
@@ -105,6 +106,7 @@ const (
 	ParticipantCloseReasonDataChannelError
 	ParticipantCloseReasonMigrateCodecMismatch
 	ParticipantCloseReasonSignalSourceClose
+	ParticipantCloseReasonRoomClosed
 )
 
 func (p ParticipantCloseReason) String() string {
@@ -157,6 +159,8 @@ func (p ParticipantCloseReason) String() string {
 		return "MIGRATE_CODEC_MISMATCH"
 	case ParticipantCloseReasonSignalSourceClose:
 		return "SIGNAL_SOURCE_CLOSE"
+	case ParticipantCloseReasonRoomClosed:
+		return "ROOM_CLOSED"
 	default:
 		return fmt.Sprintf("%d", int(p))
 	}
@@ -187,6 +191,8 @@ func (p ParticipantCloseReason) ToDisconnectReason() livekit.DisconnectReason {
 		return livekit.DisconnectReason_STATE_MISMATCH
 	case ParticipantCloseReasonSignalSourceClose:
 		return livekit.DisconnectReason_SIGNAL_CLOSE
+	case ParticipantCloseReasonRoomClosed:
+		return livekit.DisconnectReason_ROOM_CLOSED
 	default:
 		// the other types will map to unknown reason
 		return livekit.DisconnectReason_UNKNOWN_REASON
@@ -279,8 +285,6 @@ type Participant interface {
 		timedVersion utils.TimedVersion,
 		resolverBySid func(participantID livekit.ParticipantID) LocalParticipant,
 	) error
-	UpdateAudioTrack(update *livekit.UpdateLocalAudioTrack) error
-	UpdateVideoTrack(update *livekit.UpdateLocalVideoTrack) error
 
 	DebugInfo() map[string]interface{}
 }
@@ -327,9 +331,12 @@ type LocalParticipant interface {
 	HandleSignalSourceClose()
 
 	// updates
+	CheckMetadataLimits(name string, metadata string, attributes map[string]string) error
 	SetName(name string)
 	SetMetadata(metadata string)
-	SetAttributes(attributes map[string]string) error
+	SetAttributes(attributes map[string]string)
+	UpdateAudioTrack(update *livekit.UpdateLocalAudioTrack) error
+	UpdateVideoTrack(update *livekit.UpdateLocalVideoTrack) error
 
 	// permissions
 	ClaimGrants() *auth.ClaimGrants
@@ -362,6 +369,7 @@ type LocalParticipant interface {
 	// WaitUntilSubscribed waits until all subscriptions have been settled, or if the timeout
 	// has been reached. If the timeout expires, it will return an error.
 	WaitUntilSubscribed(timeout time.Duration) error
+	StopAndGetSubscribedTracksForwarderState() map[livekit.TrackID]*livekit.RTPForwarderState
 
 	// returns list of participant identities that the current participant is subscribed to
 	GetSubscribedParticipants() []livekit.ParticipantID
@@ -378,6 +386,7 @@ type LocalParticipant interface {
 	SendConnectionQualityUpdate(update *livekit.ConnectionQualityUpdate) error
 	SubscriptionPermissionUpdate(publisherID livekit.ParticipantID, trackID livekit.TrackID, allowed bool)
 	SendRefreshToken(token string) error
+	SendErrorResponse(errorResponse *livekit.ErrorResponse) error
 	HandleReconnectAndSendResponse(reconnectReason livekit.ReconnectReason, reconnectResponse *livekit.ReconnectResponse) error
 	IssueFullReconnect(reason ParticipantCloseReason)
 
@@ -404,7 +413,11 @@ type LocalParticipant interface {
 	NotifyMigration()
 	SetMigrateState(s MigrateState)
 	MigrateState() MigrateState
-	SetMigrateInfo(previousOffer, previousAnswer *webrtc.SessionDescription, mediaTracks []*livekit.TrackPublishedResponse, dataChannels []*livekit.DataChannelInfo)
+	SetMigrateInfo(
+		previousOffer, previousAnswer *webrtc.SessionDescription,
+		mediaTracks []*livekit.TrackPublishedResponse,
+		dataChannels []*livekit.DataChannelInfo,
+	)
 
 	UpdateMediaRTT(rtt uint32)
 	UpdateSignalingRTT(rtt uint32)
@@ -424,6 +437,8 @@ type LocalParticipant interface {
 	SetSubscriberChannelCapacity(channelCapacity int64)
 
 	GetPacer() pacer.Pacer
+
+	GetDisableSenderReportPassThrough() bool
 }
 
 // Room is a container of participants, and can provide room-level actions
@@ -439,7 +454,6 @@ type Room interface {
 	SimulateScenario(participant LocalParticipant, scenario *livekit.SimulateScenario) error
 	ResolveMediaTrackForSubscriber(subIdentity livekit.ParticipantIdentity, trackID livekit.TrackID) MediaResolverResult
 	GetLocalParticipants() []LocalParticipant
-	UpdateParticipantMetadata(participant LocalParticipant, name string, metadata string, attributes map[string]string) error
 }
 
 // MediaTrack represents a media track
@@ -481,6 +495,7 @@ type MediaTrack interface {
 	RevokeDisallowedSubscribers(allowedSubscriberIdentities []livekit.ParticipantIdentity) []livekit.ParticipantIdentity
 	GetAllSubscribers() []livekit.ParticipantID
 	GetNumSubscribers() int
+	OnTrackSubscribed()
 
 	// returns quality information that's appropriate for width & height
 	GetQualityForDimension(width, height uint32) livekit.VideoQuality

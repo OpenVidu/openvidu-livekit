@@ -56,7 +56,7 @@ type TrackReceiver interface {
 	HeaderExtensions() []webrtc.RTPHeaderExtensionParameter
 	IsClosed() bool
 
-	ReadRTP(buf []byte, layer uint8, sn uint16) (int, error)
+	ReadRTP(buf []byte, layer uint8, esn uint64) (int, error)
 	GetLayeredBitrate() ([]int32, Bitrates)
 
 	GetAudioLevel() (float64, bool)
@@ -130,24 +130,6 @@ type WebRTCReceiver struct {
 	forwardStats *ForwardStats
 }
 
-// SVC-TODO: Have to use more conditions to differentiate between
-// SVC-TODO: SVC and non-SVC (could be single layer or simulcast).
-// SVC-TODO: May only need to differentiate between simulcast and non-simulcast
-// SVC-TODO: i. e. may be possible to treat single layer as SVC to get proper/intended functionality.
-func IsSvcCodec(mime string) bool {
-	switch strings.ToLower(mime) {
-	case "video/av1":
-		fallthrough
-	case "video/vp9":
-		return true
-	}
-	return false
-}
-
-func IsRedCodec(mime string) bool {
-	return strings.HasSuffix(strings.ToLower(mime), "red")
-}
-
 type ReceiverOpts func(w *WebRTCReceiver) *WebRTCReceiver
 
 // WithPliThrottleConfig indicates minimum time(ms) between sending PLIs
@@ -211,8 +193,8 @@ func NewWebRTCReceiver(
 		codec:    track.Codec(),
 		kind:     track.Kind(),
 		onRTCP:   onRTCP,
-		isSVC:    IsSvcCodec(track.Codec().MimeType),
-		isRED:    IsRedCodec(track.Codec().MimeType),
+		isSVC:    buffer.IsSvcCodec(track.Codec().MimeType),
+		isRED:    buffer.IsRedCodec(track.Codec().MimeType),
 	}
 
 	for _, opt := range opts {
@@ -577,13 +559,13 @@ func (w *WebRTCReceiver) getBufferLocked(layer int32) *buffer.Buffer {
 	return w.buffers[layer]
 }
 
-func (w *WebRTCReceiver) ReadRTP(buf []byte, layer uint8, sn uint16) (int, error) {
+func (w *WebRTCReceiver) ReadRTP(buf []byte, layer uint8, esn uint64) (int, error) {
 	b := w.getBuffer(int32(layer))
 	if b == nil {
 		return 0, ErrBufferNotFound
 	}
 
-	return b.GetPacket(buf, sn)
+	return b.GetPacket(buf, esn)
 }
 
 func (w *WebRTCReceiver) GetTrackStats() *livekit.RTPStats {
@@ -714,22 +696,6 @@ func (w *WebRTCReceiver) forwardRTP(layer int32) {
 				spatialTracker = w.streamTrackerManager.AddTracker(pkt.Spatial)
 			}
 		}
-		if spatialLayer > buffer.DefaultMaxLayerSpatial { // TODO-REMOVE-AFTER-DEBUG
-			w.logger.Warnw(
-				"invalid spatial layer", nil,
-				"mime", w.codec.MimeType,
-				"layer", layer,
-				"spatialLayer", spatialLayer,
-				"sn", pkt.Packet.SequenceNumber,
-				"esn", pkt.ExtSequenceNumber,
-				"timestamp", pkt.Packet.Timestamp,
-				"ets", pkt.ExtTimestamp,
-				"payloadSize", len(pkt.Packet.Payload),
-				"rtpVersion", pkt.Packet.Version,
-				"payloadType", pkt.Packet.PayloadType,
-				"ssrc", pkt.Packet.SSRC,
-			)
-		}
 
 		writeCount := w.downTrackSpreader.Broadcast(func(dt TrackSender) {
 			_ = dt.WriteRTP(pkt, spatialLayer)
@@ -740,7 +706,7 @@ func (w *WebRTCReceiver) forwardRTP(layer int32) {
 		}
 
 		if writeCount > 0 && w.forwardStats != nil {
-			w.forwardStats.Update(pkt.Arrival, time.Now())
+			w.forwardStats.Update(pkt.Arrival, time.Now().UnixNano())
 		}
 
 		if spatialTracker != nil {

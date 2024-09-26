@@ -28,6 +28,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/livekit/mediatransportutil/pkg/rtcconfig"
+	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
 	redisLiveKit "github.com/livekit/protocol/redis"
 	"github.com/livekit/protocol/rpc"
@@ -62,9 +63,11 @@ var (
 )
 
 type Config struct {
-	Port           uint32                   `yaml:"port,omitempty"`
-	BindAddresses  []string                 `yaml:"bind_addresses,omitempty"`
+	Port          uint32   `yaml:"port,omitempty"`
+	BindAddresses []string `yaml:"bind_addresses,omitempty"`
+	// PrometheusPort is deprecated
 	PrometheusPort uint32                   `yaml:"prometheus_port,omitempty"`
+	Prometheus     PrometheusConfig         `yaml:"prometheus,omitempty"`
 	RTC            RTCConfig                `yaml:"rtc,omitempty"`
 	Redis          redisLiveKit.RedisConfig `yaml:"redis,omitempty"`
 	Audio          AudioConfig              `yaml:"audio,omitempty"`
@@ -252,7 +255,8 @@ type RoomConfig struct {
 	// deprecated, moved to limits
 	MaxRoomNameLength int `yaml:"max_room_name_length,omitempty"`
 	// deprecated, moved to limits
-	MaxParticipantIdentityLength int `yaml:"max_participant_identity_length,omitempty"`
+	MaxParticipantIdentityLength int                                  `yaml:"max_participant_identity_length,omitempty"`
+	RoomConfigurations           map[string]livekit.RoomConfiguration `yaml:"room_configurations,omitempty"`
 }
 
 type CodecSpec struct {
@@ -316,6 +320,31 @@ type LimitConfig struct {
 	MaxAttributesSize            uint32 `yaml:"max_attributes_size,omitempty"`
 	MaxRoomNameLength            int    `yaml:"max_room_name_length,omitempty"`
 	MaxParticipantIdentityLength int    `yaml:"max_participant_identity_length,omitempty"`
+	MaxParticipantNameLength     int    `yaml:"max_participant_name_length,omitempty"`
+}
+
+func (l LimitConfig) CheckRoomNameLength(name string) bool {
+	return l.MaxRoomNameLength == 0 || len(name) <= l.MaxRoomNameLength
+}
+
+func (l LimitConfig) CheckParticipantNameLength(name string) bool {
+	return l.MaxParticipantNameLength == 0 || len(name) <= l.MaxParticipantNameLength
+}
+
+func (l LimitConfig) CheckMetadataSize(metadata string) bool {
+	return l.MaxMetadataSize == 0 || uint32(len(metadata)) <= l.MaxMetadataSize
+}
+
+func (l LimitConfig) CheckAttributesSize(attributes map[string]string) bool {
+	if l.MaxAttributesSize == 0 {
+		return true
+	}
+
+	total := 0
+	for k, v := range attributes {
+		total += len(k) + len(v)
+	}
+	return uint32(total) <= l.MaxAttributesSize
 }
 
 type IngressConfig struct {
@@ -334,6 +363,12 @@ type APIConfig struct {
 
 	// max amount of time to wait before checking for operation complete
 	MaxCheckInterval time.Duration `yaml:"max_check_interval,omitempty"`
+}
+
+type PrometheusConfig struct {
+	Port     uint32 `yaml:"port,omitempty"`
+	Username string `yaml:"username,omitempty"`
+	Password string `yaml:"password,omitempty"`
 }
 
 type ForwardStatsConfig struct {
@@ -518,6 +553,7 @@ var DefaultConfig = Config{
 		MaxAttributesSize:            64000,
 		MaxRoomNameLength:            256,
 		MaxParticipantIdentityLength: 256,
+		MaxParticipantNameLength:     256,
 	},
 	Logging: LoggingConfig{
 		PionLevel: "error",

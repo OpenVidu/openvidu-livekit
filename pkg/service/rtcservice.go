@@ -18,12 +18,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"math/rand"
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -132,6 +130,7 @@ func (s *RTCService) validate(r *http.Request) (livekit.RoomName, routing.Partic
 	adaptiveStreamParam := r.FormValue("adaptive_stream")
 	participantID := r.FormValue("sid")
 	subscriberAllowPauseParam := r.FormValue("subscriber_allow_pause")
+	disableICELite := r.FormValue("disable_ice_lite")
 
 	if onlyName != "" {
 		roomName = onlyName
@@ -194,6 +193,9 @@ func (s *RTCService) validate(r *http.Request) (livekit.RoomName, routing.Partic
 	if subscriberAllowPauseParam != "" {
 		subscriberAllowPause := boolValue(subscriberAllowPauseParam)
 		pi.SubscriberAllowPause = &subscriberAllowPause
+	}
+	if disableICELite != "" {
+		pi.DisableICELite = boolValue(disableICELite)
 	}
 
 	return roomName, pi, http.StatusOK, nil
@@ -369,17 +371,7 @@ func (s *RTCService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for {
 		req, count, err := sigConn.ReadRequest()
 		if err != nil {
-			// normal/expected closure
-			if errors.Is(err, io.EOF) ||
-				strings.HasSuffix(err.Error(), "use of closed network connection") ||
-				strings.HasSuffix(err.Error(), "connection reset by peer") ||
-				websocket.IsCloseError(
-					err,
-					websocket.CloseAbnormalClosure,
-					websocket.CloseGoingAway,
-					websocket.CloseNormalClosure,
-					websocket.CloseNoStatusReceived,
-				) {
+			if IsWebSocketCloseError(err) {
 				closedByClient.Store(true)
 			} else {
 				pLogger.Errorw("error reading from websocket", err, "connID", cr.ConnectionID)
@@ -525,18 +517,11 @@ func (s *RTCService) startConnection(
 	timeout time.Duration,
 ) (connectionResult, *livekit.SignalResponse, error) {
 	var cr connectionResult
-	var created bool
 	var err error
-	cr.Room, created, err = s.roomAllocator.CreateRoom(ctx, &livekit.CreateRoomRequest{Name: string(roomName)})
+
+	cr.Room, _, err = s.roomAllocator.CreateRoom(ctx, &livekit.CreateRoomRequest{Name: string(roomName), ConfigName: GetRoomConfiguration(ctx)})
 	if err != nil {
 		return cr, nil, err
-	}
-
-	if created && s.agentClient != nil {
-		go s.agentClient.LaunchJob(ctx, &agent.JobDescription{
-			JobType: livekit.JobType_JT_ROOM,
-			Room:    cr.Room,
-		})
 	}
 
 	// this needs to be started first *before* using router functions on this node

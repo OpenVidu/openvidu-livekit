@@ -129,18 +129,19 @@ func (t *MediaTrackSubscriptions) AddSubscriber(sub types.LocalParticipant, wr *
 	}
 
 	downTrack, err := sfu.NewDownTrack(sfu.DowntrackParams{
-		Codecs:            codecs,
-		Source:            t.params.MediaTrack.Source(),
-		Receiver:          wr,
-		BufferFactory:     sub.GetBufferFactory(),
-		SubID:             subscriberID,
-		StreamID:          streamID,
-		MaxTrack:          maxTrack,
-		PlayoutDelayLimit: sub.GetPlayoutDelayConfig(),
-		Pacer:             sub.GetPacer(),
-		Trailer:           trailer,
-		Logger:            LoggerWithTrack(sub.GetLogger().WithComponent(sutils.ComponentSub), trackID, t.params.IsRelayed),
-		RTCPWriter:        sub.WriteSubscriberRTCP,
+		Codecs:                         codecs,
+		Source:                         t.params.MediaTrack.Source(),
+		Receiver:                       wr,
+		BufferFactory:                  sub.GetBufferFactory(),
+		SubID:                          subscriberID,
+		StreamID:                       streamID,
+		MaxTrack:                       maxTrack,
+		PlayoutDelayLimit:              sub.GetPlayoutDelayConfig(),
+		Pacer:                          sub.GetPacer(),
+		Trailer:                        trailer,
+		Logger:                         LoggerWithTrack(sub.GetLogger().WithComponent(sutils.ComponentSub), trackID, t.params.IsRelayed),
+		RTCPWriter:                     sub.WriteSubscriberRTCP,
+		DisableSenderReportPassThrough: sub.GetDisableSenderReportPassThrough(),
 	})
 	if err != nil {
 		return nil, err
@@ -158,6 +159,12 @@ func (t *MediaTrackSubscriptions) AddSubscriber(sub types.LocalParticipant, wr *
 		MediaTrack:        t.params.MediaTrack,
 		DownTrack:         downTrack,
 		AdaptiveStream:    sub.GetAdaptiveStream(),
+	})
+
+	subTrack.AddOnBind(func(err error) {
+		if err == nil {
+			t.params.MediaTrack.OnTrackSubscribed()
+		}
 	})
 
 	// Bind callback can happen from replaceTrack, so set it up early
