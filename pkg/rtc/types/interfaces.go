@@ -439,6 +439,11 @@ type LocalParticipant interface {
 	GetPacer() pacer.Pacer
 
 	GetDisableSenderReportPassThrough() bool
+
+	// reliable data packets may be lost for participants currently in transition from JOINED to ACTIVE state
+	// these methods allow the participant to buffer these packets for later delivery just after reaching ACTIVE state
+	StoreReliableDataPacketForLaterDelivery(dpData *livekit.DataPacket)
+	DeliverStoredReliableDataPackets()
 }
 
 // Room is a container of participants, and can provide room-level actions

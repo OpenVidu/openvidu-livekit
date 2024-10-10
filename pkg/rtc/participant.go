@@ -238,6 +238,9 @@ type ParticipantImpl struct {
 
 	tracksQuality map[livekit.TrackID]livekit.ConnectionQuality
 
+	// reliable data packets received while transitioning from JOINED to ACTIVE state. Stored for later delivery
+	reliableDataPacketsQueue []*livekit.DataPacket
+
 	// loggers for publisher and subscriber
 	pubLogger logger.Logger
 	subLogger logger.Logger
@@ -270,9 +273,10 @@ func NewParticipant(params ParticipantParams) (*ParticipantImpl, error) {
 			telemetry.BytesTrackIDForParticipantID(telemetry.BytesTrackTypeData, params.SID),
 			params.SID,
 			params.Telemetry),
-		tracksQuality: make(map[livekit.TrackID]livekit.ConnectionQuality),
-		pubLogger:     params.Logger.WithComponent(sutils.ComponentPub),
-		subLogger:     params.Logger.WithComponent(sutils.ComponentSub),
+		tracksQuality:            make(map[livekit.TrackID]livekit.ConnectionQuality),
+		reliableDataPacketsQueue: make([]*livekit.DataPacket, 0),
+		pubLogger:                params.Logger.WithComponent(sutils.ComponentPub),
+		subLogger:                params.Logger.WithComponent(sutils.ComponentSub),
 	}
 	if !params.DisableSupervisor {
 		p.supervisor = supervisor.NewParticipantSupervisor(supervisor.ParticipantSupervisorParams{Logger: params.Logger})
@@ -2740,4 +2744,21 @@ func (p *ParticipantImpl) UpdateVideoTrack(update *livekit.UpdateLocalVideoTrack
 
 	p.pubLogger.Debugw("could not locate track", "trackID", update.TrackSid)
 	return errors.New("could not find track")
+}
+
+func (p *ParticipantImpl) StoreReliableDataPacketForLaterDelivery(dp *livekit.DataPacket) {
+	p.reliableDataPacketsQueue = append(p.reliableDataPacketsQueue, dp)
+}
+
+func (p *ParticipantImpl) DeliverStoredReliableDataPackets() {
+	for _, dp := range p.reliableDataPacketsQueue {
+		var dpData, err = proto.Marshal(dp)
+		if err != nil {
+			logger.Errorw("failed to marshal data packet", err)
+			continue
+		}
+		p.GetLogger().Debugw("resending stored reliable data packet", "source", dp.ParticipantIdentity, "destinationIdentities", dp.DestinationIdentities)
+		p.SendDataPacket(livekit.DataPacket_RELIABLE, dpData)
+	}
+	p.reliableDataPacketsQueue = p.reliableDataPacketsQueue[:0]
 }
