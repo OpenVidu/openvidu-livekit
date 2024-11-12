@@ -31,6 +31,15 @@ import (
 	"github.com/openvidu/openvidu-livekit/openvidu/queue"
 )
 
+type EntityType string
+
+const (
+	RoomEntity        EntityType = "ROOM"
+	ParticipantEntity EntityType = "PARTICIPANT"
+	EgressEntity      EntityType = "EGRESS"
+	IngressEntity     EntityType = "INGRESS"
+)
+
 type MongoDatabaseClient struct {
 	client *mongo.Client
 	owner  *AnalyticsSender
@@ -83,6 +92,9 @@ func (m *MongoDatabaseClient) SendBatch() {
 			parseEvent(eventMap, event)
 			mongoParseEvent(eventMap, event)
 			parsedEvents = append(parsedEvents, eventMap)
+
+			m.saveActiveEntityWhenIsInitEvent(event)
+			m.deleteActiveEntityWhenIsEndEvent(event)
 		}
 
 		var parsedStats []interface{}
@@ -157,6 +169,16 @@ func (m *MongoDatabaseClient) createMongoJsonIndexDocuments() error {
 		return err2
 	}
 	logger.Infow("created mongo stat indexes", "result", result)
+
+	activeEntityCollection := openviduDb.Collection("active_entities")
+	resultIndex, err3 := activeEntityCollection.Indexes().CreateOne(context,
+		mongo.IndexModel{Keys: bson.D{{Key: "entity", Value: 1}}},
+	)
+	if err3 != nil {
+		logger.Errorw("failed to create MongoDB active entity index", err3)
+		return err3
+	}
+	logger.Infow("created mongo active entity index", "result", resultIndex)
 	return nil
 }
 
@@ -213,4 +235,68 @@ func addMongoIdToStat(statMap map[string]interface{}, stat *livekit.AnalyticsSta
 func hashFromStringId(id string) string {
 	hash := md5.Sum([]byte(id))
 	return hex.EncodeToString(hash[:])
+}
+
+func (m *MongoDatabaseClient) saveActiveEntityWhenIsInitEvent(event *livekit.AnalyticsEvent) {
+	var entity EntityType
+	var id string
+	switch event.Type {
+	case livekit.AnalyticsEventType_ROOM_CREATED:
+		entity = RoomEntity
+		id = event.Room.Sid
+	case livekit.AnalyticsEventType_PARTICIPANT_ACTIVE:
+		entity = ParticipantEntity
+		id = event.ParticipantId
+	case livekit.AnalyticsEventType_EGRESS_STARTED:
+		entity = EgressEntity
+		id = event.EgressId
+	case livekit.AnalyticsEventType_INGRESS_STARTED:
+		entity = IngressEntity
+		id = event.Ingress.State.ResourceId
+	default:
+		return
+	}
+
+	openviduDb := m.client.Database("openvidu")
+	activeEntities := openviduDb.Collection("active_entities")
+
+	logger.Debugw("inserting active entity into MongoDB...")
+
+	_, err := activeEntities.InsertOne(context.Background(), bson.D{
+		{Key: "_id", Value: id},
+		{Key: "entity", Value: entity},
+	})
+	if err != nil {
+		logger.Errorw("failed to insert active entity into MongoDB", err)
+	} else {
+		logger.Debugw("inserted active entity", "entity", entity, "id", id)
+	}
+}
+
+func (m *MongoDatabaseClient) deleteActiveEntityWhenIsEndEvent(event *livekit.AnalyticsEvent) {
+	var id string
+	switch event.Type {
+	case livekit.AnalyticsEventType_ROOM_ENDED:
+		id = event.RoomId
+	case livekit.AnalyticsEventType_PARTICIPANT_LEFT:
+		id = event.ParticipantId
+	case livekit.AnalyticsEventType_EGRESS_ENDED:
+		id = event.EgressId
+	case livekit.AnalyticsEventType_INGRESS_ENDED:
+		id = event.Ingress.State.ResourceId
+	default:
+		return
+	}
+
+	openviduDb := m.client.Database("openvidu")
+	activeEntities := openviduDb.Collection("active_entities")
+
+	logger.Debugw("deleting active entity from MongoDB...")
+
+	_, err := activeEntities.DeleteOne(context.Background(), bson.D{{Key: "_id", Value: id}})
+	if err != nil {
+		logger.Errorw("failed to delete active entity from MongoDB", err)
+	} else {
+		logger.Debugw("deleted active entity", "id", id)
+	}
 }
