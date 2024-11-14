@@ -83,18 +83,19 @@ func (m *MongoDatabaseClient) SendBatch() {
 	if len(events) > 0 || len(stats) > 0 {
 
 		openviduDb := m.client.Database("openvidu")
-		eventCollection := openviduDb.Collection("events")
-		statCollection := openviduDb.Collection("stats")
 
 		var parsedEvents []interface{}
+		var newActiveEntities []interface{}
+		var deletedActiveEntities []interface{}
+
 		for _, event := range events {
 			eventMap := obtainMapInterfaceFromEvent(event)
 			parseEvent(eventMap, event)
 			mongoParseEvent(eventMap, event)
 			parsedEvents = append(parsedEvents, eventMap)
 
-			m.saveActiveEntityWhenIsInitEvent(event)
-			m.deleteActiveEntityWhenIsEndEvent(event)
+			newActiveEntities = m.accumluateActiveEntityForCreationEvents(event, newActiveEntities)
+			deletedActiveEntities = m.deleteActiveEntityForDestructionEvents(event, deletedActiveEntities)
 		}
 
 		var parsedStats []interface{}
@@ -108,27 +109,54 @@ func (m *MongoDatabaseClient) SendBatch() {
 		if len(parsedEvents) > 0 {
 			logger.Debugw("inserting events into MongoDB...")
 
-			eventsResult, err := eventCollection.InsertMany(context.Background(), parsedEvents, options.InsertMany().SetOrdered(false))
+			eventCollection := openviduDb.Collection("events")
+			result, err := eventCollection.InsertMany(context.Background(), parsedEvents, options.InsertMany().SetOrdered(false))
 
 			if err != nil {
 				logger.Errorw("failed to insert events into MongoDB", err)
 				logger.Warnw("restoring events for next batch", nil)
 				handleInsertManyError(err, m.owner.eventsQueue, events)
 			} else {
-				logger.Debugw("inserted events", "#", len(eventsResult.InsertedIDs))
+				logger.Debugw("inserted events", "#", len(result.InsertedIDs))
 			}
 		}
+
+		if len(newActiveEntities) > 0 || len(deletedActiveEntities) > 0 {
+			activeEntityCollection := openviduDb.Collection("active_entities")
+			if len(newActiveEntities) > 0 {
+				logger.Debugw("inserting active entities into MongoDB...")
+
+				result, err := activeEntityCollection.InsertMany(context.Background(), newActiveEntities, options.InsertMany().SetOrdered(false))
+				if err != nil {
+					logger.Errorw("failed to insert active entities in MongoDB", err)
+				} else {
+					logger.Debugw("inserted active entities", "#", len(result.InsertedIDs))
+				}
+			}
+			if len(deletedActiveEntities) > 0 {
+				logger.Debugw("deleting active entities from MongoDB...")
+
+				result, err := activeEntityCollection.DeleteMany(context.Background(), bson.D{{Key: "$or", Value: deletedActiveEntities}})
+				if err != nil {
+					logger.Errorw("failed to delete active entities from MongoDB", err)
+				} else {
+					logger.Debugw("deleted active entities", "#", result.DeletedCount)
+				}
+			}
+		}
+
 		if len(parsedStats) > 0 {
 			logger.Debugw("inserting stats into MongoDB...")
 
-			statsResult, err := statCollection.InsertMany(context.Background(), parsedStats, options.InsertMany().SetOrdered(false))
+			statCollection := openviduDb.Collection("stats")
+			result, err := statCollection.InsertMany(context.Background(), parsedStats, options.InsertMany().SetOrdered(false))
 
 			if err != nil {
 				logger.Errorw("failed to insert stats into MongoDB", err)
 				logger.Warnw("restoring stats for next batch", nil)
 				handleInsertManyError(err, m.owner.statsQueue, stats)
 			} else {
-				logger.Debugw("inserted stats", "#", len(statsResult.InsertedIDs))
+				logger.Debugw("inserted stats", "#", len(result.InsertedIDs))
 			}
 		}
 	}
@@ -237,7 +265,7 @@ func hashFromStringId(id string) string {
 	return hex.EncodeToString(hash[:])
 }
 
-func (m *MongoDatabaseClient) saveActiveEntityWhenIsInitEvent(event *livekit.AnalyticsEvent) {
+func (m *MongoDatabaseClient) accumluateActiveEntityForCreationEvents(event *livekit.AnalyticsEvent, activeEntities []interface{}) []interface{} {
 	var entity EntityType
 	var id string
 	switch event.Type {
@@ -254,26 +282,15 @@ func (m *MongoDatabaseClient) saveActiveEntityWhenIsInitEvent(event *livekit.Ana
 		entity = IngressEntity
 		id = event.Ingress.State.ResourceId
 	default:
-		return
+		return activeEntities
 	}
-
-	openviduDb := m.client.Database("openvidu")
-	activeEntities := openviduDb.Collection("active_entities")
-
-	logger.Debugw("inserting active entity into MongoDB...")
-
-	_, err := activeEntities.InsertOne(context.Background(), bson.D{
+	return append(activeEntities, bson.D{
 		{Key: "_id", Value: id},
 		{Key: "entity", Value: entity},
 	})
-	if err != nil {
-		logger.Errorw("failed to insert active entity into MongoDB", err)
-	} else {
-		logger.Debugw("inserted active entity", "entity", entity, "id", id)
-	}
 }
 
-func (m *MongoDatabaseClient) deleteActiveEntityWhenIsEndEvent(event *livekit.AnalyticsEvent) {
+func (m *MongoDatabaseClient) deleteActiveEntityForDestructionEvents(event *livekit.AnalyticsEvent, activeEntities []interface{}) []interface{} {
 	var id string
 	switch event.Type {
 	case livekit.AnalyticsEventType_ROOM_ENDED:
@@ -285,18 +302,7 @@ func (m *MongoDatabaseClient) deleteActiveEntityWhenIsEndEvent(event *livekit.An
 	case livekit.AnalyticsEventType_INGRESS_ENDED:
 		id = event.Ingress.State.ResourceId
 	default:
-		return
+		return activeEntities
 	}
-
-	openviduDb := m.client.Database("openvidu")
-	activeEntities := openviduDb.Collection("active_entities")
-
-	logger.Debugw("deleting active entity from MongoDB...")
-
-	_, err := activeEntities.DeleteOne(context.Background(), bson.D{{Key: "_id", Value: id}})
-	if err != nil {
-		logger.Errorw("failed to delete active entity from MongoDB", err)
-	} else {
-		logger.Debugw("deleted active entity", "id", id)
-	}
+	return append(activeEntities, bson.D{{Key: "_id", Value: id}})
 }
