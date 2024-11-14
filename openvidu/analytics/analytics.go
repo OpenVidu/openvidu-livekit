@@ -39,11 +39,11 @@ type AnalyticsSender struct {
 	eventsQueue    queue.Queue[*livekit.AnalyticsEvent]
 	statsQueue     queue.Queue[*livekit.AnalyticsStat]
 	databaseClient DatabaseClient
-	livekitHelper  livekithelperinterface.LivekitHelper
 }
 
-func (sender *AnalyticsSender) GetLivekitHelper() livekithelperinterface.LivekitHelper {
-	return sender.livekitHelper
+type BaseDatabaseClient struct {
+	owner         *AnalyticsSender
+	livekitHelper livekithelperinterface.LivekitHelper
 }
 
 type DatabaseClient interface {
@@ -66,7 +66,7 @@ func InitializeAnalytics(configuration *config.Config, livekithelper livekithelp
 
 	// // To also store events and stats in Redis (given that it has module RedisJSON):
 	//
-	// redisDatabaseClient, err := NewRedisDatabaseClient(&configuration.OpenVidu.Analytics, &configuration.Redis)
+	// redisDatabaseClient, err := NewRedisDatabaseClient(&configuration.OpenVidu.Analytics, &configuration.Redis, livekithelper)
 	// if err != nil {
 	// 	return err
 	// }
