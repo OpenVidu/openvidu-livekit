@@ -33,8 +33,8 @@ import (
 )
 
 type MongoDatabaseClient struct {
+	BaseDatabaseClient
 	client *mongo.Client
-	owner  *AnalyticsSender
 }
 
 func NewMongoDatabaseClient(conf *openviduconfig.AnalyticsConfig, livekithelper livekithelperinterface.LivekitHelper) (*MongoDatabaseClient, error) {
@@ -50,15 +50,14 @@ func NewMongoDatabaseClient(conf *openviduconfig.AnalyticsConfig, livekithelper 
 	}
 	mongoDatabaseClient := &MongoDatabaseClient{
 		client: mongoClient,
-		owner:  nil,
 	}
 	sender := &AnalyticsSender{
 		eventsQueue:    queue.NewSliceQueue[*livekit.AnalyticsEvent](),
 		statsQueue:     queue.NewSliceQueue[*livekit.AnalyticsStat](),
 		databaseClient: mongoDatabaseClient,
-		livekitHelper:  livekithelper,
 	}
 	mongoDatabaseClient.owner = sender
+	mongoDatabaseClient.livekitHelper = livekithelper
 
 	return mongoDatabaseClient, nil
 }

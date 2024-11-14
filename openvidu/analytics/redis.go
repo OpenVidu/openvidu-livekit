@@ -24,16 +24,17 @@ import (
 	redisLiveKit "github.com/livekit/protocol/redis"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/openvidu/openvidu-livekit/openvidu/livekithelper/livekithelperinterface"
 	"github.com/openvidu/openvidu-livekit/openvidu/openviduconfig"
 	"github.com/openvidu/openvidu-livekit/openvidu/queue"
 )
 
 type RedisDatabaseClient struct {
+	BaseDatabaseClient
 	client redis.UniversalClient
-	owner  *AnalyticsSender
 }
 
-func NewRedisDatabaseClient(conf *openviduconfig.AnalyticsConfig, redisConfig *redisLiveKit.RedisConfig) (*RedisDatabaseClient, error) {
+func NewRedisDatabaseClient(conf *openviduconfig.AnalyticsConfig, redisConfig *redisLiveKit.RedisConfig, livekithelper livekithelperinterface.LivekitHelper) (*RedisDatabaseClient, error) {
 
 	var err error
 	redisClient, err := redisLiveKit.GetRedisClient(redisConfig)
@@ -43,7 +44,6 @@ func NewRedisDatabaseClient(conf *openviduconfig.AnalyticsConfig, redisConfig *r
 
 	redisDatabaseClient := &RedisDatabaseClient{
 		client: redisClient,
-		owner:  nil,
 	}
 	sender := &AnalyticsSender{
 		eventsQueue:    queue.NewSliceQueue[*livekit.AnalyticsEvent](),
@@ -51,6 +51,7 @@ func NewRedisDatabaseClient(conf *openviduconfig.AnalyticsConfig, redisConfig *r
 		databaseClient: redisDatabaseClient,
 	}
 	redisDatabaseClient.owner = sender
+	redisDatabaseClient.livekitHelper = livekithelper
 
 	return redisDatabaseClient, nil
 }
