@@ -35,7 +35,6 @@ type RedisDatabaseClient struct {
 }
 
 func NewRedisDatabaseClient(conf *openviduconfig.AnalyticsConfig, redisConfig *redisLiveKit.RedisConfig, livekithelper livekithelperinterface.LivekitHelper) (*RedisDatabaseClient, error) {
-
 	var err error
 	redisClient, err := redisLiveKit.GetRedisClient(redisConfig)
 	if err != nil {
@@ -45,6 +44,7 @@ func NewRedisDatabaseClient(conf *openviduconfig.AnalyticsConfig, redisConfig *r
 	redisDatabaseClient := &RedisDatabaseClient{
 		client: redisClient,
 	}
+
 	sender := &AnalyticsSender{
 		eventsQueue:    queue.NewSliceQueue[*livekit.AnalyticsEvent](),
 		statsQueue:     queue.NewSliceQueue[*livekit.AnalyticsStat](),
@@ -57,12 +57,10 @@ func NewRedisDatabaseClient(conf *openviduconfig.AnalyticsConfig, redisConfig *r
 }
 
 func (m *RedisDatabaseClient) InitializeDatabase() error {
-	err := m.createRedisJsonIndexDocuments()
-	return err
+	return m.createRedisJsonIndexDocuments()
 }
 
 func (r *RedisDatabaseClient) createRedisJsonIndexDocuments() error {
-
 	// Create text index for event "$.type"
 	_, err := r.client.Do(context.Background(), "FT.CREATE", "idx:eventType", "ON", "JSON", "PREFIX", "1", "event:", "SCHEMA", "$.type", "AS", "eventType", "TEXT").Result()
 	err = handleIndexCreationError(err, "$.type")
@@ -153,18 +151,18 @@ func handleIndexCreationError(err error, indexSchema string) error {
 }
 
 func (r *RedisDatabaseClient) SendBatch() {
-
 	events := dequeEvents(r.owner.eventsQueue)
 	stats := dequeStats(r.owner.statsQueue)
 
 	if len(events) > 0 || len(stats) > 0 {
-
 		pipelinesByRoom := make(map[string]redis.Pipeliner)
+
 		for _, event := range events {
 			if _, ok := pipelinesByRoom[event.Room.Sid]; !ok {
 				pipelinesByRoom[event.Room.Sid] = r.client.Pipeline()
 			}
 		}
+
 		for _, stat := range stats {
 			if _, ok := pipelinesByRoom[stat.RoomId]; !ok {
 				pipelinesByRoom[stat.RoomId] = r.client.Pipeline()
@@ -172,7 +170,6 @@ func (r *RedisDatabaseClient) SendBatch() {
 		}
 
 		for _, event := range events {
-
 			eventMap := obtainMapInterfaceFromEvent(event)
 			eventKey := "event:{" + event.Room.Sid + "}" + ":" + event.Type.String() + ":" + getTimestampFromStruct(event.Timestamp)
 
@@ -183,7 +180,6 @@ func (r *RedisDatabaseClient) SendBatch() {
 		}
 
 		for _, stat := range stats {
-
 			statMap := obtainMapInterfaceFromStat(stat)
 			statKey := "stat:{" + stat.RoomId + "}" + ":" + stat.ParticipantId + ":" + stat.TrackId + ":" + getTimestampFromStruct(stat.TimeStamp)
 
@@ -197,4 +193,8 @@ func (r *RedisDatabaseClient) SendBatch() {
 			pipeline.Exec(context.Background())
 		}
 	}
+}
+
+func (r *RedisDatabaseClient) FixActiveEntities() {
+	panic("FixActiveEntities not implemented for RedisDatabaseClient")
 }

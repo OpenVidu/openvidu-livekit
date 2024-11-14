@@ -15,14 +15,17 @@
 package analytics
 
 import (
+	"context"
 	"encoding/json"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/bsm/redislock"
 	"github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
+	redisLiveKit "github.com/livekit/protocol/redis"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -34,6 +37,7 @@ import (
 
 var ANALYTICS_CONFIGURATION *openviduconfig.AnalyticsConfig
 var ANALYTICS_SENDERS []*AnalyticsSender
+var redisLocker *redislock.Client = nil
 
 type AnalyticsSender struct {
 	eventsQueue    queue.Queue[*livekit.AnalyticsEvent]
@@ -49,31 +53,43 @@ type BaseDatabaseClient struct {
 type DatabaseClient interface {
 	InitializeDatabase() error
 	SendBatch()
+	FixActiveEntities()
 }
 
 func InitializeAnalytics(configuration *config.Config, livekithelper livekithelperinterface.LivekitHelper) error {
-
 	mongoDatabaseClient, err := NewMongoDatabaseClient(&configuration.OpenVidu.Analytics, livekithelper)
 	if err != nil {
 		return err
 	}
+
 	err = mongoDatabaseClient.InitializeDatabase()
 	if err != nil {
 		return err
 	}
+
 	ANALYTICS_CONFIGURATION = &configuration.OpenVidu.Analytics
 	ANALYTICS_SENDERS = []*AnalyticsSender{mongoDatabaseClient.owner}
 
-	// // To also store events and stats in Redis (given that it has module RedisJSON):
-	//
+	if configuration.Redis.IsConfigured() {
+		rc, err := redisLiveKit.GetRedisClient(&configuration.Redis)
+		if err != nil {
+			return err
+		}
+
+		redisLocker = redislock.New(rc)
+	}
+
+	// To also store events and stats in Redis (given that it has module RedisJSON):
 	// redisDatabaseClient, err := NewRedisDatabaseClient(&configuration.OpenVidu.Analytics, &configuration.Redis, livekithelper)
 	// if err != nil {
 	// 	return err
 	// }
+	//
 	// err = redisDatabaseClient.InitializeDatabase()
 	// if err != nil {
 	// 	return err
 	// }
+	//
 	// ANALYTICS_SENDERS = append(ANALYTICS_SENDERS, redisDatabaseClient.owner)
 
 	return nil
@@ -82,8 +98,9 @@ func InitializeAnalytics(configuration *config.Config, livekithelper livekithelp
 // Blocking method. Launch in goroutine
 func Start() {
 	var wg sync.WaitGroup
-	wg.Add(1)
+	wg.Add(2)
 	go startAnalyticsRoutine()
+	go startActiveEntitiesFixer()
 	wg.Wait()
 }
 
@@ -97,6 +114,35 @@ func startAnalyticsRoutine() {
 func sendBatch() {
 	for _, sender := range ANALYTICS_SENDERS {
 		sender.databaseClient.SendBatch()
+	}
+}
+
+func startActiveEntitiesFixer() {
+	for {
+		func() {
+			if redisLocker != nil {
+				context := context.Background()
+				backoff := redislock.LinearBackoff(500 * time.Millisecond)
+
+				lock, err := redisLocker.Obtain(context, "active-entities-lock", 2*time.Minute, &redislock.Options{
+					RetryStrategy: backoff,
+				})
+				if err != nil {
+					return
+				}
+
+				defer lock.Release(context)
+			}
+
+			fixActiveEntities()
+			time.Sleep(time.Minute)
+		}()
+	}
+}
+
+func fixActiveEntities() {
+	for _, sender := range ANALYTICS_SENDERS {
+		sender.databaseClient.FixActiveEntities()
 	}
 }
 
