@@ -28,7 +28,7 @@ func GetInstance() *LivekitHelper {
 	return livekitHelperInstance
 }
 
-func Init(server *service.LivekitServer) *LivekitHelper {
+func Init(server *service.LivekitServer) {
 	if livekitHelperInstance == nil {
 		once.Do(
 			func() {
@@ -59,7 +59,6 @@ func Init(server *service.LivekitServer) *LivekitHelper {
 				}
 			})
 	}
-	return livekitHelperInstance
 }
 
 func (o *LivekitHelper) ListActiveRooms() ([]*livekit.Room, error) {

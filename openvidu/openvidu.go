@@ -24,14 +24,14 @@ import (
 )
 
 func Start(conf *config.Config, server *service.LivekitServer) {
+	livekithelper.Init(server)
 	if conf.OpenVidu.Analytics.Enabled {
 		// Start analytics
-		err := analytics.InitializeAnalytics(conf)
+		err := analytics.InitializeAnalytics(conf, livekithelper.GetInstance())
 		if err != nil {
 			logger.Errorw("failed to start analytics", err)
 			panic(err)
 		}
 		go analytics.Start()
 	}
-	livekithelper.Init(server)
 }

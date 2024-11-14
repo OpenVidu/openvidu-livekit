@@ -27,6 +27,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/openvidu/openvidu-livekit/openvidu/livekithelper/livekithelperinterface"
 	"github.com/openvidu/openvidu-livekit/openvidu/openviduconfig"
 	"github.com/openvidu/openvidu-livekit/openvidu/queue"
 )
@@ -38,6 +39,11 @@ type AnalyticsSender struct {
 	eventsQueue    queue.Queue[*livekit.AnalyticsEvent]
 	statsQueue     queue.Queue[*livekit.AnalyticsStat]
 	databaseClient DatabaseClient
+	livekitHelper  livekithelperinterface.LivekitHelper
+}
+
+func (sender *AnalyticsSender) GetLivekitHelper() livekithelperinterface.LivekitHelper {
+	return sender.livekitHelper
 }
 
 type DatabaseClient interface {
@@ -45,9 +51,9 @@ type DatabaseClient interface {
 	SendBatch()
 }
 
-func InitializeAnalytics(configuration *config.Config) error {
+func InitializeAnalytics(configuration *config.Config, livekithelper livekithelperinterface.LivekitHelper) error {
 
-	mongoDatabaseClient, err := NewMongoDatabaseClient(&configuration.OpenVidu.Analytics)
+	mongoDatabaseClient, err := NewMongoDatabaseClient(&configuration.OpenVidu.Analytics, livekithelper)
 	if err != nil {
 		return err
 	}

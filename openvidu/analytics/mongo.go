@@ -27,6 +27,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
+	"github.com/openvidu/openvidu-livekit/openvidu/livekithelper/livekithelperinterface"
 	"github.com/openvidu/openvidu-livekit/openvidu/openviduconfig"
 	"github.com/openvidu/openvidu-livekit/openvidu/queue"
 )
@@ -36,7 +37,7 @@ type MongoDatabaseClient struct {
 	owner  *AnalyticsSender
 }
 
-func NewMongoDatabaseClient(conf *openviduconfig.AnalyticsConfig) (*MongoDatabaseClient, error) {
+func NewMongoDatabaseClient(conf *openviduconfig.AnalyticsConfig, livekithelper livekithelperinterface.LivekitHelper) (*MongoDatabaseClient, error) {
 	context := context.TODO()
 	mongoClient, err := mongo.Connect(context, options.Client().ApplyURI(conf.MongoUrl))
 	if err != nil {
@@ -55,6 +56,7 @@ func NewMongoDatabaseClient(conf *openviduconfig.AnalyticsConfig) (*MongoDatabas
 		eventsQueue:    queue.NewSliceQueue[*livekit.AnalyticsEvent](),
 		statsQueue:     queue.NewSliceQueue[*livekit.AnalyticsStat](),
 		databaseClient: mongoDatabaseClient,
+		livekitHelper:  livekithelper,
 	}
 	mongoDatabaseClient.owner = sender
 
