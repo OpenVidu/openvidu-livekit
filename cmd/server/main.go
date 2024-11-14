@@ -298,7 +298,7 @@ func startServer(c *cli.Context) error {
 	}()
 
 	// BEGIN OPENVIDU BLOCK
-	openvidu.Start(conf)
+	openvidu.Start(conf, server)
 	// END OPENVIDU BLOCK
 
 	return server.Start()

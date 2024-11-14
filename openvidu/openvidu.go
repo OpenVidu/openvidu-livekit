@@ -18,10 +18,12 @@ import (
 	"github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/protocol/logger"
 
+	"github.com/livekit/livekit-server/pkg/service"
 	"github.com/openvidu/openvidu-livekit/openvidu/analytics"
+	"github.com/openvidu/openvidu-livekit/openvidu/livekithelper"
 )
 
-func Start(conf *config.Config) {
+func Start(conf *config.Config, server *service.LivekitServer) {
 	if conf.OpenVidu.Analytics.Enabled {
 		// Start analytics
 		err := analytics.InitializeAnalytics(conf)
@@ -31,4 +33,5 @@ func Start(conf *config.Config) {
 		}
 		go analytics.Start()
 	}
+	livekithelper.Init(server)
 }
