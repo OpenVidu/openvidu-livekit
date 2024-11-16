@@ -32,15 +32,6 @@ import (
 	"github.com/openvidu/openvidu-livekit/openvidu/queue"
 )
 
-type EntityType string
-
-const (
-	RoomEntity        EntityType = "ROOM"
-	ParticipantEntity EntityType = "PARTICIPANT"
-	EgressEntity      EntityType = "EGRESS"
-	IngressEntity     EntityType = "INGRESS"
-)
-
 type MongoDatabaseClient struct {
 	BaseDatabaseClient
 	client *mongo.Client
@@ -107,29 +98,38 @@ func (m *MongoDatabaseClient) sendEventsBatch() {
 		deletedActiveEntities = m.deleteActiveEntityForDestructionEvents(event, deletedActiveEntities)
 	}
 
-	logger.Debugw("inserting events into MongoDB...")
-
-	openviduDb := m.client.Database("openvidu")
-	eventCollection := openviduDb.Collection("events")
-
-	result, err := eventCollection.InsertMany(context.Background(), parsedEvents, options.InsertMany().SetOrdered(false))
-	if err != nil {
-		logger.Errorw("failed to insert events into MongoDB", err)
-		logger.Warnw("restoring events for next batch", nil)
-		handleInsertManyError(err, m.owner.eventsQueue, events)
-	} else {
-		logger.Debugw("inserted events", "#", len(result.InsertedIDs))
+	ctx := context.Background()
+	session, er := m.client.StartSession()
+	if er != nil {
+		logger.Errorw("failed to start session in MongoDB", er)
+		return
 	}
+	defer session.EndSession(ctx)
 
-	if len(newActiveEntities) > 0 || len(deletedActiveEntities) > 0 {
+	callback := func(sessCtx mongo.SessionContext) (interface{}, error) {
+		openviduDb := m.client.Database("openvidu")
+		eventCollection := openviduDb.Collection("events")
 		activeEntityCollection := openviduDb.Collection("active_entities")
+
+		logger.Debugw("inserting events into MongoDB...")
+
+		result, err := eventCollection.InsertMany(sessCtx, parsedEvents, options.InsertMany().SetOrdered(false))
+		if err != nil {
+			logger.Errorw("failed to insert events into MongoDB", err)
+			logger.Warnw("restoring events for next batch", nil)
+			handleInsertManyError(err, m.owner.eventsQueue, events)
+			return nil, err
+		} else {
+			logger.Debugw("inserted events", "#", len(result.InsertedIDs))
+		}
 
 		if len(newActiveEntities) > 0 {
 			logger.Debugw("inserting active entities into MongoDB...")
 
-			result, err := activeEntityCollection.InsertMany(context.Background(), newActiveEntities, options.InsertMany().SetOrdered(false))
+			result, err := activeEntityCollection.InsertMany(sessCtx, newActiveEntities, options.InsertMany().SetOrdered(false))
 			if err != nil {
 				logger.Errorw("failed to insert active entities in MongoDB", err)
+				return nil, err
 			} else {
 				logger.Debugw("inserted active entities", "#", len(result.InsertedIDs))
 			}
@@ -138,13 +138,21 @@ func (m *MongoDatabaseClient) sendEventsBatch() {
 		if len(deletedActiveEntities) > 0 {
 			logger.Debugw("deleting active entities from MongoDB...")
 
-			result, err := activeEntityCollection.DeleteMany(context.Background(), bson.D{{Key: "$or", Value: deletedActiveEntities}})
+			result, err := activeEntityCollection.DeleteMany(sessCtx, bson.D{{Key: "$or", Value: deletedActiveEntities}})
 			if err != nil {
 				logger.Errorw("failed to delete active entities from MongoDB", err)
+				return nil, err
 			} else {
 				logger.Debugw("deleted active entities", "#", result.DeletedCount)
 			}
 		}
+
+		return nil, nil
+	}
+
+	_, err := session.WithTransaction(ctx, callback)
+	if err != nil {
+		logger.Errorw("failed to execute transaction in MongoDB", err)
 	}
 }
 
@@ -321,4 +329,277 @@ func (m *MongoDatabaseClient) deleteActiveEntityForDestructionEvents(event *live
 	}
 
 	return append(activeEntities, bson.D{{Key: "_id", Value: id}})
+}
+
+func (m *MongoDatabaseClient) FixActiveEntities() {
+	var newEvents []interface{}
+	var deletedActiveEntities []interface{}
+
+	// Get all active entities from MongoDB
+	activeEntities := m.getActiveEntities()
+	// Get last timestamp that server was alive
+	lastAlive := m.getLastTimestampAlive()
+
+	// Fix active rooms
+	if activeEntities != nil && len(activeEntities.Rooms) > 0 {
+		deletedActiveEntities, newEvents = m.fixActiveRooms(activeEntities.Rooms, deletedActiveEntities, newEvents, lastAlive)
+	}
+
+	// TODO: Implement the following fixes
+	// Fix active participants
+
+	// Fix active egress
+
+	// Fix active ingress
+
+	openviduDb := m.client.Database("openvidu")
+	ctx := context.Background()
+	session, err := m.client.StartSession()
+	if err != nil {
+		logger.Errorw("failed to start session in MongoDB", err)
+		return
+	}
+	defer session.EndSession(ctx)
+
+	callback := func(sessCtx mongo.SessionContext) (interface{}, error) {
+		// Insert all necessary close events in MongoDB
+		if len(newEvents) > 0 {
+			logger.Debugw("inserting events into MongoDB...")
+
+			eventCollection := openviduDb.Collection("events")
+			result, err := eventCollection.InsertMany(sessCtx, newEvents, options.InsertMany().SetOrdered(false))
+			if err != nil {
+				logger.Errorw("failed to insert events into MongoDB", err)
+				return nil, err
+			} else {
+				logger.Debugw("inserted events", "#", len(result.InsertedIDs))
+			}
+		}
+
+		// Delete all active entities that are not actually active from MongoDB
+		if len(deletedActiveEntities) > 0 {
+			logger.Debugw("deleting active entities from MongoDB...")
+
+			activeEntityCollection := openviduDb.Collection("active_entities")
+			result, err := activeEntityCollection.DeleteMany(sessCtx, bson.D{{Key: "$or", Value: deletedActiveEntities}})
+			if err != nil {
+				logger.Errorw("failed to delete inactive entities from MongoDB", err)
+				return nil, err
+			} else {
+				logger.Debugw("deleted active entities", "#", result.DeletedCount)
+			}
+		}
+
+		return nil, nil
+	}
+
+	_, err = session.WithTransaction(ctx, callback)
+	if err != nil {
+		logger.Errorw("failed to execute transaction in MongoDB", err)
+	}
+
+	// Update last timestamp that server was alive
+	m.updateLastTimestampAlive()
+}
+
+func (m *MongoDatabaseClient) getActiveEntities() *ActiveEntities {
+	activeEntityCollection := m.client.Database("openvidu").Collection("active_entities")
+
+	// Get all active entities from MongoDB
+	activeEntitiesCursor, err := activeEntityCollection.Find(context.Background(), bson.D{})
+	if err != nil {
+		logger.Errorw("failed to find active entities in MongoDB", err)
+		return nil
+	}
+
+	var activeEntitiesDb []map[string]interface{}
+	if err = activeEntitiesCursor.All(context.Background(), &activeEntitiesDb); err != nil {
+		logger.Errorw("failed to decode active entities in MongoDB", err)
+		return nil
+	}
+
+	events := m.owner.eventsQueue
+
+	activeEntities := &ActiveEntities{}
+	for _, entity := range activeEntitiesDb {
+		entityType := entity["entity"].(EntityType)
+		id := entity["_id"].(string)
+
+		switch entityType {
+		case RoomEntity:
+			// Check if "ROOM_ENDED" event already exists
+			event := &livekit.AnalyticsEvent{
+				Type:   livekit.AnalyticsEventType_ROOM_ENDED,
+				RoomId: id,
+			}
+			equalsFn := func(a, b *livekit.AnalyticsEvent) bool {
+				return a.Type == b.Type && a.RoomId == b.RoomId
+			}
+
+			if !events.Contains(event, equalsFn) {
+				activeEntities.Rooms = append(activeEntities.Rooms, id)
+			}
+		case ParticipantEntity:
+			// Check if "PARTICIPANT_LEFT" event already exists
+			event := &livekit.AnalyticsEvent{
+				Type:          livekit.AnalyticsEventType_PARTICIPANT_LEFT,
+				ParticipantId: id,
+			}
+			equalsFn := func(a, b *livekit.AnalyticsEvent) bool {
+				return a.Type == b.Type && a.ParticipantId == b.ParticipantId
+			}
+
+			if !events.Contains(event, equalsFn) {
+				activeEntities.Participants = append(activeEntities.Participants, id)
+			}
+		case EgressEntity:
+			// Check if "EGRESS_ENDED" event already exists
+			event := &livekit.AnalyticsEvent{
+				Type:     livekit.AnalyticsEventType_EGRESS_ENDED,
+				EgressId: id,
+			}
+			equalsFn := func(a, b *livekit.AnalyticsEvent) bool {
+				return a.Type == b.Type && a.EgressId == b.EgressId
+			}
+
+			if !events.Contains(event, equalsFn) {
+				activeEntities.Egresses = append(activeEntities.Egresses, id)
+			}
+		case IngressEntity:
+			// Check if "INGRESS_ENDED" event already exists
+			event := &livekit.AnalyticsEvent{
+				Type: livekit.AnalyticsEventType_INGRESS_ENDED,
+				Ingress: &livekit.IngressInfo{
+					State: &livekit.IngressState{
+						ResourceId: id,
+					},
+				},
+			}
+			equalsFn := func(a, b *livekit.AnalyticsEvent) bool {
+				return a.Type == b.Type && a.Ingress.State.ResourceId == b.Ingress.State.ResourceId
+			}
+
+			if !events.Contains(event, equalsFn) {
+				activeEntities.Ingresses = append(activeEntities.Ingresses, id)
+			}
+		}
+	}
+
+	return activeEntities
+}
+
+func (m *MongoDatabaseClient) fixActiveRooms(
+	activeRoomsDb []string,
+	deletedActiveEntities, newEvents []interface{},
+	lastAlive Timestamp,
+) ([]interface{}, []interface{}) {
+	// Get all active rooms from LiveKit
+	activeRooms, err := m.livekitHelper.ListActiveRooms()
+	if err != nil {
+		logger.Errorw("failed to list active rooms from LiveKit", err)
+		return deletedActiveEntities, newEvents
+	}
+
+	activeRoomsSet := make(map[string]bool)
+	for _, room := range activeRooms {
+		activeRoomsSet[room.Sid] = true
+	}
+
+	// Filter rooms that are not actually active by checking if they are present in LiveKit
+	for _, roomId := range activeRoomsDb {
+		if !activeRoomsSet[roomId] {
+			// Check if "ROOM_ENDED" event already exists
+			eventCollection := m.client.Database("openvidu").Collection("events")
+			result := eventCollection.FindOne(
+				context.Background(),
+				bson.D{
+					{Key: "room.sid", Value: roomId},
+					{Key: "type", Value: livekit.AnalyticsEventType_ROOM_ENDED.String()},
+				},
+				options.FindOne().SetProjection(bson.D{{Key: "room.sid", Value: 1}}),
+			)
+
+			// Check if there was an error different from "no documents found"
+			if result.Err() != nil && result.Err() != mongo.ErrNoDocuments {
+				logger.Errorw("failed to find ROOM_ENDED event for room in MongoDB", result.Err(), "room_id", roomId)
+				continue
+			}
+
+			deletedActiveEntities = append(deletedActiveEntities, bson.D{{Key: "_id", Value: roomId}})
+
+			// If "ROOM_ENDED" event already exists, skip
+			if result.Err() == nil {
+				continue
+			}
+
+			// Save "ROOM_ENDED" fake event to keep consistency
+			// Get info from "ROOM_CREATED" event
+			var roomCreatedEventMap map[string]interface{}
+			err = eventCollection.FindOne(
+				context.Background(),
+				bson.D{
+					{Key: "room.sid", Value: roomId},
+					{Key: "type", Value: livekit.AnalyticsEventType_ROOM_CREATED.String()},
+				},
+				options.FindOne().SetProjection(bson.D{
+					{Key: "room.sid", Value: 1},
+					{Key: "room.name", Value: 1},
+					{Key: "room.creation_time", Value: 1},
+				}),
+			).Decode(&roomCreatedEventMap)
+			if err != nil {
+				if err != mongo.ErrNoDocuments {
+					logger.Errorw("failed to find ROOM_CREATED event for room in MongoDB", err, "room_id", roomId)
+					deletedActiveEntities = deletedActiveEntities[:len(deletedActiveEntities)-1]
+				}
+				continue
+			}
+
+			// Fill "ROOM_ENDED" event with necessary info
+			roomEndedEvent := roomCreatedEventMap
+			roomEndedEvent["type"] = livekit.AnalyticsEventType_ROOM_ENDED.String()
+			roomEndedEvent["room_id"] = roomId
+			roomEndedEvent["openvidu_expire_at"] = time.Now().Add(ANALYTICS_CONFIGURATION.Expiration).UTC()
+
+			creationTime := roomCreatedEventMap["room"].(map[string]interface{})["creation_time"].(int64)
+			if creationTime >= lastAlive.Seconds {
+				roomEndedEvent["timestamp"].(map[string]interface{})["seconds"] = creationTime + 20
+			} else {
+				roomEndedEvent["timestamp"].(map[string]interface{})["seconds"] = lastAlive.Seconds
+			}
+
+			newEvents = append(newEvents, roomEndedEvent)
+		}
+	}
+
+	return deletedActiveEntities, newEvents
+}
+
+func (m *MongoDatabaseClient) getLastTimestampAlive() Timestamp {
+	lastAliveCollection := m.client.Database("openvidu").Collection("last_alive")
+
+	var lastAlive LastAlive
+	err := lastAliveCollection.FindOne(context.Background(), bson.D{{Key: "_id", Value: "server"}}).Decode(&lastAlive)
+	if err != nil {
+		return getCurrentTimestamp()
+	}
+
+	return lastAlive.LastAlive
+}
+
+func (m *MongoDatabaseClient) updateLastTimestampAlive() {
+	lastAliveCollection := m.client.Database("openvidu").Collection("last_alive")
+
+	_, err := lastAliveCollection.UpdateOne(
+		context.Background(),
+		bson.D{{Key: "_id", Value: "server"}},
+		LastAlive{
+			ID:        "server",
+			LastAlive: getCurrentTimestamp(),
+		},
+		options.Update().SetUpsert(true),
+	)
+	if err != nil {
+		logger.Errorw("failed to update last alive timestamp in MongoDB", err)
+	}
 }

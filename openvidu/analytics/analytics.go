@@ -38,6 +38,33 @@ import (
 var ANALYTICS_CONFIGURATION *openviduconfig.AnalyticsConfig
 var ANALYTICS_SENDERS []*AnalyticsSender
 var redisLocker *redislock.Client = nil
+var mutex sync.Mutex
+
+type EntityType string
+
+const (
+	RoomEntity        EntityType = "ROOM"
+	ParticipantEntity EntityType = "PARTICIPANT"
+	EgressEntity      EntityType = "EGRESS"
+	IngressEntity     EntityType = "INGRESS"
+)
+
+type ActiveEntities struct {
+	Rooms        []string
+	Participants []string
+	Egresses     []string
+	Ingresses    []string
+}
+
+type LastAlive struct {
+	ID        string    `bson:"_id"`
+	LastAlive Timestamp `bson:"last_alive"`
+}
+
+type Timestamp struct {
+	Seconds int64 `bson:"seconds"`
+	Nanos   int32 `bson:"nanos"`
+}
 
 type AnalyticsSender struct {
 	eventsQueue    queue.Queue[*livekit.AnalyticsEvent]
@@ -107,7 +134,9 @@ func Start() {
 func startAnalyticsRoutine() {
 	for {
 		time.Sleep(ANALYTICS_CONFIGURATION.Interval)
+		mutex.Lock()
 		sendBatch()
+		mutex.Unlock()
 	}
 }
 
@@ -134,7 +163,9 @@ func startActiveEntitiesFixer() {
 				defer lock.Release(context)
 			}
 
+			mutex.Lock()
 			fixActiveEntities()
+			mutex.Unlock()
 			time.Sleep(time.Minute)
 		}()
 	}
@@ -236,6 +267,14 @@ func getTimestampFromStruct(timestamp *timestamppb.Timestamp) string {
 		timestampKey += strconv.FormatInt(int64(timestamp.Nanos), 10)
 	}
 	return timestampKey
+}
+
+func getCurrentTimestamp() Timestamp {
+	now := time.Now()
+	return Timestamp{
+		Seconds: now.Unix(),
+		Nanos:   int32(now.Nanosecond()),
+	}
 }
 
 func parseEvent(eventMap map[string]interface{}, event *livekit.AnalyticsEvent) {
