@@ -22,6 +22,7 @@ type Queue[T any] interface {
 	Enqueue(T) error
 	Dequeue() (T, error)
 	Len() int
+	Contains(T, func(T, T) bool) bool
 }
 
 var (
@@ -57,4 +58,14 @@ func (q *SliceQueue[T]) Dequeue() (T, error) {
 
 	var empty T
 	return empty, ErrQueueEmpty
+}
+
+// Contains checks if an element exists in the queue based on the given equality function.
+func (q *SliceQueue[T]) Contains(element T, equals func(T, T) bool) bool {
+	for _, e := range *q {
+		if equals(e, element) {
+			return true
+		}
+	}
+	return false
 }
