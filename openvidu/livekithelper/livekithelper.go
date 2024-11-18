@@ -70,12 +70,24 @@ func (o *LivekitHelper) ListActiveRooms() ([]*livekit.Room, error) {
 	return rooms, nil
 }
 
-func (o *LivekitHelper) ListActiveParticipants(roomName livekit.RoomName) ([]*livekit.ParticipantInfo, error) {
-	ctx := context.Background()
-	participants, err := (*o.roomStore).ListParticipants(ctx, roomName)
+func (o *LivekitHelper) ListActiveParticipants() ([]*livekit.ParticipantInfo, error) {
+	rooms, err := o.ListActiveRooms()
 	if err != nil {
 		return nil, err
 	}
+
+	ctx := context.Background()
+	var participants []*livekit.ParticipantInfo
+
+	for _, room := range rooms {
+		roomParticipants, err := (*o.roomStore).ListParticipants(ctx, livekit.RoomName(room.Name))
+		if err != nil {
+			return nil, err
+		}
+
+		participants = append(participants, roomParticipants...)
+	}
+
 	return participants, nil
 }
 
