@@ -342,13 +342,14 @@ func (m *MongoDatabaseClient) FixActiveEntities() {
 		if len(activeEntities.Rooms) > 0 {
 			deletedActiveEntities, newEvents = m.fixActiveRooms(activeEntities.Rooms, newEvents, deletedActiveEntities, lastAlive)
 		}
-
 		if len(activeEntities.Participants) > 0 {
 			deletedActiveEntities, newEvents = m.fixActiveParticipants(activeEntities.Participants, newEvents, deletedActiveEntities, lastAlive)
 		}
-
 		if len(activeEntities.Egresses) > 0 {
 			deletedActiveEntities, newEvents = m.fixActiveEgresses(activeEntities.Egresses, newEvents, deletedActiveEntities, lastAlive)
+		}
+		if len(activeEntities.Ingresses) > 0 {
+			deletedActiveEntities, newEvents = m.fixActiveIngresses(activeEntities.Ingresses, newEvents, deletedActiveEntities, lastAlive)
 		}
 	}
 
@@ -771,6 +772,99 @@ func (m *MongoDatabaseClient) fixActiveEgresses(
 			egressEndedEvent["timestamp"].(map[string]interface{})["nanos"] = lastAlive.Nanos
 
 			newEvents = append(newEvents, egressEndedEvent)
+		}
+	}
+
+	return deletedActiveEntities, newEvents
+}
+
+func (m *MongoDatabaseClient) fixActiveIngresses(
+	activeIngressesDb []string,
+	newEvents, deletedActiveEntities []interface{},
+	lastAlive Timestamp,
+) ([]interface{}, []interface{}) {
+	// Get all active ingresses from LiveKit
+	activeIngresses, err := m.livekitHelper.ListActiveIngresses()
+	if err != nil {
+		logger.Errorw("failed to list active ingresses from LiveKit", err)
+		return deletedActiveEntities, newEvents
+	}
+
+	activeIngressesSet := make(map[string]bool)
+	for _, ingress := range activeIngresses {
+		activeIngressesSet[ingress.State.ResourceId] = true
+	}
+
+	// Filter ingress that are not actually active by checking if they are present in LiveKit
+	for _, ingressResourceId := range activeIngressesDb {
+		if !activeIngressesSet[ingressResourceId] {
+			// Check if "INGRESS_ENDED" or "INGRESS_DELETED" event already exists
+			eventCollection := m.client.Database("openvidu").Collection("events")
+			result := eventCollection.FindOne(
+				context.Background(),
+				bson.D{
+					{Key: "ingress.state.resource_id", Value: ingressResourceId},
+					{Key: "type", Value: bson.D{
+						{Key: "$in", Value: bson.A{
+							livekit.AnalyticsEventType_INGRESS_ENDED.String(),
+							livekit.AnalyticsEventType_INGRESS_DELETED.String(),
+						}},
+					}},
+				},
+				options.FindOne().SetProjection(bson.D{{Key: "ingress.state.resource_id", Value: 1}}),
+			)
+
+			// Check if there was an error different from "no documents found"
+			if result.Err() != nil && result.Err() != mongo.ErrNoDocuments {
+				logger.Errorw("failed to find INGRESS_ENDED event for ingress in MongoDB", result.Err(), "ingress_resource_id", ingressResourceId)
+				continue
+			}
+
+			deletedActiveEntities = append(deletedActiveEntities, bson.D{{Key: "_id", Value: ingressResourceId}})
+
+			// If "INGRESS_ENDED" event already exists, skip
+			if result.Err() == nil {
+				continue
+			}
+
+			// Save "INGRESS_ENDED" fake event to keep consistency
+			// Get info from "INGRESS_STARTED" event
+			var ingressStartedEventMap map[string]interface{}
+			err = eventCollection.FindOne(
+				context.Background(),
+				bson.D{
+					{Key: "ingress.state.resource_id", Value: ingressResourceId},
+					{Key: "type", Value: livekit.AnalyticsEventType_INGRESS_STARTED.String()},
+				},
+				options.FindOne().SetProjection(bson.D{
+					{Key: "ingress_id", Value: 1},
+					{Key: "ingress.state.resource_id", Value: 1},
+					{Key: "ingress.state.started_at", Value: 1},
+				}),
+			).Decode(&ingressStartedEventMap)
+			if err != nil {
+				if err != mongo.ErrNoDocuments {
+					logger.Errorw("failed to find INGRESS_STARTED event for ingress in MongoDB", err, "ingress_resource_id", ingressResourceId)
+					deletedActiveEntities = deletedActiveEntities[:len(deletedActiveEntities)-1]
+				}
+				continue
+			}
+
+			// Fill "INGRESS_ENDED" event with necessary info
+			ingressEndedEvent := ingressStartedEventMap
+			ingressEndedEvent["type"] = livekit.AnalyticsEventType_INGRESS_ENDED.String()
+			ingressEndedEvent["ingress"].(map[string]interface{})["state"].(map[string]interface{})["status"] = "ENDPOINT_INACTIVE"
+			ingressEndedEvent["openvidu_expire_at"] = time.Now().Add(ANALYTICS_CONFIGURATION.Expiration).UTC()
+
+			startedAt := ingressStartedEventMap["ingress"].(map[string]interface{})["started_at"].(int64) / 1000000000
+			if startedAt >= lastAlive.Seconds {
+				ingressEndedEvent["timestamp"].(map[string]interface{})["seconds"] = startedAt + 5
+			} else {
+				ingressEndedEvent["timestamp"].(map[string]interface{})["seconds"] = lastAlive.Seconds
+			}
+			ingressEndedEvent["timestamp"].(map[string]interface{})["nanos"] = lastAlive.Nanos
+
+			newEvents = append(newEvents, ingressEndedEvent)
 		}
 	}
 
