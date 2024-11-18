@@ -106,5 +106,13 @@ func (o *LivekitHelper) ListActiveIngresses() ([]*livekit.IngressInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ingresses, nil
+
+	activeIngresses := make([]*livekit.IngressInfo, 0)
+	for _, ingress := range ingresses {
+		if ingress.State.Status == livekit.IngressState_ENDPOINT_PUBLISHING && ingress.State.ResourceId != "" {
+			activeIngresses = append(activeIngresses, ingress)
+		}
+	}
+
+	return activeIngresses, nil
 }
