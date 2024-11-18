@@ -338,17 +338,19 @@ func (m *MongoDatabaseClient) FixActiveEntities() {
 	activeEntities := m.getActiveEntities()
 	lastAlive := m.getLastTimestampAlive()
 
-	if activeEntities != nil && len(activeEntities.Rooms) > 0 {
-		deletedActiveEntities, newEvents = m.fixActiveRooms(activeEntities.Rooms, newEvents, deletedActiveEntities, lastAlive)
+	if activeEntities != nil {
+		if len(activeEntities.Rooms) > 0 {
+			deletedActiveEntities, newEvents = m.fixActiveRooms(activeEntities.Rooms, newEvents, deletedActiveEntities, lastAlive)
+		}
+
+		if len(activeEntities.Participants) > 0 {
+			deletedActiveEntities, newEvents = m.fixActiveParticipants(activeEntities.Participants, newEvents, deletedActiveEntities, lastAlive)
+		}
+
+		if len(activeEntities.Egresses) > 0 {
+			deletedActiveEntities, newEvents = m.fixActiveEgresses(activeEntities.Egresses, newEvents, deletedActiveEntities, lastAlive)
+		}
 	}
-
-	if activeEntities != nil && len(activeEntities.Participants) > 0 {
-		deletedActiveEntities, newEvents = m.fixActiveParticipants(activeEntities.Participants, newEvents, deletedActiveEntities, lastAlive)
-	}
-
-	// Fix active egress
-
-	// Fix active ingress
 
 	openviduDb := m.client.Database("openvidu")
 	ctx := context.Background()
@@ -656,6 +658,119 @@ func (m *MongoDatabaseClient) fixActiveParticipants(
 			}
 
 			newEvents = append(newEvents, participantLeftEvent)
+		}
+	}
+
+	return deletedActiveEntities, newEvents
+}
+
+func (m *MongoDatabaseClient) fixActiveEgresses(
+	activeEgressesDb []string,
+	newEvents, deletedActiveEntities []interface{},
+	lastAlive Timestamp,
+) ([]interface{}, []interface{}) {
+	// Get all active egresses from LiveKit
+	activeEgresses, err := m.livekitHelper.ListActiveEgresses()
+	if err != nil {
+		logger.Errorw("failed to list active egresses from LiveKit", err)
+		return deletedActiveEntities, newEvents
+	}
+
+	activeEgressesSet := make(map[string]bool)
+	for _, egress := range activeEgresses {
+		activeEgressesSet[egress.EgressId] = true
+	}
+
+	// Filter egresses that are not actually active by checking if they are present in LiveKit
+	for _, egressId := range activeEgressesDb {
+		if !activeEgressesSet[egressId] {
+			// Check if "EGRESS_ENDED" event already exists
+			eventCollection := m.client.Database("openvidu").Collection("events")
+			result := eventCollection.FindOne(
+				context.Background(),
+				bson.D{
+					{Key: "egress_id", Value: egressId},
+					{Key: "type", Value: livekit.AnalyticsEventType_EGRESS_ENDED.String()},
+				},
+				options.FindOne().SetProjection(bson.D{{Key: "egress_id", Value: 1}}),
+			)
+
+			// Check if there was an error different from "no documents found"
+			if result.Err() != nil && result.Err() != mongo.ErrNoDocuments {
+				logger.Errorw("failed to find EGRESS_ENDED event for egress in MongoDB", result.Err(), "egress_id", egressId)
+				continue
+			}
+
+			deletedActiveEntities = append(deletedActiveEntities, bson.D{{Key: "_id", Value: egressId}})
+
+			// If "EGRESS_ENDED" event already exists, skip
+			if result.Err() == nil {
+				continue
+			}
+
+			// Save "EGRESS_ENDED" fake event to keep consistency
+			// Get info from "EGRESS_STARTED" event
+			var egressStartedEventMap map[string]interface{}
+			err = eventCollection.FindOne(
+				context.Background(),
+				bson.D{
+					{Key: "egress_id", Value: egressId},
+					{Key: "type", Value: livekit.AnalyticsEventType_EGRESS_STARTED.String()},
+				},
+				options.FindOne().SetProjection(bson.D{
+					{Key: "egress_id", Value: 1},
+					{Key: "egress.room_id", Value: 1},
+					{Key: "egress.room_name", Value: 1},
+					{Key: "egress.started_at", Value: 1},
+					{Key: "egress.updated_at", Value: 1},
+					{Key: "egress.Request", Value: 1},
+					{Key: "egress.file_results.filename", Value: 1},
+					{Key: "egress.stream_results.url", Value: 1},
+					{Key: "egress.segment_results.playlist_name", Value: 1},
+					{Key: "timestamp.seconds", Value: 1},
+				}),
+			).Decode(&egressStartedEventMap)
+			if err != nil {
+				if err != mongo.ErrNoDocuments {
+					logger.Errorw("failed to find EGRESS_STARTED event for egress in MongoDB", err, "egress_id", egressId)
+					deletedActiveEntities = deletedActiveEntities[:len(deletedActiveEntities)-1]
+				}
+				continue
+			}
+
+			// Fill "EGRESS_ENDED" event with necessary info
+			egressEndedEvent := egressStartedEventMap
+			egressEndedEvent["type"] = livekit.AnalyticsEventType_EGRESS_ENDED.String()
+			egressEndedEvent["egress"].(map[string]interface{})["status"] = "EGRESS_COMPLETE"
+			egressEndedEvent["openvidu_expire_at"] = time.Now().Add(ANALYTICS_CONFIGURATION.Expiration).UTC()
+
+			startedAt, ok := egressStartedEventMap["egress"].(map[string]interface{})["started_at"].(int64)
+			if ok {
+				startedAt = startedAt / 1000000000
+			} else {
+				startedAt, ok = egressStartedEventMap["egress"].(map[string]interface{})["updated_at"].(int64)
+				if ok {
+					startedAt = startedAt / 1000000000
+				} else {
+					startedAt = egressStartedEventMap["timestamp"].(map[string]interface{})["seconds"].(int64)
+				}
+
+				egressEndedEvent["egress"].(map[string]interface{})["started_at"] = startedAt
+			}
+
+			if startedAt >= lastAlive.Seconds {
+				endedAt := startedAt + 5
+				egressEndedEvent["timestamp"].(map[string]interface{})["seconds"] = endedAt
+				egressEndedEvent["egress"].(map[string]interface{})["updated_at"] = endedAt
+				egressEndedEvent["egress"].(map[string]interface{})["ended_at"] = endedAt
+			} else {
+				egressEndedEvent["timestamp"].(map[string]interface{})["seconds"] = lastAlive.Seconds
+				egressEndedEvent["egress"].(map[string]interface{})["updated_at"] = lastAlive.Seconds
+				egressEndedEvent["egress"].(map[string]interface{})["ended_at"] = lastAlive.Seconds
+			}
+			egressEndedEvent["timestamp"].(map[string]interface{})["nanos"] = lastAlive.Nanos
+
+			newEvents = append(newEvents, egressEndedEvent)
 		}
 	}
 
