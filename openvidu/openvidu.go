@@ -24,8 +24,9 @@ import (
 )
 
 func Start(conf *config.Config, server *service.LivekitServer) {
-	livekithelper.Init(server)
 	if conf.OpenVidu.Analytics.Enabled {
+		// Start livekit helper
+		livekithelper.Init(server)
 		// Start analytics
 		err := analytics.InitializeAnalytics(conf, livekithelper.GetInstance())
 		if err != nil {
