@@ -77,7 +77,7 @@ func (o *LivekitHelper) ListActiveParticipants() ([]*livekit.ParticipantInfo, er
 	}
 
 	ctx := context.Background()
-	var participants []*livekit.ParticipantInfo
+	participants := make([]*livekit.ParticipantInfo, 0)
 
 	for _, room := range rooms {
 		roomParticipants, err := (*o.roomStore).ListParticipants(ctx, livekit.RoomName(room.Name))

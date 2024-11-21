@@ -19,6 +19,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"errors"
+	"strconv"
 	"time"
 
 	"github.com/livekit/protocol/livekit"
@@ -98,61 +99,42 @@ func (m *MongoDatabaseClient) sendEventsBatch() {
 		deletedActiveEntities = m.deleteActiveEntityForDestructionEvents(event, deletedActiveEntities)
 	}
 
+	openviduDb := m.client.Database("openvidu")
+	eventCollection := openviduDb.Collection("events")
+	activeEntityCollection := openviduDb.Collection("active_entities")
 	ctx := context.Background()
-	session, er := m.client.StartSession()
-	if er != nil {
-		logger.Errorw("failed to start session in MongoDB", er)
-		return
-	}
-	defer session.EndSession(ctx)
 
-	callback := func(sessCtx mongo.SessionContext) (interface{}, error) {
-		openviduDb := m.client.Database("openvidu")
-		eventCollection := openviduDb.Collection("events")
-		activeEntityCollection := openviduDb.Collection("active_entities")
+	logger.Debugw("inserting events into MongoDB...")
 
-		logger.Debugw("inserting events into MongoDB...")
-
-		result, err := eventCollection.InsertMany(sessCtx, parsedEvents, options.InsertMany().SetOrdered(false))
-		if err != nil {
-			logger.Errorw("failed to insert events into MongoDB", err)
-			logger.Warnw("restoring events for next batch", nil)
-			handleInsertManyError(err, m.owner.eventsQueue, events)
-			return nil, err
-		} else {
-			logger.Debugw("inserted events", "#", len(result.InsertedIDs))
-		}
-
-		if len(newActiveEntities) > 0 {
-			logger.Debugw("inserting active entities into MongoDB...")
-
-			result, err := activeEntityCollection.InsertMany(sessCtx, newActiveEntities, options.InsertMany().SetOrdered(false))
-			if err != nil {
-				logger.Errorw("failed to insert active entities in MongoDB", err)
-				return nil, err
-			} else {
-				logger.Debugw("inserted active entities", "#", len(result.InsertedIDs))
-			}
-		}
-
-		if len(deletedActiveEntities) > 0 {
-			logger.Debugw("deleting active entities from MongoDB...")
-
-			result, err := activeEntityCollection.DeleteMany(sessCtx, bson.D{{Key: "$or", Value: deletedActiveEntities}})
-			if err != nil {
-				logger.Errorw("failed to delete active entities from MongoDB", err)
-				return nil, err
-			} else {
-				logger.Debugw("deleted active entities", "#", result.DeletedCount)
-			}
-		}
-
-		return nil, nil
-	}
-
-	_, err := session.WithTransaction(ctx, callback)
+	result, err := eventCollection.InsertMany(ctx, parsedEvents, options.InsertMany().SetOrdered(false))
 	if err != nil {
-		logger.Errorw("failed to execute transaction in MongoDB", err)
+		logger.Errorw("failed to insert events into MongoDB", err)
+		logger.Warnw("restoring events for next batch", nil)
+		handleInsertManyError(err, m.owner.eventsQueue, events)
+	} else {
+		logger.Debugw("inserted events", "#", len(result.InsertedIDs))
+	}
+
+	if len(newActiveEntities) > 0 {
+		logger.Debugw("inserting active entities into MongoDB...")
+
+		result, err := activeEntityCollection.InsertMany(ctx, newActiveEntities, options.InsertMany().SetOrdered(false))
+		if err != nil {
+			logger.Errorw("failed to insert active entities in MongoDB", err)
+		} else {
+			logger.Debugw("inserted active entities", "#", len(result.InsertedIDs))
+		}
+	}
+
+	if len(deletedActiveEntities) > 0 {
+		logger.Debugw("deleting active entities from MongoDB...")
+
+		result, err := activeEntityCollection.DeleteMany(ctx, bson.D{{Key: "$or", Value: deletedActiveEntities}})
+		if err != nil {
+			logger.Errorw("failed to delete active entities from MongoDB", err)
+		} else {
+			logger.Debugw("deleted active entities", "#", result.DeletedCount)
+		}
 	}
 }
 
@@ -355,48 +337,31 @@ func (m *MongoDatabaseClient) FixActiveEntities() {
 
 	openviduDb := m.client.Database("openvidu")
 	ctx := context.Background()
-	session, err := m.client.StartSession()
-	if err != nil {
-		logger.Errorw("failed to start session in MongoDB", err)
-		return
-	}
-	defer session.EndSession(ctx)
 
-	callback := func(sessCtx mongo.SessionContext) (interface{}, error) {
-		// Insert all necessary close events in MongoDB
-		if len(newEvents) > 0 {
-			logger.Debugw("inserting events into MongoDB...")
+	// Insert all necessary close events in MongoDB
+	if len(newEvents) > 0 {
+		logger.Debugw("inserting events into MongoDB...")
 
-			eventCollection := openviduDb.Collection("events")
-			result, err := eventCollection.InsertMany(sessCtx, newEvents, options.InsertMany().SetOrdered(false))
-			if err != nil {
-				logger.Errorw("failed to insert events into MongoDB", err)
-				return nil, err
-			} else {
-				logger.Debugw("inserted events", "#", len(result.InsertedIDs))
-			}
+		eventCollection := openviduDb.Collection("events")
+		result, err := eventCollection.InsertMany(ctx, newEvents, options.InsertMany().SetOrdered(false))
+		if err != nil {
+			logger.Errorw("failed to insert events into MongoDB", err)
+		} else {
+			logger.Debugw("inserted events", "#", len(result.InsertedIDs))
 		}
-
-		// Delete all active entities that are not actually active from MongoDB
-		if len(deletedActiveEntities) > 0 {
-			logger.Debugw("deleting active entities from MongoDB...")
-
-			activeEntityCollection := openviduDb.Collection("active_entities")
-			result, err := activeEntityCollection.DeleteMany(sessCtx, bson.D{{Key: "$or", Value: deletedActiveEntities}})
-			if err != nil {
-				logger.Errorw("failed to delete inactive entities from MongoDB", err)
-				return nil, err
-			} else {
-				logger.Debugw("deleted active entities", "#", result.DeletedCount)
-			}
-		}
-
-		return nil, nil
 	}
 
-	_, err = session.WithTransaction(ctx, callback)
-	if err != nil {
-		logger.Errorw("failed to execute transaction in MongoDB", err)
+	// Delete all active entities that are not actually active from MongoDB
+	if len(deletedActiveEntities) > 0 {
+		logger.Debugw("deleting active entities from MongoDB...")
+
+		activeEntityCollection := openviduDb.Collection("active_entities")
+		result, err := activeEntityCollection.DeleteMany(ctx, bson.D{{Key: "$or", Value: deletedActiveEntities}})
+		if err != nil {
+			logger.Errorw("failed to delete inactive entities from MongoDB", err)
+		} else {
+			logger.Debugw("deleted active entities", "#", result.DeletedCount)
+		}
 	}
 
 	m.updateLastTimestampAlive()
@@ -422,7 +387,8 @@ func (m *MongoDatabaseClient) getActiveEntities() *ActiveEntities {
 
 	activeEntities := &ActiveEntities{}
 	for _, entity := range activeEntitiesDb {
-		entityType := entity["entity"].(EntityType)
+		entityTypeRaw := entity["entity"].(string)
+		entityType := EntityType(entityTypeRaw)
 		id := entity["_id"].(string)
 
 		switch entityType {
@@ -542,6 +508,7 @@ func (m *MongoDatabaseClient) fixActiveRooms(
 					{Key: "type", Value: livekit.AnalyticsEventType_ROOM_CREATED.String()},
 				},
 				options.FindOne().SetProjection(bson.D{
+					{Key: "_id", Value: 0},
 					{Key: "room.sid", Value: 1},
 					{Key: "room.name", Value: 1},
 					{Key: "room.creation_time", Value: 1},
@@ -561,12 +528,12 @@ func (m *MongoDatabaseClient) fixActiveRooms(
 			roomEndedEvent["room_id"] = roomId
 			roomEndedEvent["openvidu_expire_at"] = time.Now().Add(ANALYTICS_CONFIGURATION.Expiration).UTC()
 
-			creationTime := roomCreatedEventMap["room"].(map[string]interface{})["creation_time"].(int64)
+			creationTimeFloat := roomCreatedEventMap["room"].(map[string]interface{})["creation_time"].(float64)
+			creationTime, _ := strconv.ParseInt(strconv.FormatFloat(creationTimeFloat, 'f', -1, 64), 10, 64)
 			if creationTime >= lastAlive.Seconds {
-				roomEndedEvent["timestamp"].(map[string]interface{})["seconds"] = creationTime + 20
-			} else {
-				roomEndedEvent["timestamp"].(map[string]interface{})["seconds"] = lastAlive.Seconds
+				lastAlive.Seconds = creationTime + 20
 			}
+			roomEndedEvent["timestamp"] = lastAlive
 
 			newEvents = append(newEvents, roomEndedEvent)
 		}
@@ -629,6 +596,7 @@ func (m *MongoDatabaseClient) fixActiveParticipants(
 					{Key: "type", Value: livekit.AnalyticsEventType_PARTICIPANT_ACTIVE.String()},
 				},
 				options.FindOne().SetProjection(bson.D{
+					{Key: "_id", Value: 0},
 					{Key: "room_id", Value: 1},
 					{Key: "room.sid", Value: 1},
 					{Key: "participant_id", Value: 1},
@@ -651,12 +619,12 @@ func (m *MongoDatabaseClient) fixActiveParticipants(
 			participantLeftEvent["type"] = livekit.AnalyticsEventType_PARTICIPANT_LEFT.String()
 			participantLeftEvent["openvidu_expire_at"] = time.Now().Add(ANALYTICS_CONFIGURATION.Expiration).UTC()
 
-			creationTime := participantActiveEventMap["participant"].(map[string]interface{})["joined_at"].(int64)
-			if creationTime >= lastAlive.Seconds {
-				participantLeftEvent["timestamp"].(map[string]interface{})["seconds"] = creationTime + 5
-			} else {
-				participantLeftEvent["timestamp"].(map[string]interface{})["seconds"] = lastAlive.Seconds
+			joinedAtFloat := participantActiveEventMap["participant"].(map[string]interface{})["joined_at"].(float64)
+			joinedAt, _ := strconv.ParseInt(strconv.FormatFloat(joinedAtFloat, 'f', -1, 64), 10, 64)
+			if joinedAt >= lastAlive.Seconds {
+				lastAlive.Seconds = joinedAt + 5
 			}
+			participantLeftEvent["timestamp"] = lastAlive
 
 			newEvents = append(newEvents, participantLeftEvent)
 		}
@@ -719,6 +687,7 @@ func (m *MongoDatabaseClient) fixActiveEgresses(
 					{Key: "type", Value: livekit.AnalyticsEventType_EGRESS_STARTED.String()},
 				},
 				options.FindOne().SetProjection(bson.D{
+					{Key: "_id", Value: 0},
 					{Key: "egress_id", Value: 1},
 					{Key: "egress.room_id", Value: 1},
 					{Key: "egress.room_name", Value: 1},
@@ -745,31 +714,24 @@ func (m *MongoDatabaseClient) fixActiveEgresses(
 			egressEndedEvent["egress"].(map[string]interface{})["status"] = "EGRESS_COMPLETE"
 			egressEndedEvent["openvidu_expire_at"] = time.Now().Add(ANALYTICS_CONFIGURATION.Expiration).UTC()
 
-			startedAt, ok := egressStartedEventMap["egress"].(map[string]interface{})["started_at"].(int64)
-			if ok {
-				startedAt = startedAt / 1000000000
-			} else {
-				startedAt, ok = egressStartedEventMap["egress"].(map[string]interface{})["updated_at"].(int64)
-				if ok {
-					startedAt = startedAt / 1000000000
-				} else {
-					startedAt = egressStartedEventMap["timestamp"].(map[string]interface{})["seconds"].(int64)
+			float, ok := egressStartedEventMap["egress"].(map[string]interface{})["started_at"].(float64)
+			if !ok {
+				float, ok = egressStartedEventMap["egress"].(map[string]interface{})["updated_at"].(float64)
+				if !ok {
+					float = egressStartedEventMap["timestamp"].(map[string]interface{})["seconds"].(float64) * 1000000000
 				}
-
-				egressEndedEvent["egress"].(map[string]interface{})["started_at"] = startedAt
 			}
+			startedAt, _ := strconv.ParseInt(strconv.FormatFloat(float, 'f', -1, 64), 10, 64)
+			egressEndedEvent["egress"].(map[string]interface{})["started_at"] = startedAt
+			startedAt = startedAt / 1000000000
 
 			if startedAt >= lastAlive.Seconds {
-				endedAt := startedAt + 5
-				egressEndedEvent["timestamp"].(map[string]interface{})["seconds"] = endedAt
-				egressEndedEvent["egress"].(map[string]interface{})["updated_at"] = endedAt
-				egressEndedEvent["egress"].(map[string]interface{})["ended_at"] = endedAt
-			} else {
-				egressEndedEvent["timestamp"].(map[string]interface{})["seconds"] = lastAlive.Seconds
-				egressEndedEvent["egress"].(map[string]interface{})["updated_at"] = lastAlive.Seconds
-				egressEndedEvent["egress"].(map[string]interface{})["ended_at"] = lastAlive.Seconds
+				lastAlive.Seconds = startedAt + 5
 			}
-			egressEndedEvent["timestamp"].(map[string]interface{})["nanos"] = lastAlive.Nanos
+			egressEndedEvent["timestamp"] = lastAlive
+			timestampInNanos := lastAlive.Seconds*1000000000 + int64(lastAlive.Nanos)
+			egressEndedEvent["egress"].(map[string]interface{})["updated_at"] = timestampInNanos
+			egressEndedEvent["egress"].(map[string]interface{})["ended_at"] = timestampInNanos
 
 			newEvents = append(newEvents, egressEndedEvent)
 		}
@@ -837,6 +799,7 @@ func (m *MongoDatabaseClient) fixActiveIngresses(
 					{Key: "type", Value: livekit.AnalyticsEventType_INGRESS_STARTED.String()},
 				},
 				options.FindOne().SetProjection(bson.D{
+					{Key: "_id", Value: 0},
 					{Key: "ingress_id", Value: 1},
 					{Key: "ingress.state.resource_id", Value: 1},
 					{Key: "ingress.state.started_at", Value: 1},
@@ -856,13 +819,13 @@ func (m *MongoDatabaseClient) fixActiveIngresses(
 			ingressEndedEvent["ingress"].(map[string]interface{})["state"].(map[string]interface{})["status"] = "ENDPOINT_INACTIVE"
 			ingressEndedEvent["openvidu_expire_at"] = time.Now().Add(ANALYTICS_CONFIGURATION.Expiration).UTC()
 
-			startedAt := ingressStartedEventMap["ingress"].(map[string]interface{})["started_at"].(int64) / 1000000000
+			startedAtFloat := ingressStartedEventMap["ingress"].(map[string]interface{})["state"].(map[string]interface{})["started_at"].(float64)
+			startedAt, _ := strconv.ParseInt(strconv.FormatFloat(startedAtFloat, 'f', -1, 64), 10, 64)
+			startedAt = startedAt / 1000000000
 			if startedAt >= lastAlive.Seconds {
-				ingressEndedEvent["timestamp"].(map[string]interface{})["seconds"] = startedAt + 5
-			} else {
-				ingressEndedEvent["timestamp"].(map[string]interface{})["seconds"] = lastAlive.Seconds
+				lastAlive.Seconds = startedAt + 5
 			}
-			ingressEndedEvent["timestamp"].(map[string]interface{})["nanos"] = lastAlive.Nanos
+			ingressEndedEvent["timestamp"] = lastAlive
 
 			newEvents = append(newEvents, ingressEndedEvent)
 		}
@@ -885,14 +848,18 @@ func (m *MongoDatabaseClient) getLastTimestampAlive() Timestamp {
 
 func (m *MongoDatabaseClient) updateLastTimestampAlive() {
 	lastAliveCollection := m.client.Database("openvidu").Collection("last_alive")
+	lastActive := LastAlive{
+		ID:        "server",
+		LastAlive: getCurrentTimestamp(),
+	}
 
 	_, err := lastAliveCollection.UpdateOne(
 		context.Background(),
 		bson.D{{Key: "_id", Value: "server"}},
-		LastAlive{
-			ID:        "server",
-			LastAlive: getCurrentTimestamp(),
-		},
+		bson.D{{Key: "$set", Value: bson.D{
+			{Key: "_id", Value: lastActive.ID},
+			{Key: "last_alive", Value: lastActive.LastAlive}},
+		}},
 		options.Update().SetUpsert(true),
 	)
 	if err != nil {
