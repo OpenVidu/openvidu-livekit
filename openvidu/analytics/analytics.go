@@ -35,6 +35,8 @@ import (
 	"github.com/openvidu/openvidu-livekit/openvidu/queue"
 )
 
+const dbLockName = "analytics-db-operations-lock"
+
 var ANALYTICS_CONFIGURATION *openviduconfig.AnalyticsConfig
 var ANALYTICS_SENDERS []*AnalyticsSender
 var redisLocker *redislock.Client = nil
@@ -133,10 +135,28 @@ func Start() {
 
 func startAnalyticsRoutine() {
 	for {
-		time.Sleep(ANALYTICS_CONFIGURATION.Interval)
-		mutex.Lock()
-		sendBatch()
-		mutex.Unlock()
+		func() {
+			time.Sleep(ANALYTICS_CONFIGURATION.Interval)
+
+			// If Redis is configured, use Redis Locker instead of mutex
+			if redisLocker != nil {
+				context := context.Background()
+				backoff := redislock.LinearBackoff(1 * time.Second)
+				lock, err := redisLocker.Obtain(context, dbLockName, 2*time.Second, &redislock.Options{
+					RetryStrategy: backoff,
+				})
+				if err != nil {
+					return
+				}
+
+				defer lock.Release(context)
+			} else {
+				mutex.Lock()
+				defer mutex.Unlock()
+			}
+
+			sendBatch()
+		}()
 	}
 }
 
@@ -151,7 +171,7 @@ func startActiveEntitiesFixer() {
 		func() {
 			if redisLocker != nil {
 				context := context.Background()
-				backoff := redislock.LinearBackoff(500 * time.Millisecond)
+				backoff := redislock.LinearBackoff(10 * time.Second)
 
 				lock, err := redisLocker.Obtain(context, "active-entities-lock", 2*time.Minute, &redislock.Options{
 					RetryStrategy: backoff,
@@ -163,9 +183,31 @@ func startActiveEntitiesFixer() {
 				defer lock.Release(context)
 			}
 
-			mutex.Lock()
+			// If Redis is configured, use Redis Locker instead of mutex
+			var redisLock *redislock.Lock
+			context := context.Background()
+			if redisLocker != nil {
+				backoff := redislock.LinearBackoff(1 * time.Second)
+
+				var err error
+				redisLock, err = redisLocker.Obtain(context, dbLockName, 2*time.Second, &redislock.Options{
+					RetryStrategy: backoff,
+				})
+				if err != nil {
+					return
+				}
+			} else {
+				mutex.Lock()
+			}
+
 			fixActiveEntities()
-			mutex.Unlock()
+
+			if redisLocker != nil {
+				redisLock.Release(context)
+			} else {
+				mutex.Unlock()
+			}
+
 			time.Sleep(time.Minute)
 		}()
 	}
