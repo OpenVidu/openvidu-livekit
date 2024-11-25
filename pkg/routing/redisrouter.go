@@ -32,6 +32,10 @@ import (
 
 	"github.com/livekit/livekit-server/pkg/routing/selector"
 	"github.com/livekit/livekit-server/pkg/telemetry/prometheus"
+
+	// BEGIN OPENVIDU BLOCK
+	"github.com/openvidu/openvidu-livekit/openvidu/customrouting"
+	// END OPENVIDU BLOCK
 )
 
 const (
@@ -94,20 +98,89 @@ func (r *RedisRouter) UnregisterNode() error {
 	return r.rc.HDel(context.Background(), NodesKey, r.currentNode.Id).Err()
 }
 
-func (r *RedisRouter) RemoveDeadNodes() error {
+// BEGIN OPENVIDU BLOCK
+func (r *RedisRouter) RemoveDeadNodes(customCleanup CustomCleanup) error {
+
+	logger.Debugw("redis cleanup: removing dead nodes...")
+
 	nodes, err := r.ListNodes()
 	if err != nil {
 		return err
 	}
+
+	logger.Debugw("redis cleanup: listed nodes", "nodes", nodes)
+
 	for _, n := range nodes {
 		if !selector.IsAvailable(n) {
-			if err := r.rc.HDel(context.Background(), NodesKey, n.Id).Err(); err != nil {
-				return err
+
+			logger.Infow("redis cleanup: dead node detected", "node", n.Id)
+
+			// 1. List all rooms of the dead node
+			roomNames, err := customrouting.ListRoomsForNode(context.Background(), r.rc, n.Id)
+			if err != nil {
+				logger.Errorw("redis cleanup: failed to list rooms for node", err, "node", n.Id)
+				continue
 			}
+			logger.Infow("redis cleanup: rooms for node", "node", n.Id, "rooms", roomNames)
+
+			// 2. Define the function to unlock the room after exiting the cleanup loop
+			unlockRoom := func(roomName string, token string) {
+				if err := customCleanup.UnlockRoom(context.Background(), livekit.RoomName(roomName), token); err != nil {
+					logger.Errorw("redis cleanup: failed to unlock room", err, "room", roomName)
+				} else {
+					logger.Infow("redis cleanup: room unlocked", "room", roomName)
+				}
+			}
+
+			for _, roomName := range roomNames {
+
+				// 3. Lock each room to avoid other process re-creating it while it's being cleaned up
+				token, err := customCleanup.LockRoom(context.Background(), livekit.RoomName(roomName), 10*time.Second)
+				if err != nil {
+					logger.Errorw("redis cleanup: failed to lock room", err, "room", roomName)
+				} else {
+					logger.Infow("redis cleanup: room locked", "room", roomName)
+
+					// 4. Delete the collection of rooms for the node
+					customrouting.UnregisterRoomFromNode(r.ctx, r.rc, string(roomName), n.Id)
+					logger.Infow("redis cleanup: room unregistered from node", "room", roomName, "node", n.Id)
+
+					// 5. Check if the room has not been re-created in other node
+					newNode, err := r.GetNodeForRoom(context.Background(), livekit.RoomName(roomName))
+					if err != nil {
+						logger.Errorw("redis cleanup: failed to get node for room", err, "room", roomName)
+						unlockRoom(roomName, token)
+						continue
+					}
+					if newNode.Id != n.Id {
+						logger.Infow("redis cleanup: room already recreated in another node", "room", roomName, "newNode", newNode.Id)
+						unlockRoom(roomName, token)
+						continue
+					}
+
+					// 6. Call RoomManager#deleteRoom to delete every entity related to the room from Redis
+					if err := customCleanup.PublicDeleteRoom(context.Background(), livekit.RoomName(roomName)); err != nil {
+						logger.Errorw("redis cleanup: failed to delete room", err, "room", roomName)
+					} else {
+						logger.Infow("redis cleanup: room deleted", "room", roomName)
+					}
+					unlockRoom(roomName, token)
+				}
+			}
+
+			// 7. Finally clean the node from the livekit original collection
+			if err := r.rc.HDel(context.Background(), NodesKey, n.Id).Err(); err != nil {
+				logger.Errorw("redis cleanup: failed to delete node", err, "node", n.Id)
+				continue
+			}
+		} else {
+			logger.Debugw("redis cleanup: node is alive", "node", n.Id)
 		}
 	}
 	return nil
 }
+
+// END OPENVIDU BLOCK
 
 // GetNodeForRoom finds the node where the room is hosted at
 func (r *RedisRouter) GetNodeForRoom(_ context.Context, roomName livekit.RoomName) (*livekit.Node, error) {
@@ -122,10 +195,23 @@ func (r *RedisRouter) GetNodeForRoom(_ context.Context, roomName livekit.RoomNam
 }
 
 func (r *RedisRouter) SetNodeForRoom(_ context.Context, roomName livekit.RoomName, nodeID livekit.NodeID) error {
+
+	// BEGIN OPENVIDU BLOCK
+	customrouting.RegisterRoomInNode(r.ctx, r.rc, string(roomName), string(nodeID))
+	// END OPENVIDU BLOCK
+
 	return r.rc.HSet(r.ctx, NodeRoomKey, string(roomName), string(nodeID)).Err()
 }
 
 func (r *RedisRouter) ClearRoomState(_ context.Context, roomName livekit.RoomName) error {
+
+	// BEGIN OPENVIDU BLOCK
+	nodeID, _ := r.rc.HGet(context.Background(), NodeRoomKey, string(roomName)).Result()
+	if nodeID != "" {
+		customrouting.UnregisterRoomFromNode(context.Background(), r.rc, string(roomName), nodeID)
+	}
+	// END OPENVIDU BLOCK
+
 	if err := r.rc.HDel(context.Background(), NodeRoomKey, string(roomName)).Err(); err != nil {
 		return errors.Wrap(err, "could not clear room state")
 	}

@@ -163,6 +163,21 @@ func (r *RoomManager) GetRoom(_ context.Context, roomName livekit.RoomName) *rtc
 	return r.rooms[roomName]
 }
 
+// BEGIN OPENVIDU BLOCK
+func (r *RoomManager) LockRoom(ctx context.Context, roomName livekit.RoomName, timeout time.Duration) (string, error) {
+	return r.roomStore.LockRoom(ctx, roomName, timeout)
+}
+
+func (r *RoomManager) UnlockRoom(ctx context.Context, roomName livekit.RoomName, token string) error {
+	return r.roomStore.UnlockRoom(ctx, roomName, token)
+}
+
+func (r *RoomManager) PublicDeleteRoom(ctx context.Context, roomName livekit.RoomName) error {
+	return r.deleteRoom(ctx, roomName)
+}
+
+// END OPENVIDU BLOCK
+
 // deleteRoom completely deletes all room information, including active sessions, room store, and routing info
 func (r *RoomManager) deleteRoom(ctx context.Context, roomName livekit.RoomName) error {
 	logger.Infow("deleting room state", "room", roomName)

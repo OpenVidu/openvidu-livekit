@@ -78,9 +78,12 @@ func (r *LocalRouter) UnregisterNode() error {
 	return nil
 }
 
-func (r *LocalRouter) RemoveDeadNodes() error {
+// BEGIN OPENVIDU BLOCK
+func (r *LocalRouter) RemoveDeadNodes(_ CustomCleanup) error {
 	return nil
 }
+
+// END OPENVIDU BLOCK
 
 func (r *LocalRouter) GetNode(nodeID livekit.NodeID) (*livekit.Node, error) {
 	if nodeID == livekit.NodeID(r.currentNode.Id) {

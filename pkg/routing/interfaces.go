@@ -17,6 +17,7 @@ package routing
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/protobuf/proto"
@@ -73,7 +74,9 @@ type Router interface {
 
 	RegisterNode() error
 	UnregisterNode() error
-	RemoveDeadNodes() error
+	// BEGIN OPENVIDU BLOCK
+	RemoveDeadNodes(customCleanup CustomCleanup) error
+	// END OPENVIDU BLOCK
 
 	ListNodes() ([]*livekit.Node, error)
 
@@ -87,6 +90,15 @@ type Router interface {
 	Drain()
 	Stop()
 }
+
+// BEGIN OPENVIDU BLOCK
+type CustomCleanup interface {
+	LockRoom(ctx context.Context, roomName livekit.RoomName, timeout time.Duration) (string, error)
+	UnlockRoom(ctx context.Context, roomName livekit.RoomName, token string) error
+	PublicDeleteRoom(ctx context.Context, roomName livekit.RoomName) error
+}
+
+// END OPENVIDU BLOCK
 
 type StartParticipantSignalResults struct {
 	ConnectionID        livekit.ConnectionID

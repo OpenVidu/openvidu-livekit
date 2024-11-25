@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/openvidu/openvidu-livekit/pkg/routing/selector"
 	"github.com/pion/turn/v2"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/cors"
@@ -164,9 +165,25 @@ func NewLivekitServer(conf *config.Config,
 	if err = roomManager.CleanupRooms(); err != nil {
 		return
 	}
-	if err = router.RemoveDeadNodes(); err != nil {
-		return
-	}
+	// BEGIN OPENVIDU BLOCK
+	// Clean dead nodes after the AvailableSeconds time has elapsed
+	// This ensures that a restarted node will always autoclean itself
+	time.AfterFunc(time.Second*(selector.AvailableSeconds+1), func() {
+		if err = router.RemoveDeadNodes(roomManager); err != nil {
+			logger.Errorw("could not remove dead nodes at first attempt", err)
+		}
+	})
+	// Gouroutine that every 3 minutes cleans up the Redis database from dead nodes and all associated entities
+	ticker := time.NewTicker(time.Minute * 3)
+	go func(ticker *time.Ticker) {
+		for range ticker.C {
+			logger.Debugw("cleaning up dead nodes")
+			if err := router.RemoveDeadNodes(roomManager); err != nil {
+				logger.Errorw("could not remove dead nodes", err)
+			}
+		}
+	}(ticker)
+	// END OPENVIDU BLOCK
 
 	return
 }

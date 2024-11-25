@@ -530,7 +530,9 @@ func (fake *FakeRouter) RegisterNodeReturnsOnCall(i int, result1 error) {
 	}{result1}
 }
 
-func (fake *FakeRouter) RemoveDeadNodes() error {
+// BEGIN OPENVIDU BLOCK
+func (fake *FakeRouter) RemoveDeadNodes(customCleanup routing.CustomCleanup) error {
+// END OPENVIDU BLOCK
 	fake.removeDeadNodesMutex.Lock()
 	ret, specificReturn := fake.removeDeadNodesReturnsOnCall[len(fake.removeDeadNodesArgsForCall)]
 	fake.removeDeadNodesArgsForCall = append(fake.removeDeadNodesArgsForCall, struct {
