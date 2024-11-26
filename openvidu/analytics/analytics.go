@@ -15,14 +15,17 @@
 package analytics
 
 import (
+	"context"
 	"encoding/json"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/bsm/redislock"
 	"github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
+	redisLiveKit "github.com/livekit/protocol/redis"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -32,8 +35,38 @@ import (
 	"github.com/openvidu/openvidu-livekit/openvidu/queue"
 )
 
+const dbLockName = "analytics-db-operations-lock"
+
 var ANALYTICS_CONFIGURATION *openviduconfig.AnalyticsConfig
 var ANALYTICS_SENDERS []*AnalyticsSender
+var redisLocker *redislock.Client = nil
+var mutex sync.Mutex
+
+type EntityType string
+
+const (
+	RoomEntity        EntityType = "ROOM"
+	ParticipantEntity EntityType = "PARTICIPANT"
+	EgressEntity      EntityType = "EGRESS"
+	IngressEntity     EntityType = "INGRESS"
+)
+
+type ActiveEntities struct {
+	Rooms        []string
+	Participants []string
+	Egresses     []string
+	Ingresses    []string
+}
+
+type LastAlive struct {
+	ID        string    `bson:"_id"`
+	LastAlive Timestamp `bson:"last_alive"`
+}
+
+type Timestamp struct {
+	Seconds int64 `bson:"seconds"`
+	Nanos   int32 `bson:"nanos"`
+}
 
 type AnalyticsSender struct {
 	eventsQueue    queue.Queue[*livekit.AnalyticsEvent]
@@ -49,6 +82,7 @@ type BaseDatabaseClient struct {
 type DatabaseClient interface {
 	InitializeDatabase() error
 	SendBatch()
+	FixActiveEntities()
 }
 
 func InitializeAnalytics(configuration *config.Config, livekithelper livekithelperinterface.LivekitHelper) error {
@@ -57,23 +91,35 @@ func InitializeAnalytics(configuration *config.Config, livekithelper livekithelp
 	if err != nil {
 		return err
 	}
+
 	err = mongoDatabaseClient.InitializeDatabase()
 	if err != nil {
 		return err
 	}
+
 	ANALYTICS_CONFIGURATION = &configuration.OpenVidu.Analytics
 	ANALYTICS_SENDERS = []*AnalyticsSender{mongoDatabaseClient.owner}
 
-	// // To also store events and stats in Redis (given that it has module RedisJSON):
-	//
+	if configuration.Redis.IsConfigured() {
+		rc, err := redisLiveKit.GetRedisClient(&configuration.Redis)
+		if err != nil {
+			return err
+		}
+
+		redisLocker = redislock.New(rc)
+	}
+
+	// To also store events and stats in Redis (given that it has module RedisJSON):
 	// redisDatabaseClient, err := NewRedisDatabaseClient(&configuration.OpenVidu.Analytics, &configuration.Redis, livekithelper)
 	// if err != nil {
 	// 	return err
 	// }
+	//
 	// err = redisDatabaseClient.InitializeDatabase()
 	// if err != nil {
 	// 	return err
 	// }
+	//
 	// ANALYTICS_SENDERS = append(ANALYTICS_SENDERS, redisDatabaseClient.owner)
 
 	return nil
@@ -82,21 +128,95 @@ func InitializeAnalytics(configuration *config.Config, livekithelper livekithelp
 // Blocking method. Launch in goroutine
 func Start() {
 	var wg sync.WaitGroup
-	wg.Add(1)
+	wg.Add(2)
 	go startAnalyticsRoutine()
+	go startActiveEntitiesFixer()
 	wg.Wait()
 }
 
 func startAnalyticsRoutine() {
 	for {
-		time.Sleep(ANALYTICS_CONFIGURATION.Interval)
-		sendBatch()
+		func() {
+			time.Sleep(ANALYTICS_CONFIGURATION.Interval)
+
+			// If Redis is configured, use Redis Locker instead of mutex
+			if redisLocker != nil {
+				context := context.Background()
+				backoff := redislock.LinearBackoff(1 * time.Second)
+				lock, err := redisLocker.Obtain(context, dbLockName, 2*time.Second, &redislock.Options{
+					RetryStrategy: backoff,
+				})
+				if err != nil {
+					return
+				}
+
+				defer lock.Release(context)
+			} else {
+				mutex.Lock()
+				defer mutex.Unlock()
+			}
+
+			sendBatch()
+		}()
 	}
 }
 
 func sendBatch() {
 	for _, sender := range ANALYTICS_SENDERS {
 		sender.databaseClient.SendBatch()
+	}
+}
+
+func startActiveEntitiesFixer() {
+	for {
+		func() {
+			if redisLocker != nil {
+				context := context.Background()
+				backoff := redislock.LinearBackoff(10 * time.Second)
+
+				lock, err := redisLocker.Obtain(context, "active-entities-lock", 2*time.Minute, &redislock.Options{
+					RetryStrategy: backoff,
+				})
+				if err != nil {
+					return
+				}
+
+				defer lock.Release(context)
+			}
+
+			// If Redis is configured, use Redis Locker instead of mutex
+			var redisLock *redislock.Lock
+			context := context.Background()
+			if redisLocker != nil {
+				backoff := redislock.LinearBackoff(1 * time.Second)
+
+				var err error
+				redisLock, err = redisLocker.Obtain(context, dbLockName, 2*time.Second, &redislock.Options{
+					RetryStrategy: backoff,
+				})
+				if err != nil {
+					return
+				}
+			} else {
+				mutex.Lock()
+			}
+
+			fixActiveEntities()
+
+			if redisLocker != nil {
+				redisLock.Release(context)
+			} else {
+				mutex.Unlock()
+			}
+
+			time.Sleep(time.Minute)
+		}()
+	}
+}
+
+func fixActiveEntities() {
+	for _, sender := range ANALYTICS_SENDERS {
+		sender.databaseClient.FixActiveEntities()
 	}
 }
 
@@ -190,6 +310,14 @@ func getTimestampFromStruct(timestamp *timestamppb.Timestamp) string {
 		timestampKey += strconv.FormatInt(int64(timestamp.Nanos), 10)
 	}
 	return timestampKey
+}
+
+func getCurrentTimestamp() Timestamp {
+	now := time.Now()
+	return Timestamp{
+		Seconds: now.Unix(),
+		Nanos:   int32(now.Nanosecond()),
+	}
 }
 
 func parseEvent(eventMap map[string]interface{}, event *livekit.AnalyticsEvent) {

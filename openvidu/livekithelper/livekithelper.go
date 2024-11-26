@@ -70,12 +70,24 @@ func (o *LivekitHelper) ListActiveRooms() ([]*livekit.Room, error) {
 	return rooms, nil
 }
 
-func (o *LivekitHelper) ListActiveParticipants(roomName livekit.RoomName) ([]*livekit.ParticipantInfo, error) {
-	ctx := context.Background()
-	participants, err := (*o.roomStore).ListParticipants(ctx, roomName)
+func (o *LivekitHelper) ListActiveParticipants() ([]*livekit.ParticipantInfo, error) {
+	rooms, err := o.ListActiveRooms()
 	if err != nil {
 		return nil, err
 	}
+
+	ctx := context.Background()
+	participants := make([]*livekit.ParticipantInfo, 0)
+
+	for _, room := range rooms {
+		roomParticipants, err := (*o.roomStore).ListParticipants(ctx, livekit.RoomName(room.Name))
+		if err != nil {
+			return nil, err
+		}
+
+		participants = append(participants, roomParticipants...)
+	}
+
 	return participants, nil
 }
 
@@ -94,5 +106,13 @@ func (o *LivekitHelper) ListActiveIngresses() ([]*livekit.IngressInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ingresses, nil
+
+	activeIngresses := make([]*livekit.IngressInfo, 0)
+	for _, ingress := range ingresses {
+		if ingress.State.Status == livekit.IngressState_ENDPOINT_PUBLISHING && ingress.State.ResourceId != "" {
+			activeIngresses = append(activeIngresses, ingress)
+		}
+	}
+
+	return activeIngresses, nil
 }

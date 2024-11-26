@@ -8,6 +8,7 @@ replace github.com/livekit/livekit-server => ./
 
 require (
 	github.com/bep/debounce v1.2.1
+	github.com/bsm/redislock v0.9.4
 	github.com/d5/tengo/v2 v2.17.0
 	github.com/dustin/go-humanize v1.0.1
 	github.com/elliotchance/orderedmap/v2 v2.4.0

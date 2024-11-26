@@ -32,6 +32,15 @@ func TestSliceQueue(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 2, q.Len())
 
+	equalsFn := func(a, b int) bool {
+		return a == b
+	}
+	contains := q.Contains(1, equalsFn)
+	assert.True(t, contains)
+
+	contains = q.Contains(3, equalsFn)
+	assert.False(t, contains)
+
 	value, err := q.Dequeue()
 	assert.NoError(t, err)
 	assert.Equal(t, 1, value)
