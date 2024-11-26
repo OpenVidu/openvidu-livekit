@@ -164,6 +164,8 @@ func (r *RoomManager) GetRoom(_ context.Context, roomName livekit.RoomName) *rtc
 }
 
 // BEGIN OPENVIDU BLOCK
+var _ routing.CustomCleanup = (*RoomManager)(nil) // Verify that RoomManager implements CustomCleanup
+
 func (r *RoomManager) LockRoom(ctx context.Context, roomName livekit.RoomName, timeout time.Duration) (string, error) {
 	return r.roomStore.LockRoom(ctx, roomName, timeout)
 }
