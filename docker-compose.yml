@@ -3,7 +3,7 @@ version: "3.9"
 services:
 
   redis:
-    image: redis/redis-stack:latest
+    image: redis/redis-stack:7.4.0-v1
     container_name: redis
     ports:
       - 6379:6379
@@ -12,7 +12,7 @@ services:
       - redis:/data
 
   mongo:
-    image: docker.io/bitnami/mongodb:latest
+    image: docker.io/bitnami/mongodb:7.0.15
     container_name: mongo
     ports:
       - 27017:27017
@@ -25,7 +25,7 @@ services:
       - mongo-db:/bitnami/mongodb
 
   mongo-express:
-    image: mongo-express
+    image: mongo-express:1.0.2-20-alpine3.19
     container_name: mongo-express
     environment:
      - ME_CONFIG_BASICAUTH_USERNAME=admin
@@ -34,7 +34,7 @@ services:
     depends_on:
       - mongo
     ports:
-      - 8082:8081
+      - 8081:8081
 
 volumes:
   redis:
