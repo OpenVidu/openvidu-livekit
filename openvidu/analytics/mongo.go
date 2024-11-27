@@ -326,7 +326,7 @@ func (m *MongoDatabaseClient) FixActiveEntities() {
 	 * - There is another goroutine that runs every 10 seconds (by default) to send events to MongoDB.
 	 * - This function runs every minute and may detect a closed entity as still active because the
 	 *   10-second goroutine has not yet saved its authentic close event.
-	 * 
+	 *
 	 * To handle this, a fake close event for the entity is added to the list, and on the next iteration
 	 * (after one minute), the process rechecks MongoDB to verify if an authentic close event has already
 	 * been saved before performing further write or delete operations.

@@ -37,10 +37,16 @@ import (
 
 const dbLockName = "analytics-db-operations-lock"
 
-var ANALYTICS_CONFIGURATION *openviduconfig.AnalyticsConfig
-var ANALYTICS_SENDERS []*AnalyticsSender
-var redisLocker *redislock.Client = nil
-var mutex sync.Mutex
+var (
+	activeEntitiesFixerWaitInterval time.Duration = time.Minute
+	activeEntitiesLinearBackoff     time.Duration
+	activeEntitiesTtl               time.Duration
+
+	ANALYTICS_CONFIGURATION *openviduconfig.AnalyticsConfig
+	ANALYTICS_SENDERS       []*AnalyticsSender
+	redisLocker             *redislock.Client = nil
+	mutex                   sync.Mutex
+)
 
 type EntityType string
 
@@ -99,6 +105,10 @@ func InitializeAnalytics(configuration *config.Config, livekithelper livekithelp
 
 	ANALYTICS_CONFIGURATION = &configuration.OpenVidu.Analytics
 	ANALYTICS_SENDERS = []*AnalyticsSender{mongoDatabaseClient.owner}
+
+	activeEntitiesFixerWaitInterval = max(ANALYTICS_CONFIGURATION.Interval+time.Second*10, time.Minute)
+	activeEntitiesLinearBackoff = activeEntitiesFixerWaitInterval / 6
+	activeEntitiesTtl = activeEntitiesFixerWaitInterval + 5*time.Second
 
 	if configuration.Redis.IsConfigured() {
 		rc, err := redisLiveKit.GetRedisClient(&configuration.Redis)
@@ -172,9 +182,9 @@ func startActiveEntitiesFixer() {
 		func() {
 			if redisLocker != nil {
 				context := context.Background()
-				backoff := redislock.LinearBackoff(10 * time.Second)
+				backoff := redislock.LinearBackoff(activeEntitiesLinearBackoff)
 
-				lock, err := redisLocker.Obtain(context, "active-entities-lock", 2*time.Minute, &redislock.Options{
+				lock, err := redisLocker.Obtain(context, "active-entities-lock", activeEntitiesTtl, &redislock.Options{
 					RetryStrategy: backoff,
 				})
 				if err != nil {
@@ -209,7 +219,7 @@ func startActiveEntitiesFixer() {
 				mutex.Unlock()
 			}
 
-			time.Sleep(time.Minute)
+			time.Sleep(activeEntitiesFixerWaitInterval)
 		}()
 	}
 }
