@@ -12,13 +12,17 @@ services:
       - redis:/data
 
   mongo:
-    image: mongo:latest
+    image: docker.io/bitnami/mongodb:latest
     container_name: mongo
     ports:
       - 27017:27017
+    environment:
+      - MONGODB_ADVERTISED_HOSTNAME=mongo
+      - MONGODB_REPLICA_SET_MODE=primary
+      - MONGODB_REPLICA_SET_NAME=rs0
+      - ALLOW_EMPTY_PASSWORD=yes
     volumes:
-      - mongo-configdb:/data/configdb
-      - mongo-db:/data/db
+      - mongo-db:/bitnami/mongodb
 
   mongo-express:
     image: mongo-express
@@ -26,10 +30,11 @@ services:
     environment:
      - ME_CONFIG_BASICAUTH_USERNAME=admin
      - ME_CONFIG_BASICAUTH_PASSWORD=pass
+     - ME_CONFIG_MONGODB_URL=mongodb://mongo:27017/?replicaSet=rs0&readPreference=primaryPreferred
     depends_on:
       - mongo
     ports:
-      - 8081:8081
+      - 8082:8081
 
 volumes:
   redis:

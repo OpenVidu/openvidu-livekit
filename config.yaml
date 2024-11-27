@@ -2,7 +2,7 @@
 openvidu:
   analytics:
     enabled: true
-    mongo_url: mongodb://localhost:27017/
+    mongo_url: mongodb://localhost:27017/?replicaSet=rs0&readPreference=primaryPreferred
     interval: 10s
     expiration: 360h # 15 days
 
