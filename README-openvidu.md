@@ -12,7 +12,7 @@ Extend the native livekit configuration ([`.yaml` file](https://docs.livekit.io/
 openvidu:
   analytics:
     enabled: true
-    mongo_url: mongodb://localhost:27017/
+    mongo_url: mongodb://localhost:27017/?replicaSet=rs0&readPreference=primaryPreferred
     interval: 10s
     expiration: 360h # 15 days
 ```
@@ -24,7 +24,7 @@ openvidu:
 
 ## Running locally
 
-Just run the `docker-compose.yml` file to launch the required services (including the MongoDB):
+Just run the `docker-compose.yml` file to launch the required services (`redis`, `mongo`, and optional `mongo-express`):
 
 ```bash
 docker compose up
@@ -43,11 +43,11 @@ export LIVEKIT_CONFIG=$(cat ${PWD}/config.yaml)
 go run ./...
 ```
 
-Go to `http://localhost:8081` to explore the MongoDB database (`admin` username and `pass` password).
+Go to `http://localhost:8081` to explore the MongoDB database with mongo-express (`admin` username and `pass` password).
 
 ## Changing the destination of events/stats
 
-It is fairly easy to adapt the code to store the events/stats in a different place, or even in multiple places at the same time. For example, file [`redis.go`]() allows storing the events/stats in the very same Redis database used by the livekit deployment.
+It is fairly easy to adapt the code to store the events/stats in a different place, or even in multiple places at the same time. For example, file [`redis.go`](./openvidu/analytics/redis.go) allows storing the events/stats in the very same Redis database used by the livekit deployment.
 
 Any new implementation must comply with interface `DatabaseClient`:
 
@@ -55,12 +55,13 @@ Any new implementation must comply with interface `DatabaseClient`:
 type DatabaseClient interface {
 	InitializeDatabase() error
 	SendBatch()
+	FixActiveEntities()
 }
 ```
 
-The `InitializeDatabase` method is used to prepare the destination database (for example creating indexes). The `SendBatch` method is used to send the events/stats in batches using the specific database client methods.
+The `InitializeDatabase` method is used to prepare the destination database (for example creating indexes). The `SendBatch` method is used to send the events/stats in batches using the specific database client methods. The `FixActiveEntities` method is used to fix any active entities that are not actually active anymore.
 
-Appart from complying with this interface, it is also required for any new implementation to have a reference to the generic `AnalyticsSender` type:
+Appart from complying with this interface, it is also required for any new implementation to have a reference to the `LivekitHelper` interface and the generic `AnalyticsSender` type:
 
 ```go
 type AnalyticsSender struct {
@@ -68,39 +69,50 @@ type AnalyticsSender struct {
 	statsQueue     queue.Queue[*livekit.AnalyticsStat]
 	databaseClient DatabaseClient
 }
+
+type BaseDatabaseClient struct {
+	owner         *AnalyticsSender
+	livekitHelper livekithelperinterface.LivekitHelper
+}
 ```
 
 This struct has two queues for storing events and stats separately in a FIFO manner, and a reference to the database client. The analytics service has a collection of `AnalyticsSender`, over which it iterates calling each `SendBatch` method.
 
-Whith this in mind, this is the implementation of the MongoDB client:
+With this in mind, this is the implementation of the MongoDB client:
 
 ```go
 type MongoDatabaseClient struct {
-	client *mongo.Client
-	owner  *AnalyticsSender
+	BaseDatabaseClient
+	client                *mongo.Client
 }
 
-func NewMongoDatabaseClient(conf *openviduconfig.AnalyticsConfig) (*MongoDatabaseClient, error) {
+func NewMongoDatabaseClient(conf *openviduconfig.AnalyticsConfig, livekithelper livekithelperinterface.LivekitHelper) (*MongoDatabaseClient, error) {
 	mongoDatabaseClient := &MongoDatabaseClient{
 		client: // {Golang MongoDB client},
-		owner:  nil,
 	}
-	owner := &AnalyticsSender{
+
+	sender := &AnalyticsSender{
 		eventsQueue:    queue.NewSliceQueue[*livekit.AnalyticsEvent](),
 		statsQueue:     queue.NewSliceQueue[*livekit.AnalyticsStat](),
 		databaseClient: mongoDatabaseClient,
 	}
-	mongoDatabaseClient.owner = owner
-  return mongoDatabaseClient, nil
+	mongoDatabaseClient.owner = sender
+	mongoDatabaseClient.livekitHelper = livekithelper
+
+	return mongoDatabaseClient, nil
 }
 
 func (m *MongoDatabaseClient) InitializeDatabase() error {
-  // Create indexes...
-  return nil
+	// Create indexes...
+	return nil
 }
 
 func (m *MongoDatabaseClient) SendBatch() {
-  // Send events using the golang MongoDB client...
-  // Send stats using the golang MongoDB client...
+	// Send events using the golang MongoDB client...
+	// Send stats using the golang MongoDB client...
+}
+
+func (m *MongoDatabaseClient) FixActiveEntities() {
+	// Fix active entities...
 }
 ```
