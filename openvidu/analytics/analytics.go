@@ -38,9 +38,9 @@ import (
 const dbLockName = "analytics-db-operations-lock"
 
 var (
-	activeEntitiesFixerWaitInterval time.Duration = time.Minute
-	activeEntitiesLinearBackoff     time.Duration
-	activeEntitiesTtl               time.Duration
+	activeEntitiesFixerInterval    time.Duration = time.Minute
+	activeEntitiesFixerLockBackoff time.Duration
+	activeEntitiesFixerLockTtl     time.Duration
 
 	ANALYTICS_CONFIGURATION *openviduconfig.AnalyticsConfig
 	ANALYTICS_SENDERS       []*AnalyticsSender
@@ -92,7 +92,6 @@ type DatabaseClient interface {
 }
 
 func InitializeAnalytics(configuration *config.Config, livekithelper livekithelperinterface.LivekitHelper) error {
-
 	mongoDatabaseClient, err := NewMongoDatabaseClient(&configuration.OpenVidu.Analytics, livekithelper)
 	if err != nil {
 		return err
@@ -106,9 +105,9 @@ func InitializeAnalytics(configuration *config.Config, livekithelper livekithelp
 	ANALYTICS_CONFIGURATION = &configuration.OpenVidu.Analytics
 	ANALYTICS_SENDERS = []*AnalyticsSender{mongoDatabaseClient.owner}
 
-	activeEntitiesFixerWaitInterval = max(ANALYTICS_CONFIGURATION.Interval+time.Second*10, time.Minute)
-	activeEntitiesLinearBackoff = activeEntitiesFixerWaitInterval / 6
-	activeEntitiesTtl = activeEntitiesFixerWaitInterval + 5*time.Second
+	activeEntitiesFixerInterval = max(ANALYTICS_CONFIGURATION.Interval*2+time.Second*10, time.Minute)
+	activeEntitiesFixerLockBackoff = activeEntitiesFixerInterval / 2
+	activeEntitiesFixerLockTtl = activeEntitiesFixerInterval + 5*time.Second
 
 	if configuration.Redis.IsConfigured() {
 		rc, err := redisLiveKit.GetRedisClient(&configuration.Redis)
@@ -182,9 +181,8 @@ func startActiveEntitiesFixer() {
 		func() {
 			if redisLocker != nil {
 				context := context.Background()
-				backoff := redislock.LinearBackoff(activeEntitiesLinearBackoff)
-
-				lock, err := redisLocker.Obtain(context, "active-entities-lock", activeEntitiesTtl, &redislock.Options{
+				backoff := redislock.LinearBackoff(activeEntitiesFixerLockBackoff)
+				lock, err := redisLocker.Obtain(context, "active-entities-lock", activeEntitiesFixerLockTtl, &redislock.Options{
 					RetryStrategy: backoff,
 				})
 				if err != nil {
@@ -194,32 +192,26 @@ func startActiveEntitiesFixer() {
 				defer lock.Release(context)
 			}
 
-			// If Redis is configured, use Redis Locker instead of mutex
-			var redisLock *redislock.Lock
-			context := context.Background()
-			if redisLocker != nil {
-				backoff := redislock.LinearBackoff(1 * time.Second)
+			time.Sleep(activeEntitiesFixerInterval)
 
-				var err error
-				redisLock, err = redisLocker.Obtain(context, dbLockName, 2*time.Second, &redislock.Options{
+			// If Redis is configured, use Redis Locker instead of mutex
+			if redisLocker != nil {
+				context := context.Background()
+				backoff := redislock.LinearBackoff(1 * time.Second)
+				redisLock, err := redisLocker.Obtain(context, dbLockName, 2*time.Second, &redislock.Options{
 					RetryStrategy: backoff,
 				})
 				if err != nil {
 					return
 				}
+
+				defer redisLock.Release(context)
 			} else {
 				mutex.Lock()
+				defer mutex.Unlock()
 			}
 
 			fixActiveEntities()
-
-			if redisLocker != nil {
-				redisLock.Release(context)
-			} else {
-				mutex.Unlock()
-			}
-
-			time.Sleep(activeEntitiesFixerWaitInterval)
 		}()
 	}
 }
