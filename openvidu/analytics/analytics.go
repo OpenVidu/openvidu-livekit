@@ -38,14 +38,15 @@ import (
 const dbLockName = "analytics-db-operations-lock"
 
 var (
-	activeEntitiesFixerInterval    time.Duration = time.Minute
+	analyticsConfiguration         *openviduconfig.AnalyticsConfig
+	activeEntitiesFixerInterval    time.Duration
 	activeEntitiesFixerLockBackoff time.Duration
 	activeEntitiesFixerLockTtl     time.Duration
 
-	ANALYTICS_CONFIGURATION *openviduconfig.AnalyticsConfig
-	ANALYTICS_SENDERS       []*AnalyticsSender
-	redisLocker             *redislock.Client = nil
-	mutex                   sync.Mutex
+	redisLocker *redislock.Client = nil
+	mutex       sync.Mutex
+
+	analyticsSenders []*AnalyticsSender
 )
 
 type EntityType string
@@ -102,10 +103,20 @@ func InitializeAnalytics(configuration *config.Config, livekithelper livekithelp
 		return err
 	}
 
-	ANALYTICS_CONFIGURATION = &configuration.OpenVidu.Analytics
-	ANALYTICS_SENDERS = []*AnalyticsSender{mongoDatabaseClient.owner}
+	analyticsSenders = []*AnalyticsSender{mongoDatabaseClient.owner}
 
-	activeEntitiesFixerInterval = max(ANALYTICS_CONFIGURATION.Interval*2+time.Second*10, time.Minute)
+	analyticsConfiguration = &configuration.OpenVidu.Analytics
+	if analyticsConfiguration.Interval == 0 {
+		analyticsConfiguration.Interval = time.Second * 10
+	}
+	if analyticsConfiguration.FixerInterval == 0 {
+		analyticsConfiguration.FixerInterval = time.Minute
+	}
+	if analyticsConfiguration.Expiration == 0 {
+		analyticsConfiguration.Expiration = time.Hour * 24 * 32 // 32 days
+	}
+
+	activeEntitiesFixerInterval = max(analyticsConfiguration.Interval*2+time.Second*10, analyticsConfiguration.FixerInterval)
 	activeEntitiesFixerLockBackoff = activeEntitiesFixerInterval / 2
 	activeEntitiesFixerLockTtl = activeEntitiesFixerInterval + 5*time.Second
 
@@ -146,7 +157,7 @@ func Start() {
 func startAnalyticsRoutine() {
 	for {
 		func() {
-			time.Sleep(ANALYTICS_CONFIGURATION.Interval)
+			time.Sleep(analyticsConfiguration.Interval)
 
 			// If Redis is configured, use Redis Locker instead of mutex
 			if redisLocker != nil {
@@ -171,7 +182,7 @@ func startAnalyticsRoutine() {
 }
 
 func sendBatch() {
-	for _, sender := range ANALYTICS_SENDERS {
+	for _, sender := range analyticsSenders {
 		sender.databaseClient.SendBatch()
 	}
 }
@@ -217,7 +228,7 @@ func startActiveEntitiesFixer() {
 }
 
 func fixActiveEntities() {
-	for _, sender := range ANALYTICS_SENDERS {
+	for _, sender := range analyticsSenders {
 		sender.databaseClient.FixActiveEntities()
 	}
 }
@@ -243,7 +254,7 @@ func NewOpenViduStatsIngestClient() OpenViduStatsIngestClient {
 func (client OpenViduEventsIngestClient) Send(events *livekit.AnalyticsEvents) error {
 	logger.Debugw("adding " + strconv.Itoa(len(events.Events)) + " new events to next batch")
 	logger.Debugw(events.String())
-	for _, sender := range ANALYTICS_SENDERS {
+	for _, sender := range analyticsSenders {
 		for _, event := range events.Events {
 			sender.eventsQueue.Enqueue(event)
 		}
@@ -254,7 +265,7 @@ func (client OpenViduEventsIngestClient) Send(events *livekit.AnalyticsEvents) e
 func (client OpenViduStatsIngestClient) Send(stats *livekit.AnalyticsStats) error {
 	logger.Debugw("adding " + strconv.Itoa(len(stats.Stats)) + " new stats to next batch")
 	logger.Debugw(stats.String())
-	for _, sender := range ANALYTICS_SENDERS {
+	for _, sender := range analyticsSenders {
 		for _, stat := range stats.Stats {
 			sender.statsQueue.Enqueue(stat)
 		}

@@ -4,7 +4,7 @@ openvidu:
     enabled: true
     mongo_url: mongodb://localhost:27017/?replicaSet=rs0&readPreference=primaryPreferred
     interval: 10s
-    expiration: 360h # 15 days
+    expiration: 768h # 32 days
 
 # main TCP port for RoomService and RTC endpoint
 # for production setups, this port should be placed behind a load balancer with TLS

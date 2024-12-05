@@ -14,13 +14,13 @@ openvidu:
     enabled: true
     mongo_url: mongodb://localhost:27017/?replicaSet=rs0&readPreference=primaryPreferred
     interval: 10s
-    expiration: 360h # 15 days
+    expiration: 768h # 32 days
 ```
 
 - `enabled`: whether to enable the storage of events/stats or not.
 - `mongo_url`: URL of the MongoDB deployment where to store the events/stats. This is a [Connection String](https://www.mongodb.com/docs/manual/reference/connection-string/).
-- `interval`: how often the events/stats batches must be sent. It is a [time.Duration](https://pkg.go.dev/time#Duration)
-- `expiration`: the time to live of the events/stats in the storage destination. It is a [time.Duration](https://pkg.go.dev/time#Duration)
+- `interval`: how often the events/stats batches must be sent. It is a [time.Duration](https://pkg.go.dev/time#Duration). Default is `10s`.
+- `expiration`: the time to live of the events/stats in the storage destination. It is a [time.Duration](https://pkg.go.dev/time#Duration). Default is `768h` (32 days).
 
 ## Running locally
 
