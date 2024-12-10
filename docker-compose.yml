@@ -34,7 +34,7 @@ services:
     depends_on:
       - mongo
     ports:
-      - 8082:8081
+      - 8081:8081
 
 volumes:
   redis:
