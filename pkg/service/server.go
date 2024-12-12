@@ -130,7 +130,7 @@ func NewLivekitServer(conf *config.Config,
 	}
 
 	// BEGIN OPENVIDU BLOCK
-	mux.HandleFunc("/health", s.healthCheck)
+	mux.HandleFunc("/twirp/health", s.healthCheck)
 	// END OPENVIDU BLOCK
 
 	mux.Handle(roomServer.PathPrefix(), roomServer)
