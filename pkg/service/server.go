@@ -129,6 +129,10 @@ func NewLivekitServer(conf *config.Config,
 		mux.HandleFunc("/debug/rooms", s.debugInfo)
 	}
 
+	// BEGIN OPENVIDU BLOCK
+	mux.HandleFunc("/health", s.healthCheck)
+	// END OPENVIDU BLOCK
+
 	mux.Handle(roomServer.PathPrefix(), roomServer)
 	mux.Handle(agentDispatchServer.PathPrefix(), agentDispatchServer)
 	mux.Handle(egressServer.PathPrefix(), egressServer)
