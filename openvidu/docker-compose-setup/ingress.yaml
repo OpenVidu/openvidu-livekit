@@ -1,0 +1,28 @@
+openvidu:
+  width: 1920
+  height: 1080
+  frameRate: 32
+  bitrate: 5000000
+
+redis:
+  address: host.docker.internal:6379
+  username: ""
+  password: redispassword
+  db: 0
+  use_tls: false
+
+api_key: devkey
+api_secret: secret
+ws_url: ws://host.docker.internal:7880
+rtmp_port: 1935
+whip_port: 8085
+http_relay_port: 9090
+health_port: 9091
+
+logging:
+  json: false
+  level: warn
+development: false
+
+rtc_config:
+  udp_port: 7895

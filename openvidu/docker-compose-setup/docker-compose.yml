@@ -1,7 +1,4 @@
-version: "3.9"
-
 services:
-
   redis:
     image: redis/redis-stack:7.4.0-v1
     container_name: redis
@@ -10,6 +7,22 @@ services:
       - 8001:8001
     volumes:
       - redis:/data
+
+  ingress:
+    image: docker.io/livekit/ingress:main
+    container_name: ingress
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    ports:
+      - 1935:1935
+      - 8085:8085
+      - 7895:7895/udp
+    environment:
+      - INGRESS_CONFIG_FILE=/etc/ingress.yaml
+    volumes:
+      - ./ingress.yaml:/etc/ingress.yaml
+    depends_on:
+      - redis
 
   mongo:
     image: docker.io/bitnami/mongodb:8.0.3
@@ -28,9 +41,9 @@ services:
     image: mongo-express:1.0.2-20-alpine3.19
     container_name: mongo-express
     environment:
-     - ME_CONFIG_BASICAUTH_USERNAME=admin
-     - ME_CONFIG_BASICAUTH_PASSWORD=pass
-     - ME_CONFIG_MONGODB_URL=mongodb://mongo:27017/?replicaSet=rs0&readPreference=primaryPreferred
+      - ME_CONFIG_BASICAUTH_USERNAME=admin
+      - ME_CONFIG_BASICAUTH_PASSWORD=pass
+      - ME_CONFIG_MONGODB_URL=mongodb://mongo:27017/?replicaSet=rs0&readPreference=primaryPreferred
     depends_on:
       - mongo
     ports:
