@@ -9,7 +9,7 @@ services:
       - redis:/data
 
   ingress:
-    image: docker.io/livekit/ingress:main
+    image: docker.io/livekit/ingress:latest
     container_name: ingress
     extra_hosts:
       - host.docker.internal:host-gateway
