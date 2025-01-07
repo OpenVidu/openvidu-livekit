@@ -21,7 +21,7 @@ import (
 
 	"github.com/pion/interceptor"
 	"github.com/pion/rtp"
-	"github.com/pion/webrtc/v3"
+	"github.com/pion/webrtc/v4"
 )
 
 // Do a fuzzy find for a codec in the list of codecs
@@ -43,6 +43,18 @@ func CodecParametersFuzzySearch(needle webrtc.RTPCodecParameters, haystack []web
 	}
 
 	return webrtc.RTPCodecParameters{}, webrtc.ErrCodecNotFound
+}
+
+// Given a CodecParameters find the RTX CodecParameters if one exists
+func FindRTXPayloadType(needle webrtc.PayloadType, haystack []webrtc.RTPCodecParameters) webrtc.PayloadType {
+	aptStr := fmt.Sprintf("apt=%d", needle)
+	for _, c := range haystack {
+		if aptStr == c.SDPFmtpLine {
+			return c.PayloadType
+		}
+	}
+
+	return webrtc.PayloadType(0)
 }
 
 // GetHeaderExtensionID returns the ID of a header extension, or 0 if not found

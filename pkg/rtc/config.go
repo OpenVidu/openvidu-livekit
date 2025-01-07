@@ -16,7 +16,7 @@ package rtc
 
 import (
 	"github.com/pion/sdp/v3"
-	"github.com/pion/webrtc/v3"
+	"github.com/pion/webrtc/v4"
 
 	"github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/livekit-server/pkg/sfu/buffer"
@@ -56,7 +56,6 @@ type RTCPFeedbackConfig struct {
 type DirectionConfig struct {
 	RTPHeaderExtension RTPHeaderExtensionConfig
 	RTCPFeedback       RTCPFeedbackConfig
-	StrictACKs         bool
 }
 
 func NewWebRTCConfig(conf *config.Config) (*WebRTCConfig, error) {
@@ -70,6 +69,8 @@ func NewWebRTCConfig(conf *config.Config) (*WebRTCConfig, error) {
 	// we don't want to use active TCP on a server, clients should be dialing
 	webRTCConfig.SettingEngine.DisableActiveTCP(true)
 
+	webRTCConfig.SettingEngine.EnableSCTPZeroChecksum(true)
+
 	if rtcConf.PacketBufferSize == 0 {
 		rtcConf.PacketBufferSize = 500
 	}
@@ -82,7 +83,6 @@ func NewWebRTCConfig(conf *config.Config) (*WebRTCConfig, error) {
 
 	// publisher configuration
 	publisherConfig := DirectionConfig{
-		StrictACKs: true, // publisher is dialed, and will always reply with ACK
 		RTPHeaderExtension: RTPHeaderExtensionConfig{
 			Audio: []string{
 				sdp.SDESMidURI,
@@ -113,9 +113,28 @@ func NewWebRTCConfig(conf *config.Config) (*WebRTCConfig, error) {
 		},
 	}
 
-	// subscriber configuration
+	return &WebRTCConfig{
+		WebRTCConfig: *webRTCConfig,
+		Receiver: ReceiverConfig{
+			PacketBufferSizeVideo: rtcConf.PacketBufferSizeVideo,
+			PacketBufferSizeAudio: rtcConf.PacketBufferSizeAudio,
+		},
+		Publisher:  publisherConfig,
+		Subscriber: getSubscriberConfig(rtcConf.CongestionControl),
+	}, nil
+}
+
+func (c *WebRTCConfig) UpdateCongestionControl(ccConf config.CongestionControlConfig) {
+	c.Subscriber = getSubscriberConfig(ccConf)
+}
+
+func (c *WebRTCConfig) SetBufferFactory(factory *buffer.Factory) {
+	c.BufferFactory = factory
+	c.SettingEngine.BufferFactory = factory.GetOrNew
+}
+
+func getSubscriberConfig(ccConf config.CongestionControlConfig) DirectionConfig {
 	subscriberConfig := DirectionConfig{
-		StrictACKs: conf.RTC.StrictACKs,
 		RTPHeaderExtension: RTPHeaderExtensionConfig{
 			Video: []string{
 				dd.ExtensionURI,
@@ -126,6 +145,10 @@ func NewWebRTCConfig(conf *config.Config) (*WebRTCConfig, error) {
 			},
 		},
 		RTCPFeedback: RTCPFeedbackConfig{
+			Audio: []webrtc.RTCPFeedback{
+				// always enable NACK for audio but disable it later for red enabled transceiver. https://github.com/pion/webrtc/pull/2972
+				{Type: webrtc.TypeRTCPFBNACK},
+			},
 			Video: []webrtc.RTCPFeedback{
 				{Type: webrtc.TypeRTCPFBCCM, Parameter: "fir"},
 				{Type: webrtc.TypeRTCPFBNACK},
@@ -133,7 +156,7 @@ func NewWebRTCConfig(conf *config.Config) (*WebRTCConfig, error) {
 			},
 		},
 	}
-	if rtcConf.CongestionControl.UseSendSideBWE {
+	if ccConf.UseSendSideBWEInterceptor || ccConf.UseSendSideBWE {
 		subscriberConfig.RTPHeaderExtension.Video = append(subscriberConfig.RTPHeaderExtension.Video, sdp.TransportCCURI)
 		subscriberConfig.RTCPFeedback.Video = append(subscriberConfig.RTCPFeedback.Video, webrtc.RTCPFeedback{Type: webrtc.TypeRTCPFBTransportCC})
 	} else {
@@ -141,18 +164,5 @@ func NewWebRTCConfig(conf *config.Config) (*WebRTCConfig, error) {
 		subscriberConfig.RTCPFeedback.Video = append(subscriberConfig.RTCPFeedback.Video, webrtc.RTCPFeedback{Type: webrtc.TypeRTCPFBGoogREMB})
 	}
 
-	return &WebRTCConfig{
-		WebRTCConfig: *webRTCConfig,
-		Receiver: ReceiverConfig{
-			PacketBufferSizeVideo: rtcConf.PacketBufferSizeVideo,
-			PacketBufferSizeAudio: rtcConf.PacketBufferSizeAudio,
-		},
-		Publisher:  publisherConfig,
-		Subscriber: subscriberConfig,
-	}, nil
-}
-
-func (c *WebRTCConfig) SetBufferFactory(factory *buffer.Factory) {
-	c.BufferFactory = factory
-	c.SettingEngine.BufferFactory = factory.GetOrNew
+	return subscriberConfig
 }

@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/pion/rtcp"
-	"github.com/pion/webrtc/v3"
+	"github.com/pion/webrtc/v4"
 
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
@@ -300,6 +300,8 @@ type Participant interface {
 	) error
 
 	DebugInfo() map[string]interface{}
+
+	OnMetrics(callback func(Participant, *livekit.DataPacket))
 }
 
 // -------------------------------------------------------
@@ -362,16 +364,17 @@ type LocalParticipant interface {
 
 	// PeerConnection
 	AddICECandidate(candidate webrtc.ICECandidateInit, target livekit.SignalTarget)
-	HandleOffer(sdp webrtc.SessionDescription)
+	HandleOffer(sdp webrtc.SessionDescription) error
+	GetAnswer() (webrtc.SessionDescription, error)
 	AddTrack(req *livekit.AddTrackRequest)
 	SetTrackMuted(trackID livekit.TrackID, muted bool, fromAdmin bool) *livekit.TrackInfo
 
 	HandleAnswer(sdp webrtc.SessionDescription)
 	Negotiate(force bool)
 	ICERestart(iceConfig *livekit.ICEConfig)
-	AddTrackToSubscriber(trackLocal webrtc.TrackLocal, params AddTrackParams) (*webrtc.RTPSender, *webrtc.RTPTransceiver, error)
-	AddTransceiverFromTrackToSubscriber(trackLocal webrtc.TrackLocal, params AddTrackParams) (*webrtc.RTPSender, *webrtc.RTPTransceiver, error)
-	RemoveTrackFromSubscriber(sender *webrtc.RTPSender) error
+	AddTrackLocal(trackLocal webrtc.TrackLocal, params AddTrackParams) (*webrtc.RTPSender, *webrtc.RTPTransceiver, error)
+	AddTransceiverFromTrackLocal(trackLocal webrtc.TrackLocal, params AddTrackParams) (*webrtc.RTPSender, *webrtc.RTPTransceiver, error)
+	RemoveTrackLocal(sender *webrtc.RTPSender) error
 
 	WriteSubscriberRTCP(pkts []rtcp.Packet) error
 
@@ -380,6 +383,8 @@ type LocalParticipant interface {
 	UnsubscribeFromTrack(trackID livekit.TrackID)
 	UpdateSubscribedTrackSettings(trackID livekit.TrackID, settings *livekit.UpdateTrackSettings)
 	GetSubscribedTracks() []SubscribedTrack
+	IsTrackNameSubscribed(publisherIdentity livekit.ParticipantIdentity, trackName string) bool
+	Verify() bool
 	VerifySubscribeParticipantInfo(pID livekit.ParticipantID, version uint32)
 	// WaitUntilSubscribed waits until all subscriptions have been settled, or if the timeout
 	// has been reached. If the timeout expires, it will return an error.
@@ -417,7 +422,6 @@ type LocalParticipant interface {
 	// OnParticipantUpdate - metadata or permission is updated
 	OnParticipantUpdate(callback func(LocalParticipant))
 	OnDataPacket(callback func(LocalParticipant, livekit.DataPacket_Kind, *livekit.DataPacket))
-	OnMetrics(callback func(LocalParticipant, *livekit.DataPacket))
 	OnSubscribeStatusChanged(fn func(publisherID livekit.ParticipantID, subscribed bool))
 	OnClose(callback func(LocalParticipant))
 	OnClaimsChanged(callback func(LocalParticipant))

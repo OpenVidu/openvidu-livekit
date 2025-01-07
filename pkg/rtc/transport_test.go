@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/pion/sdp/v3"
-	"github.com/pion/webrtc/v3"
+	"github.com/pion/webrtc/v4"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 
@@ -587,10 +587,6 @@ func untilTransportsConnected(transports ...*transportfakes.FakeHandler) *sync.W
 }
 
 func TestConfigureAudioTransceiver(t *testing.T) {
-	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{})
-	require.NoError(t, err)
-	defer pc.Close()
-
 	for _, testcase := range []struct {
 		nack   bool
 		stereo bool
@@ -601,7 +597,12 @@ func TestConfigureAudioTransceiver(t *testing.T) {
 		{true, true},
 	} {
 		t.Run(fmt.Sprintf("nack=%v,stereo=%v", testcase.nack, testcase.stereo), func(t *testing.T) {
-			tr, err := pc.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio, webrtc.RtpTransceiverInit{Direction: webrtc.RTPTransceiverDirectionSendonly})
+			var me webrtc.MediaEngine
+			registerCodecs(&me, []*livekit.Codec{{Mime: webrtc.MimeTypeOpus}}, RTCPFeedbackConfig{Audio: []webrtc.RTCPFeedback{{Type: webrtc.TypeRTCPFBNACK}}}, false)
+			pc, err := webrtc.NewAPI(webrtc.WithMediaEngine(&me)).NewPeerConnection(webrtc.Configuration{})
+			require.NoError(t, err)
+			defer pc.Close()
+			tr, err := pc.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio, webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionSendonly})
 			require.NoError(t, err)
 
 			configureAudioTransceiver(tr, testcase.stereo, testcase.nack)

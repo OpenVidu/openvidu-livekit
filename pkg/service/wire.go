@@ -22,7 +22,7 @@ import (
 	"os"
 
 	"github.com/google/wire"
-	"github.com/pion/turn/v2"
+	"github.com/pion/turn/v4"
 	"github.com/pkg/errors"
 	"github.com/redis/go-redis/v9"
 	"gopkg.in/yaml.v3"
@@ -123,7 +123,7 @@ func InitializeRouter(conf *config.Config, currentNode routing.LocalNode) (routi
 }
 
 func getNodeID(currentNode routing.LocalNode) livekit.NodeID {
-	return livekit.NodeID(currentNode.Id)
+	return currentNode.NodeID()
 }
 
 func createKeyProvider(conf *config.Config) (auth.KeyProvider, error) {

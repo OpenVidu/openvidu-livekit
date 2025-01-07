@@ -22,7 +22,7 @@ import (
 	"github.com/livekit/protocol/utils"
 	"github.com/livekit/protocol/webhook"
 	"github.com/livekit/psrpc"
-	"github.com/pion/turn/v2"
+	"github.com/pion/turn/v4"
 	"github.com/pkg/errors"
 	"github.com/redis/go-redis/v9"
 	"gopkg.in/yaml.v3"
@@ -105,7 +105,7 @@ func InitializeServer(conf *config.Config, currentNode routing.LocalNode) (*Live
 	if err != nil {
 		return nil, err
 	}
-	agentDispatchService := NewAgentDispatchService(agentDispatchInternalClient, topicFormatter)
+	agentDispatchService := NewAgentDispatchService(agentDispatchInternalClient, topicFormatter, roomAllocator, router)
 	egressService := NewEgressService(egressClient, rtcEgressLauncher, objectStore, ioInfoService, roomService)
 	ingressConfig := getIngressConfig(conf)
 	ingressClient, err := rpc.NewIngressClient(clientParams)
@@ -183,7 +183,7 @@ func InitializeRouter(conf *config.Config, currentNode routing.LocalNode) (routi
 // wire.go:
 
 func getNodeID(currentNode routing.LocalNode) livekit.NodeID {
-	return livekit.NodeID(currentNode.Id)
+	return currentNode.NodeID()
 }
 
 func createKeyProvider(conf *config.Config) (auth.KeyProvider, error) {

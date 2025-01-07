@@ -33,7 +33,7 @@ import (
 	// END OPENVIDU BLOCK
 )
 
-//go:generate go run github.com/maxbrunsfeld/counterfeiter/v6 . AnalyticsService
+//counterfeiter:generate . AnalyticsService
 type AnalyticsService interface {
 	SendStats(ctx context.Context, stats []*livekit.AnalyticsStat)
 	SendEvent(ctx context.Context, events *livekit.AnalyticsEvent)
@@ -53,7 +53,7 @@ type analyticsService struct {
 func NewAnalyticsService(_ *config.Config, currentNode routing.LocalNode) AnalyticsService {
 	return &analyticsService{
 		analyticsKey: "", // TODO: conf.AnalyticsKey
-		nodeID:       currentNode.Id,
+		nodeID:       string(currentNode.NodeID()),
 		// BEGIN OPENVIDU BLOCK
 		events: analytics.NewOpenViduEventsIngestClient(),
 		stats:  analytics.NewOpenViduStatsIngestClient(),

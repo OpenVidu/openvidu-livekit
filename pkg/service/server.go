@@ -28,7 +28,7 @@ import (
 	"time"
 
 	"github.com/openvidu/openvidu-livekit/pkg/routing/selector"
-	"github.com/pion/turn/v2"
+	"github.com/pion/turn/v4"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/cors"
 	"github.com/twitchtv/twirp"
@@ -193,7 +193,7 @@ func NewLivekitServer(conf *config.Config,
 }
 
 func (s *LivekitServer) Node() *livekit.Node {
-	return s.currentNode
+	return s.currentNode.Clone()
 }
 
 func (s *LivekitServer) HTTPPort() int {
@@ -253,8 +253,8 @@ func (s *LivekitServer) Start() error {
 
 	values := []interface{}{
 		"portHttp", s.config.Port,
-		"nodeID", s.currentNode.Id,
-		"nodeIP", s.currentNode.Ip,
+		"nodeID", s.currentNode.NodeID(),
+		"nodeIP", s.currentNode.NodeIP(),
 		"version", version.Version,
 	}
 	if s.config.BindAddresses != nil {

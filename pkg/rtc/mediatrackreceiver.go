@@ -23,7 +23,7 @@ import (
 	"sync"
 
 	"github.com/pion/rtcp"
-	"github.com/pion/webrtc/v3"
+	"github.com/pion/webrtc/v4"
 	"go.uber.org/atomic"
 	"golang.org/x/exp/slices"
 	"google.golang.org/protobuf/proto"
@@ -32,7 +32,6 @@ import (
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/protocol/utils"
 
-	"github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/livekit-server/pkg/rtc/types"
 	"github.com/livekit/livekit-server/pkg/sfu"
 	"github.com/livekit/livekit-server/pkg/sfu/buffer"
@@ -91,7 +90,7 @@ type MediaTrackReceiverParams struct {
 	ParticipantVersion  uint32
 	ReceiverConfig      ReceiverConfig
 	SubscriberConfig    DirectionConfig
-	AudioConfig         config.AudioConfig
+	AudioConfig         sfu.AudioConfig
 	Telemetry           telemetry.TelemetryService
 	Logger              logger.Logger
 }
@@ -184,13 +183,10 @@ func (t *MediaTrackReceiver) SetupReceiver(receiver sfu.TrackReceiver, priority 
 	})
 
 	if mid != "" {
-		trackInfo := t.TrackInfo()
-
+		trackInfo := t.TrackInfoClone()
 		if priority == 0 {
-			trackInfo = utils.CloneProto(trackInfo)
 			trackInfo.MimeType = receiver.Codec().MimeType
 			trackInfo.Mid = mid
-			t.trackInfo.Store(trackInfo)
 		}
 
 		for i, ci := range trackInfo.Codecs {
@@ -200,6 +196,7 @@ func (t *MediaTrackReceiver) SetupReceiver(receiver sfu.TrackReceiver, priority 
 				break
 			}
 		}
+		t.trackInfo.Store(trackInfo)
 	}
 
 	t.receivers = receivers
