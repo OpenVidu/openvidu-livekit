@@ -110,8 +110,8 @@ func (m *MongoDatabaseClient) sendEventsBatch() {
 
 		result, err := eventCollection.InsertMany(sessCtx, parsedEvents, options.InsertMany().SetOrdered(false))
 		if err != nil {
-			logger.Errorw("failed to insert events into MongoDB", err)
-			logger.Warnw("restoring events for next batch", nil)
+			logger.Debugw("failed to insert events into MongoDB", err)
+			logger.Debugw("restoring events for next batch")
 			handleInsertManyError(err, m.owner.eventsQueue, events)
 			return nil, err
 		} else {
@@ -123,7 +123,7 @@ func (m *MongoDatabaseClient) sendEventsBatch() {
 
 			result, err := activeEntityCollection.InsertMany(sessCtx, newActiveEntities, options.InsertMany().SetOrdered(false))
 			if err != nil {
-				logger.Errorw("failed to insert active entities in MongoDB", err)
+				logger.Debugw("failed to insert active entities in MongoDB", err)
 				handleInsertActiveEntitiesError(err, m.owner.eventsQueue, events, newActiveEntities)
 				return nil, err
 			} else {
@@ -136,7 +136,7 @@ func (m *MongoDatabaseClient) sendEventsBatch() {
 
 			result, err := activeEntityCollection.DeleteMany(sessCtx, bson.D{{Key: "$or", Value: deletedActiveEntities}})
 			if err != nil {
-				logger.Errorw("failed to delete active entities from MongoDB", err)
+				logger.Debugw("failed to delete active entities from MongoDB", err)
 				restoreAllEventsOrStats(m.owner.eventsQueue, events)
 				return nil, err
 			} else {
@@ -157,8 +157,8 @@ func (m *MongoDatabaseClient) sendEventsBatch() {
 
 	_, err = session.WithTransaction(ctx, callback)
 	if err != nil {
-		logger.Errorw("failed to execute transaction in MongoDB", err)
-		logger.Warnw("rolling back transaction", nil)
+		logger.Debugw("failed to execute transaction in MongoDB", err)
+		logger.Debugw("rolling back transaction")
 	}
 }
 
@@ -180,8 +180,8 @@ func (m *MongoDatabaseClient) sendStatsBatch() {
 
 	result, err := statCollection.InsertMany(context.Background(), parsedStats, options.InsertMany().SetOrdered(false))
 	if err != nil {
-		logger.Errorw("failed to insert stats into MongoDB", err)
-		logger.Warnw("restoring stats for next batch", nil)
+		logger.Debugw("failed to insert stats into MongoDB", err)
+		logger.Debugw("restoring stats for next batch")
 		handleInsertManyError(err, m.owner.statsQueue, stats)
 	} else {
 		logger.Debugw("inserted stats", "#", len(result.InsertedIDs))
@@ -244,7 +244,7 @@ func handleInsertManyError[T *livekit.AnalyticsEvent | *livekit.AnalyticsStat](e
 		for _, writeError := range mongoBulkWriteException.WriteErrors {
 			if writeError.HasErrorCode(11000) {
 				// Duplicate key error. Skip reinsertion of this object
-				logger.Warnw("skipping reinsertion of duplicated object", writeError, "object", collection[writeError.Index])
+				logger.Debugw("skipping reinsertion of duplicated object", "object", collection[writeError.Index])
 				duplicatedObjectIndexes[writeError.Index] = true
 			}
 		}
@@ -273,7 +273,7 @@ func handleInsertActiveEntitiesError(
 		for _, writeError := range mongoBulkWriteException.WriteErrors {
 			if writeError.HasErrorCode(11000) {
 				// Duplicate key error. Skip reinsertion of this active entity
-				logger.Warnw("skipping reinsertion of duplicated active entity", writeError, "entity", activeEntities[writeError.Index])
+				logger.Debugw("skipping reinsertion of duplicated active entity", "entity", activeEntities[writeError.Index])
 				activeEntityId := activeEntities[writeError.Index].(bson.D)[0].Value.(string)
 				duplicatedActiveEntitiesIds[activeEntityId] = true
 			}
@@ -418,7 +418,7 @@ func (m *MongoDatabaseClient) FixActiveEntities() {
 			eventCollection := openviduDb.Collection("events")
 			result, err := eventCollection.InsertMany(sessCtx, m.fakeCloseEvents, options.InsertMany().SetOrdered(false))
 			if err != nil {
-				logger.Errorw("failed to insert events into MongoDB", err)
+				logger.Debugw("failed to insert events into MongoDB", err)
 				return nil, err
 			} else {
 				logger.Debugw("inserted events", "#", len(result.InsertedIDs))
@@ -432,7 +432,7 @@ func (m *MongoDatabaseClient) FixActiveEntities() {
 			activeEntityCollection := openviduDb.Collection("active_entities")
 			result, err := activeEntityCollection.DeleteMany(sessCtx, bson.D{{Key: "$or", Value: m.deletedActiveEntities}})
 			if err != nil {
-				logger.Errorw("failed to delete inactive entities from MongoDB", err)
+				logger.Debugw("failed to delete inactive entities from MongoDB", err)
 				return nil, err
 			} else {
 				logger.Debugw("deleted active entities", "#", result.DeletedCount)
@@ -454,8 +454,8 @@ func (m *MongoDatabaseClient) FixActiveEntities() {
 
 	_, err = session.WithTransaction(ctx, callback)
 	if err != nil {
-		logger.Errorw("failed to execute transaction in MongoDB", err)
-		logger.Warnw("rolling back transaction", nil)
+		logger.Debugw("failed to execute transaction in MongoDB", err)
+		logger.Debugw("rolling back transaction")
 		return
 	}
 
