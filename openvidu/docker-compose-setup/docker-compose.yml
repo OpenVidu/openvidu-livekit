@@ -8,6 +8,18 @@ services:
     volumes:
       - redis:/data
 
+  egress:
+    image: docker.io/livekit/egress:latest
+    container_name: egress
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    environment:
+      - EGRESS_CONFIG_FILE=/etc/egress.yaml
+    volumes:
+      - ./egress.yaml:/etc/egress.yaml
+    depends_on:
+      - redis
+
   ingress:
     image: docker.io/livekit/ingress:latest
     container_name: ingress

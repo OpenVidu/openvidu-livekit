@@ -1,0 +1,15 @@
+redis:
+  address: host.docker.internal:6379
+  username: ""
+  password: redispassword
+  db: 0
+  use_tls: false
+
+api_key: devkey
+api_secret: secret
+ws_url: ws://host.docker.internal:7880
+health_port: 9091
+
+# Files will be moved here when uploads fail.
+backup:
+  prefix: /home/egress/backup_storage
