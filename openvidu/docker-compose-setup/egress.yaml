@@ -13,3 +13,31 @@ health_port: 9091
 # Files will be moved here when uploads fail.
 backup:
   prefix: /home/egress/backup_storage
+
+# Storage for recordings.
+storage:
+  s3:
+    access_key: minioadmin
+    secret: minioadmin
+    # Default region for minio
+    region: us-east-1
+    endpoint: http://host.docker.internal:9000
+    bucket: openvidu
+    force_path_style: true
+
+# CPU cost for each type of Egress operation.
+# Defaults are set for unlimited operations.
+# Change these values according to your needs.
+cpu_cost:
+  max_cpu_utilization: 0.80
+  room_composite_cpu_cost: 0.01
+  audio_room_composite_cpu_cost: 0.01
+  web_cpu_cost: 0.01
+  audio_web_cpu_cost: 0.01
+  participant_cpu_cost: 0.01
+  track_composite_cpu_cost: 0.01
+  track_cpu_cost: 0.01
+
+logging:
+  json: false
+  level: debug
