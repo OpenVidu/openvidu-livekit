@@ -20,7 +20,7 @@ services:
         condition: service_started
 
   ingress:
-    image: docker.io/openvidu/ingress:main
+    image: docker.io/livekit/ingress:latest
     container_name: ingress
     extra_hosts:
       - host.docker.internal:host-gateway
