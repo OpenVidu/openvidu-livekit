@@ -20,3 +20,10 @@ development: false
 
 rtc_config:
   udp_port: 7895
+
+cpu_cost: # Negative values to overcome CPU limits locally
+  min_idle_ratio: 0.01
+  rtmp_cpu_cost: -10
+  whip_cpu_cost: -10
+  whip_bypass_transcoding_cpu_cost: -10
+  url_cpu_cost: -10
