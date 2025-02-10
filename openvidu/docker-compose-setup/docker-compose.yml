@@ -9,6 +9,7 @@ services:
   egress:
     image: docker.io/livekit/egress:v1.9.0
     container_name: egress
+    restart: always
     extra_hosts:
       - host.docker.internal:host-gateway
     environment:
@@ -22,6 +23,7 @@ services:
   ingress:
     image: docker.io/openvidu/ingress:main
     container_name: ingress
+    restart: always
     extra_hosts:
       - host.docker.internal:host-gateway
     ports:
