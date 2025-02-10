@@ -1,13 +1,13 @@
 services:
   redis:
-    image: redis/redis-stack:latest
+    image: redis/redis-stack:7.4.0-v3
     container_name: redis
     ports:
       - 6379:6379
       - 8001:8001
 
   egress:
-    image: docker.io/livekit/egress:latest
+    image: docker.io/livekit/egress:v1.9.0
     container_name: egress
     extra_hosts:
       - host.docker.internal:host-gateway
@@ -20,7 +20,7 @@ services:
         condition: service_started
 
   ingress:
-    image: docker.io/livekit/ingress:latest
+    image: docker.io/openvidu/ingress:main
     container_name: ingress
     extra_hosts:
       - host.docker.internal:host-gateway
@@ -37,7 +37,7 @@ services:
         condition: service_started
 
   minio:
-    image: docker.io/bitnami/minio:latest
+    image: docker.io/bitnami/minio:2025.2.7-debian-12-r0
     container_name: minio
     ports:
       - 9000:9000
@@ -48,7 +48,7 @@ services:
       - MINIO_DEFAULT_BUCKETS=openvidu
 
   mongo:
-    image: docker.io/bitnami/mongodb:latest
+    image: docker.io/bitnami/mongodb:8.0.4
     container_name: mongo
     ports:
       - 27017:27017
@@ -59,7 +59,7 @@ services:
       - ALLOW_EMPTY_PASSWORD=yes
 
   mongo-express:
-    image: mongo-express:latest
+    image: mongo-express:1.0.2-18-alpine3.18
     container_name: mongo-express
     network_mode: host
     ports:
