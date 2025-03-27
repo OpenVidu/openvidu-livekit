@@ -134,7 +134,13 @@ func (s *IngressService) CreateIngressWithUrl(ctx context.Context, urlStr string
 			return nil, psrpc.NewError(psrpc.InvalidArgument, err)
 		}
 		if urlObj.Scheme != "http" && urlObj.Scheme != "https" && urlObj.Scheme != "srt" {
-			return nil, ingress.ErrInvalidIngress(fmt.Sprintf("invalid url scheme %s", urlObj.Scheme))
+
+			// BEGIN OPENVIDU BLOCK
+			if urlObj.Scheme != "rtsp" && urlObj.Scheme != "rtsps" {
+				return nil, ingress.ErrInvalidIngress(fmt.Sprintf("invalid url scheme %s", urlObj.Scheme))
+			}
+			// END OPENVIDU BLOCK
+
 		}
 		// Marshall the URL again for sanitization
 		urlStr = urlObj.String()
