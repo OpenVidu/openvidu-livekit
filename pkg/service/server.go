@@ -36,12 +36,14 @@ import (
 	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/livekit/livekit-server/pkg/config"
-	"github.com/livekit/livekit-server/pkg/routing"
-	"github.com/livekit/livekit-server/version"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
+	"github.com/livekit/protocol/utils/xtwirp"
+
+	"github.com/livekit/livekit-server/pkg/config"
+	"github.com/livekit/livekit-server/pkg/routing"
+	"github.com/livekit/livekit-server/version"
 )
 
 type LivekitServer struct {
@@ -115,6 +117,9 @@ func NewLivekitServer(conf *config.Config,
 			TwirpRequestStatusReporter(),
 		)),
 	}
+	for _, opt := range xtwirp.DefaultServerOptions() {
+		serverOptions = append(serverOptions, opt)
+	}
 	roomServer := livekit.NewRoomServiceServer(roomService, serverOptions...)
 	agentDispatchServer := livekit.NewAgentDispatchServiceServer(agentDispatchService, serverOptions...)
 	egressServer := livekit.NewEgressServer(egressService, serverOptions...)
@@ -133,14 +138,14 @@ func NewLivekitServer(conf *config.Config,
 	mux.HandleFunc("/twirp/health", s.healthCheck)
 	// END OPENVIDU BLOCK
 
-	mux.Handle(roomServer.PathPrefix(), roomServer)
-	mux.Handle(agentDispatchServer.PathPrefix(), agentDispatchServer)
-	mux.Handle(egressServer.PathPrefix(), egressServer)
-	mux.Handle(ingressServer.PathPrefix(), ingressServer)
-	mux.Handle(sipServer.PathPrefix(), sipServer)
+	xtwirp.RegisterServer(mux, roomServer)
+	xtwirp.RegisterServer(mux, agentDispatchServer)
+	xtwirp.RegisterServer(mux, egressServer)
+	xtwirp.RegisterServer(mux, ingressServer)
+	xtwirp.RegisterServer(mux, sipServer)
 	mux.Handle("/rtc", rtcService)
+	rtcService.SetupRoutes(mux)
 	mux.Handle("/agent", agentService)
-	mux.HandleFunc("/rtc/validate", rtcService.Validate)
 	mux.HandleFunc("/", s.defaultHandler)
 
 	s.httpServer = &http.Server{
@@ -165,10 +170,6 @@ func NewLivekitServer(conf *config.Config,
 		}
 	}
 
-	// clean up old rooms on startup
-	if err = roomManager.CleanupRooms(); err != nil {
-		return
-	}
 	// BEGIN OPENVIDU BLOCK
 	// Clean dead nodes after the AvailableSeconds time has elapsed
 	// This ensures that a restarted node will always autoclean itself
@@ -187,6 +188,10 @@ func NewLivekitServer(conf *config.Config,
 			}
 		}
 	}(ticker)
+
+	if err = router.RemoveDeadNodes(roomManager); err != nil {
+		return
+	}
 	// END OPENVIDU BLOCK
 
 	return

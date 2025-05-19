@@ -27,10 +27,6 @@ import (
 	"github.com/livekit/protocol/logger"
 )
 
-const (
-	MimeTypeAudioRed = "audio/red"
-)
-
 var (
 	ErrIncompleteRedHeader = errors.New("incomplete red block header")
 	ErrIncompleteRedBlock  = errors.New("incomplete red block payload")
@@ -119,6 +115,10 @@ func (r *RedPrimaryReceiver) DeleteDownTrack(subscriberID livekit.ParticipantID)
 
 	r.downTrackSpreader.Free(subscriberID)
 	r.logger.Debugw("red primary receiver downtrack deleted", "subscriberID", subscriberID)
+}
+
+func (r *RedPrimaryReceiver) GetDownTracks() []TrackSender {
+	return r.downTrackSpreader.GetDownTracks()
 }
 
 func (r *RedPrimaryReceiver) ResyncDownTracks() {
