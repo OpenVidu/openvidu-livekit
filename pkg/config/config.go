@@ -83,7 +83,7 @@ type Config struct {
 	Metric metric.MetricConfig `yaml:"metric,omitempty"`
 
 	// BEGIN OPENVIDU BLOCK
-	OpenVidu openviduconfig.OpenViduConfig `yaml:"openvidu"`
+	OpenVidu openviduconfig.OpenViduConfig `yaml:"openvidu,omitempty"`
 	// END OPENVIDU BLOCK
 }
 

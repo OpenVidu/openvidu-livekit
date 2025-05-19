@@ -19,13 +19,13 @@ import (
 )
 
 type OpenViduConfig struct {
-	Analytics AnalyticsConfig `yaml:"analytics"`
+	Analytics AnalyticsConfig `yaml:"analytics,omitempty"`
 }
 
 type AnalyticsConfig struct {
-	Enabled       bool          `yaml:"enabled"`
-	MongoUrl      string        `yaml:"mongo_url"`
-	Interval      time.Duration `yaml:"interval"`
-	FixerInterval time.Duration `yaml:"fixer_interval"`
-	Expiration    time.Duration `yaml:"expiration"`
+	Enabled       bool          `yaml:"enabled,omitempty"`
+	MongoUrl      string        `yaml:"mongo_url,omitempty"`
+	Interval      time.Duration `yaml:"interval,omitempty"`
+	FixerInterval time.Duration `yaml:"fixer_interval,omitempty"`
+	Expiration    time.Duration `yaml:"expiration,omitempty"`
 }
