@@ -17,9 +17,9 @@ name: Test
 on:
   workflow_dispatch:
   push:
-    branches: [master]
+    branches: [openvidu/main]
   pull_request:
-    branches: [master]
+    branches: [openvidu/main]
 
 jobs:
   test:
