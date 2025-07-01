@@ -53,6 +53,7 @@ func InitializeServer(conf *config.Config, currentNode routing.LocalNode) (*Live
 		createWebhookNotifier,
 		createClientConfiguration,
 		createForwardStats,
+		getNodeStatsConfig,
 		routing.CreateRouter,
 		getLimitConf,
 		config.DefaultAPIConfig,
@@ -78,6 +79,7 @@ func InitializeServer(conf *config.Config, currentNode routing.LocalNode) (*Live
 		NewRoomAllocator,
 		NewRoomService,
 		NewRTCService,
+		NewRTCRestService,
 		NewAgentService,
 		NewAgentDispatchService,
 		agent.NewAgentClient,
@@ -93,6 +95,7 @@ func InitializeServer(conf *config.Config, currentNode routing.LocalNode) (*Live
 		rpc.NewTopicFormatter,
 		rpc.NewTypedRoomClient,
 		rpc.NewTypedParticipantClient,
+		rpc.NewTypedRTCRestParticipantClient,
 		rpc.NewTypedAgentDispatchInternalClient,
 		NewLocalRoomManager,
 		NewTURNAuthHandler,
@@ -116,6 +119,7 @@ func InitializeRouter(conf *config.Config, currentNode routing.LocalNode) (routi
 		getRoomConfig,
 		routing.NewRoomManagerClient,
 		rpc.NewKeepalivePubSub,
+		getNodeStatsConfig,
 		routing.CreateRouter,
 	)
 
@@ -157,15 +161,13 @@ func createKeyProvider(conf *config.Config) (auth.KeyProvider, error) {
 
 func createWebhookNotifier(conf *config.Config, provider auth.KeyProvider) (webhook.QueuedNotifier, error) {
 	wc := conf.WebHook
-	if len(wc.URLs) == 0 {
-		return nil, nil
-	}
+
 	secret := provider.GetSecret(wc.APIKey)
-	if secret == "" {
+	if secret == "" && len(wc.URLs) > 0 {
 		return nil, ErrWebHookMissingAPIKey
 	}
 
-	return webhook.NewDefaultNotifier(wc.APIKey, secret, wc.URLs), nil
+	return webhook.NewDefaultNotifier(wc, provider)
 }
 
 func createRedisClient(conf *config.Config) (redis.UniversalClient, error) {
@@ -268,4 +270,8 @@ func createForwardStats(conf *config.Config) *sfu.ForwardStats {
 
 func newInProcessTurnServer(conf *config.Config, authHandler turn.AuthHandler) (*turn.Server, error) {
 	return NewTurnServer(conf, authHandler, false)
+}
+
+func getNodeStatsConfig(config *config.Config) config.NodeStatsConfig {
+	return config.NodeStats
 }

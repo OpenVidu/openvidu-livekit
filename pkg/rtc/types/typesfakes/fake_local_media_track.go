@@ -8,6 +8,7 @@ import (
 	"github.com/livekit/livekit-server/pkg/sfu"
 	"github.com/livekit/livekit-server/pkg/sfu/mime"
 	"github.com/livekit/protocol/livekit"
+	"github.com/livekit/protocol/logger"
 )
 
 type FakeLocalMediaTrack struct {
@@ -33,6 +34,10 @@ type FakeLocalMediaTrack struct {
 	clearAllReceiversMutex       sync.RWMutex
 	clearAllReceiversArgsForCall []struct {
 		arg1 bool
+	}
+	ClearSubscriberNodesMaxQualityStub        func()
+	clearSubscriberNodesMaxQualityMutex       sync.RWMutex
+	clearSubscriberNodesMaxQualityArgsForCall []struct {
 	}
 	CloseStub        func(bool)
 	closeMutex       sync.RWMutex
@@ -199,6 +204,16 @@ type FakeLocalMediaTrack struct {
 	}
 	kindReturnsOnCall map[int]struct {
 		result1 livekit.TrackType
+	}
+	LoggerStub        func() logger.Logger
+	loggerMutex       sync.RWMutex
+	loggerArgsForCall []struct {
+	}
+	loggerReturns struct {
+		result1 logger.Logger
+	}
+	loggerReturnsOnCall map[int]struct {
+		result1 logger.Logger
 	}
 	NameStub        func() string
 	nameMutex       sync.RWMutex
@@ -482,6 +497,30 @@ func (fake *FakeLocalMediaTrack) ClearAllReceiversArgsForCall(i int) bool {
 	defer fake.clearAllReceiversMutex.RUnlock()
 	argsForCall := fake.clearAllReceiversArgsForCall[i]
 	return argsForCall.arg1
+}
+
+func (fake *FakeLocalMediaTrack) ClearSubscriberNodesMaxQuality() {
+	fake.clearSubscriberNodesMaxQualityMutex.Lock()
+	fake.clearSubscriberNodesMaxQualityArgsForCall = append(fake.clearSubscriberNodesMaxQualityArgsForCall, struct {
+	}{})
+	stub := fake.ClearSubscriberNodesMaxQualityStub
+	fake.recordInvocation("ClearSubscriberNodesMaxQuality", []interface{}{})
+	fake.clearSubscriberNodesMaxQualityMutex.Unlock()
+	if stub != nil {
+		fake.ClearSubscriberNodesMaxQualityStub()
+	}
+}
+
+func (fake *FakeLocalMediaTrack) ClearSubscriberNodesMaxQualityCallCount() int {
+	fake.clearSubscriberNodesMaxQualityMutex.RLock()
+	defer fake.clearSubscriberNodesMaxQualityMutex.RUnlock()
+	return len(fake.clearSubscriberNodesMaxQualityArgsForCall)
+}
+
+func (fake *FakeLocalMediaTrack) ClearSubscriberNodesMaxQualityCalls(stub func()) {
+	fake.clearSubscriberNodesMaxQualityMutex.Lock()
+	defer fake.clearSubscriberNodesMaxQualityMutex.Unlock()
+	fake.ClearSubscriberNodesMaxQualityStub = stub
 }
 
 func (fake *FakeLocalMediaTrack) Close(arg1 bool) {
@@ -1352,6 +1391,59 @@ func (fake *FakeLocalMediaTrack) KindReturnsOnCall(i int, result1 livekit.TrackT
 	}{result1}
 }
 
+func (fake *FakeLocalMediaTrack) Logger() logger.Logger {
+	fake.loggerMutex.Lock()
+	ret, specificReturn := fake.loggerReturnsOnCall[len(fake.loggerArgsForCall)]
+	fake.loggerArgsForCall = append(fake.loggerArgsForCall, struct {
+	}{})
+	stub := fake.LoggerStub
+	fakeReturns := fake.loggerReturns
+	fake.recordInvocation("Logger", []interface{}{})
+	fake.loggerMutex.Unlock()
+	if stub != nil {
+		return stub()
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *FakeLocalMediaTrack) LoggerCallCount() int {
+	fake.loggerMutex.RLock()
+	defer fake.loggerMutex.RUnlock()
+	return len(fake.loggerArgsForCall)
+}
+
+func (fake *FakeLocalMediaTrack) LoggerCalls(stub func() logger.Logger) {
+	fake.loggerMutex.Lock()
+	defer fake.loggerMutex.Unlock()
+	fake.LoggerStub = stub
+}
+
+func (fake *FakeLocalMediaTrack) LoggerReturns(result1 logger.Logger) {
+	fake.loggerMutex.Lock()
+	defer fake.loggerMutex.Unlock()
+	fake.LoggerStub = nil
+	fake.loggerReturns = struct {
+		result1 logger.Logger
+	}{result1}
+}
+
+func (fake *FakeLocalMediaTrack) LoggerReturnsOnCall(i int, result1 logger.Logger) {
+	fake.loggerMutex.Lock()
+	defer fake.loggerMutex.Unlock()
+	fake.LoggerStub = nil
+	if fake.loggerReturnsOnCall == nil {
+		fake.loggerReturnsOnCall = make(map[int]struct {
+			result1 logger.Logger
+		})
+	}
+	fake.loggerReturnsOnCall[i] = struct {
+		result1 logger.Logger
+	}{result1}
+}
+
 func (fake *FakeLocalMediaTrack) Name() string {
 	fake.nameMutex.Lock()
 	ret, specificReturn := fake.nameReturnsOnCall[len(fake.nameArgsForCall)]
@@ -2216,6 +2308,8 @@ func (fake *FakeLocalMediaTrack) Invocations() map[string][][]interface{} {
 	defer fake.addSubscriberMutex.RUnlock()
 	fake.clearAllReceiversMutex.RLock()
 	defer fake.clearAllReceiversMutex.RUnlock()
+	fake.clearSubscriberNodesMaxQualityMutex.RLock()
+	defer fake.clearSubscriberNodesMaxQualityMutex.RUnlock()
 	fake.closeMutex.RLock()
 	defer fake.closeMutex.RUnlock()
 	fake.getAllSubscribersMutex.RLock()
@@ -2248,6 +2342,8 @@ func (fake *FakeLocalMediaTrack) Invocations() map[string][][]interface{} {
 	defer fake.isSubscriberMutex.RUnlock()
 	fake.kindMutex.RLock()
 	defer fake.kindMutex.RUnlock()
+	fake.loggerMutex.RLock()
+	defer fake.loggerMutex.RUnlock()
 	fake.nameMutex.RLock()
 	defer fake.nameMutex.RUnlock()
 	fake.notifySubscriberNodeMaxQualityMutex.RLock()

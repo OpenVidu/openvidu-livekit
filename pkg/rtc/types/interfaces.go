@@ -111,6 +111,7 @@ const (
 	ParticipantCloseReasonRoomClosed
 	ParticipantCloseReasonUserUnavailable
 	ParticipantCloseReasonUserRejected
+	ParticipantCloseReasonMoveFailed
 )
 
 func (p ParticipantCloseReason) String() string {
@@ -169,6 +170,8 @@ func (p ParticipantCloseReason) String() string {
 		return "USER_UNAVAILABLE"
 	case ParticipantCloseReasonUserRejected:
 		return "USER_REJECTED"
+	case ParticipantCloseReasonMoveFailed:
+		return "MOVE_FAILED"
 	default:
 		return fmt.Sprintf("%d", int(p))
 	}
@@ -184,7 +187,7 @@ func (p ParticipantCloseReason) ToDisconnectReason() livekit.DisconnectReason {
 		// expected to be connected but is not
 		return livekit.DisconnectReason_JOIN_FAILURE
 	case ParticipantCloseReasonPeerConnectionDisconnected:
-		return livekit.DisconnectReason_STATE_MISMATCH
+		return livekit.DisconnectReason_CONNECTION_TIMEOUT
 	case ParticipantCloseReasonDuplicateIdentity, ParticipantCloseReasonStale:
 		return livekit.DisconnectReason_DUPLICATE_IDENTITY
 	case ParticipantCloseReasonMigrationRequested, ParticipantCloseReasonMigrationComplete, ParticipantCloseReasonSimulateMigration:
@@ -195,7 +198,8 @@ func (p ParticipantCloseReason) ToDisconnectReason() livekit.DisconnectReason {
 		return livekit.DisconnectReason_ROOM_DELETED
 	case ParticipantCloseReasonSimulateNodeFailure, ParticipantCloseReasonSimulateServerLeave:
 		return livekit.DisconnectReason_SERVER_SHUTDOWN
-	case ParticipantCloseReasonNegotiateFailed, ParticipantCloseReasonPublicationError, ParticipantCloseReasonSubscriptionError, ParticipantCloseReasonDataChannelError, ParticipantCloseReasonMigrateCodecMismatch:
+	case ParticipantCloseReasonNegotiateFailed, ParticipantCloseReasonPublicationError, ParticipantCloseReasonSubscriptionError,
+		ParticipantCloseReasonDataChannelError, ParticipantCloseReasonMigrateCodecMismatch, ParticipantCloseReasonMoveFailed:
 		return livekit.DisconnectReason_STATE_MISMATCH
 	case ParticipantCloseReasonSignalSourceClose:
 		return livekit.DisconnectReason_SIGNAL_CLOSE
@@ -313,6 +317,21 @@ type AddTrackParams struct {
 	Red    bool
 }
 
+type MoveToRoomParams struct {
+	RoomName      livekit.RoomName
+	ParticipantID livekit.ParticipantID
+	Helper        LocalParticipantHelper
+}
+
+//counterfeiter:generate . LocalParticipantHelper
+type LocalParticipantHelper interface {
+	ResolveMediaTrack(LocalParticipant, livekit.TrackID) MediaResolverResult
+	GetParticipantInfo(pID livekit.ParticipantID) *livekit.ParticipantInfo
+	GetRegionSettings(ip string) *livekit.RegionSettings
+	GetSubscriberForwarderState(p LocalParticipant) (map[livekit.TrackID]*livekit.RTPForwarderState, error)
+	ShouldRegressCodec() bool
+}
+
 //counterfeiter:generate . LocalParticipant
 type LocalParticipant interface {
 	Participant
@@ -322,6 +341,7 @@ type LocalParticipant interface {
 	// getters
 	GetTrailer() []byte
 	GetLogger() logger.Logger
+	GetLoggerResolver() logger.DeferredFieldResolver
 	GetAdaptiveStream() bool
 	ProtocolVersion() ProtocolVersion
 	SupportsSyncStreamID() bool
@@ -340,6 +360,8 @@ type LocalParticipant interface {
 	GetICEConnectionInfo() []*ICEConnectionInfo
 	HasConnected() bool
 	GetEnabledPublishCodecs() []*livekit.Codec
+	GetPublisherICESessionUfrag() (string, error)
+	SupportsMoving() bool
 
 	SetResponseSink(sink routing.MessageSink)
 	CloseSignalConnection(reason SignallingCloseReason)
@@ -367,6 +389,8 @@ type LocalParticipant interface {
 	AddICECandidate(candidate webrtc.ICECandidateInit, target livekit.SignalTarget)
 	HandleOffer(sdp webrtc.SessionDescription) error
 	GetAnswer() (webrtc.SessionDescription, error)
+	HandleICETrickleSDPFragment(sdpFragment string) error
+	HandleICERestartSDPFragment(sdpFragment string) (string, error)
 	AddTrack(req *livekit.AddTrackRequest)
 	SetTrackMuted(trackID livekit.TrackID, muted bool, fromAdmin bool) *livekit.TrackInfo
 
@@ -403,7 +427,8 @@ type LocalParticipant interface {
 	SendJoinResponse(joinResponse *livekit.JoinResponse) error
 	SendParticipantUpdate(participants []*livekit.ParticipantInfo) error
 	SendSpeakerUpdate(speakers []*livekit.SpeakerInfo, force bool) error
-	SendDataPacket(kind livekit.DataPacket_Kind, encoded []byte) error
+	SendDataMessage(kind livekit.DataPacket_Kind, data []byte) error
+	SendDataMessageUnlabeled(data []byte, useRaw bool, sender livekit.ParticipantIdentity) error
 	SendRoomUpdate(room *livekit.Room) error
 	SendConnectionQualityUpdate(update *livekit.ConnectionQualityUpdate) error
 	SubscriptionPermissionUpdate(publisherID livekit.ParticipantID, trackID livekit.TrackID, allowed bool)
@@ -411,9 +436,11 @@ type LocalParticipant interface {
 	SendRequestResponse(requestResponse *livekit.RequestResponse) error
 	HandleReconnectAndSendResponse(reconnectReason livekit.ReconnectReason, reconnectResponse *livekit.ReconnectResponse) error
 	IssueFullReconnect(reason ParticipantCloseReason)
+	SendRoomMovedResponse(moved *livekit.RoomMovedResponse) error
 
 	// callbacks
-	OnStateChange(func(p LocalParticipant, state livekit.ParticipantInfo_State))
+	OnStateChange(func(p LocalParticipant))
+	OnSubscriberReady(callback func(LocalParticipant))
 	OnMigrateStateChange(func(p LocalParticipant, migrateState MigrateState))
 	// OnTrackPublished - remote added a track
 	OnTrackPublished(func(LocalParticipant, MediaTrack))
@@ -424,6 +451,7 @@ type LocalParticipant interface {
 	// OnParticipantUpdate - metadata or permission is updated
 	OnParticipantUpdate(callback func(LocalParticipant))
 	OnDataPacket(callback func(LocalParticipant, livekit.DataPacket_Kind, *livekit.DataPacket))
+	OnDataMessage(callback func(LocalParticipant, []byte))
 	OnSubscribeStatusChanged(fn func(publisherID livekit.ParticipantID, subscribed bool))
 	OnClose(callback func(LocalParticipant))
 	OnClaimsChanged(callback func(LocalParticipant))
@@ -441,6 +469,7 @@ type LocalParticipant interface {
 		dataChannels []*livekit.DataChannelInfo,
 	)
 	IsReconnect() bool
+	MoveToRoom(params MoveToRoomParams)
 
 	UpdateMediaRTT(rtt uint32)
 	UpdateSignalingRTT(rtt uint32)
@@ -508,6 +537,7 @@ type MediaTrack interface {
 	PublisherID() livekit.ParticipantID
 	PublisherIdentity() livekit.ParticipantIdentity
 	PublisherVersion() uint32
+	Logger() logger.Logger
 
 	IsMuted() bool
 	SetMuted(muted bool)
@@ -558,6 +588,7 @@ type LocalMediaTrack interface {
 	SetRTT(rtt uint32)
 
 	NotifySubscriberNodeMaxQuality(nodeID livekit.NodeID, qualities []SubscribedCodecQuality)
+	ClearSubscriberNodesMaxQuality()
 	NotifySubscriberNodeMediaLoss(nodeID livekit.NodeID, fractionalLoss uint8)
 }
 

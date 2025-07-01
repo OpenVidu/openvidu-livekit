@@ -31,6 +31,7 @@ import (
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
+	lksdp "github.com/livekit/protocol/sdp"
 	"github.com/livekit/protocol/utils"
 	"github.com/livekit/protocol/utils/guid"
 
@@ -88,7 +89,7 @@ func TestTrackPublishing(t *testing.T) {
 			published = true
 		})
 		p.UpTrackManager.AddPublishedTrack(track)
-		p.handleTrackPublished(track)
+		p.handleTrackPublished(track, false)
 		require.True(t, published)
 		require.False(t, updated)
 		require.Len(t, p.UpTrackManager.publishedTracks, 1)
@@ -255,7 +256,7 @@ func TestDisconnectTiming(t *testing.T) {
 		}()
 		track := &typesfakes.FakeMediaTrack{}
 		p.UpTrackManager.AddPublishedTrack(track)
-		p.handleTrackPublished(track)
+		p.handleTrackPublished(track, false)
 
 		// close channel and then try to Negotiate
 		msg.Close()
@@ -534,7 +535,7 @@ func TestPreferVideoCodecForPublisher(t *testing.T) {
 		for _, m := range parsed.MediaDescriptions {
 			if m.MediaName.Media == "video" {
 				if videoSectionIndex == i {
-					codecs, err := codecsFromMediaDescription(m)
+					codecs, err := lksdp.CodecsFromMediaDescription(m)
 					require.NoError(t, err)
 					if mime.IsMimeTypeCodecStringH264(codecs[0].Name) {
 						h264Preferred = true
@@ -618,7 +619,7 @@ func TestPreferAudioCodecForRed(t *testing.T) {
 			for _, m := range parsed.MediaDescriptions {
 				if m.MediaName.Media == "audio" {
 					if audioSectionIndex == i {
-						codecs, err := codecsFromMediaDescription(m)
+						codecs, err := lksdp.CodecsFromMediaDescription(m)
 						require.NoError(t, err)
 						// nack is always enabled. if red is preferred, server will not generate nack request
 						var nackEnabled bool
@@ -704,6 +705,7 @@ func newParticipantForTestWithOpts(identity livekit.ParticipantIdentity, opts *p
 		Logger:                 LoggerWithParticipant(logger.GetLogger(), identity, sid, false),
 		Telemetry:              &telemetryfakes.FakeTelemetryService{},
 		VersionGenerator:       utils.NewDefaultTimedVersionGenerator(),
+		ParticipantHelper:      &typesfakes.FakeLocalParticipantHelper{},
 	})
 	p.isPublisher.Store(opts.publisher)
 	p.updateState(livekit.ParticipantInfo_ACTIVE)

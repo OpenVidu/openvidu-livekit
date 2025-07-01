@@ -83,8 +83,6 @@ func (h TransportManagerPublisherTransportHandler) OnAnswer(sd webrtc.SessionDes
 // -------------------------------
 
 type TransportManagerParams struct {
-	Identity                     livekit.ParticipantIdentity
-	SID                          livekit.ParticipantID
 	SubscriberAsPrimary          bool
 	Config                       *WebRTCConfig
 	Twcc                         *twcc.Responder
@@ -151,8 +149,6 @@ func NewTransportManager(params TransportManagerParams) (*TransportManager, erro
 
 	lgr := LoggerWithPCTarget(params.Logger, livekit.SignalTarget_PUBLISHER)
 	publisher, err := NewPCTransport(TransportParams{
-		ParticipantID:                params.SID,
-		ParticipantIdentity:          params.Identity,
 		ProtocolVersion:              params.ProtocolVersion,
 		Config:                       params.Config,
 		Twcc:                         params.Twcc,
@@ -176,8 +172,6 @@ func NewTransportManager(params TransportManagerParams) (*TransportManager, erro
 
 	lgr = LoggerWithPCTarget(params.Logger, livekit.SignalTarget_SUBSCRIBER)
 	subscriber, err := NewPCTransport(TransportParams{
-		ParticipantID:            params.SID,
-		ParticipantIdentity:      params.Identity,
 		ProtocolVersion:          params.ProtocolVersion,
 		Config:                   params.Config,
 		DirectionConfig:          params.Config.Subscriber,
@@ -297,25 +291,53 @@ func (t *TransportManager) RemoveSubscribedTrack(subTrack types.SubscribedTrack)
 	t.subscriber.RemoveTrackFromStreamAllocator(subTrack)
 }
 
-func (t *TransportManager) SendDataPacket(kind livekit.DataPacket_Kind, encoded []byte) error {
+func (t *TransportManager) SendDataMessage(kind livekit.DataPacket_Kind, data []byte) error {
 	// downstream data is sent via primary peer connection
-	err := t.getTransport(true).SendDataPacket(kind, encoded)
+	return t.handleSendDataResult(t.getTransport(true).SendDataMessage(kind, data), kind.String(), len(data))
+}
+
+func (t *TransportManager) SendDataMessageUnlabeled(data []byte, useRaw bool, sender livekit.ParticipantIdentity) error {
+	// downstream data is sent via primary peer connection
+	return t.handleSendDataResult(
+		t.getTransport(true).SendDataMessageUnlabeled(data, useRaw, sender),
+		"unlabeled",
+		len(data),
+	)
+}
+
+func (t *TransportManager) handleSendDataResult(err error, kind string, size int) error {
 	if err != nil {
-		if !utils.ErrorIsOneOf(err, io.ErrClosedPipe, sctp.ErrStreamClosed, ErrTransportFailure, ErrDataChannelBufferFull, context.DeadlineExceeded) {
+		if !utils.ErrorIsOneOf(
+			err,
+			io.ErrClosedPipe,
+			sctp.ErrStreamClosed,
+			ErrTransportFailure,
+			ErrDataChannelBufferFull,
+			context.DeadlineExceeded,
+		) {
 			if errors.Is(err, datachannel.ErrDataDroppedBySlowReader) {
 				droppedBySlowReaderCount := t.droppedBySlowReaderCount.Inc()
 				if (droppedBySlowReaderCount-1)%100 == 0 {
-					t.params.Logger.Infow("drop data packet by slow reader", "error", err, "kind", kind, "count", droppedBySlowReaderCount)
+					t.params.Logger.Infow(
+						"drop data message by slow reader",
+						"error", err,
+						"kind", kind,
+						"count", droppedBySlowReaderCount,
+					)
 				}
 			} else {
-				t.params.Logger.Warnw("send data packet error", err)
+				t.params.Logger.Warnw("send data message error", err)
 			}
 		}
 		if utils.ErrorIsOneOf(err, sctp.ErrStreamClosed, io.ErrClosedPipe) {
-			t.params.SubscriberHandler.OnDataSendError(err)
+			if t.params.SubscriberAsPrimary {
+				t.params.SubscriberHandler.OnDataSendError(err)
+			} else {
+				t.params.PublisherHandler.OnDataSendError(err)
+			}
 		}
 	} else {
-		t.params.DataChannelStats.AddBytes(uint64(len(encoded)), true)
+		t.params.DataChannelStats.AddBytes(uint64(size), true)
 	}
 
 	return err
@@ -355,6 +377,7 @@ func (t *TransportManager) createDataChannelsForSubscriber(pendingDataChannels [
 		return err
 	}
 
+	ordered = false
 	retransmits := uint16(0)
 	negotiated = t.params.Migration && lossyIDPtr == nil
 	if err := t.subscriber.CreateDataChannel(LossyDataChannel, &webrtc.DataChannelInit{
@@ -383,8 +406,8 @@ func (t *TransportManager) GetUnmatchMediaForOffer(offer webrtc.SessionDescripti
 		parsedAnswer, err1 := answer.Unmarshal()
 		if err1 != nil {
 			// should not happen
-			t.params.Logger.Errorw("failed to parse last answer", err)
-			return
+			t.params.Logger.Errorw("failed to parse last answer", err1)
+			return parsed, unmatched, err1
 		}
 
 		for i := len(parsedAnswer.MediaDescriptions) - 1; i >= 0; i-- {
@@ -436,6 +459,18 @@ func (t *TransportManager) GetAnswer() (webrtc.SessionDescription, error) {
 		t.lastPublisherAnswer.Store(answer)
 	}
 	return answer, err
+}
+
+func (t *TransportManager) GetPublisherICESessionUfrag() (string, error) {
+	return t.publisher.GetICESessionUfrag()
+}
+
+func (t *TransportManager) HandleICETrickleSDPFragment(sdpFragment string) error {
+	return t.publisher.HandleICETrickleSDPFragment(sdpFragment)
+}
+
+func (t *TransportManager) HandleICERestartSDPFragment(sdpFragment string) (string, error) {
+	return t.publisher.HandleICERestartSDPFragment(sdpFragment)
 }
 
 func (t *TransportManager) ProcessPendingPublisherOffer() {
@@ -587,6 +622,14 @@ func (t *TransportManager) getTransport(isPrimary bool) *PCTransport {
 	return pcTransport
 }
 
+func (t *TransportManager) getLowestPriorityConnectionType() types.ICEConnectionType {
+	ctype := t.publisher.GetICEConnectionType()
+	if stype := t.subscriber.GetICEConnectionType(); stype > ctype {
+		ctype = stype
+	}
+	return ctype
+}
+
 func (t *TransportManager) handleConnectionFailed(isShortLived bool) {
 	if !t.params.AllowTCPFallback || t.params.UseOneShotSignallingMode {
 		return
@@ -614,6 +657,8 @@ func (t *TransportManager) handleConnectionFailed(isShortLived bool) {
 		return
 	}
 
+	lowestPriorityConnectionType := t.getLowestPriorityConnectionType()
+
 	//
 	// Checking only `PreferenceSubscriber` field although any connection failure (PUBLISHER OR SUBSCRIBER) will
 	// flow through here.
@@ -621,13 +666,36 @@ func (t *TransportManager) handleConnectionFailed(isShortLived bool) {
 	// As both transports are switched to the same type on any failure, checking just subscriber should be fine.
 	//
 	getNext := func(ic *livekit.ICEConfig) livekit.ICECandidateType {
-		if ic.PreferenceSubscriber == livekit.ICECandidateType_ICT_NONE && t.params.ClientInfo.SupportsICETCP() && t.canUseICETCP() {
-			return livekit.ICECandidateType_ICT_TCP
-		} else if ic.PreferenceSubscriber != livekit.ICECandidateType_ICT_TLS && t.params.TURNSEnabled {
-			return livekit.ICECandidateType_ICT_TLS
-		} else {
-			return livekit.ICECandidateType_ICT_NONE
+		switch lowestPriorityConnectionType {
+		case types.ICEConnectionTypeUDP:
+			// try ICE/TCP if ICE/UDP failed
+			if ic.PreferenceSubscriber == livekit.ICECandidateType_ICT_NONE {
+				if t.params.ClientInfo.SupportsICETCP() && t.canUseICETCP() {
+					return livekit.ICECandidateType_ICT_TCP
+				} else if t.params.TURNSEnabled {
+					// fallback to TURN/TLS if TCP is not supported
+					return livekit.ICECandidateType_ICT_TLS
+				}
+			}
+
+		case types.ICEConnectionTypeTCP:
+			// try TURN/TLS if ICE/TCP failed,
+			// the configuration could have been ICT_NONE or ICT_TCP,
+			// in either case, fallback to TURN/TLS
+			if t.params.TURNSEnabled {
+				return livekit.ICECandidateType_ICT_TLS
+			} else {
+				// keep the current config
+				return ic.PreferenceSubscriber
+			}
+
+		case types.ICEConnectionTypeTURN:
+			// TURN/TLS is the most permissive option, if that fails there is nowhere to go to
+			// the configuration could have been ICT_NONE or ICT_TLS,
+			// keep the current config
+			return ic.PreferenceSubscriber
 		}
+		return livekit.ICECandidateType_ICT_NONE
 	}
 
 	var preferNext livekit.ICECandidateType
@@ -711,6 +779,7 @@ func (t *TransportManager) ProcessPendingPublisherDataChannels() {
 			err        error
 		)
 		if ci.Label == LossyDataChannel {
+			ordered = false
 			retransmits := uint16(0)
 			id := uint16(ci.GetId())
 			dcLabel, dcID, dcExisting, err = t.publisher.CreateDataChannelIfEmpty(LossyDataChannel, &webrtc.DataChannelInit{

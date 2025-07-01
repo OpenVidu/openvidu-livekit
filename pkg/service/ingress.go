@@ -196,12 +196,8 @@ func (s *IngressService) CreateIngressWithUrl(ctx context.Context, urlStr string
 		if err != nil {
 			return info, err
 		}
-	}
-
-	// BEGIN OPENVIDU BLOCK
-	// TODO Remove this store Ingress call for URL pull as it is redundant since
-	// the ingress service sends a CreateIngress RPC
-	if req.InputType != livekit.IngressInput_URL_INPUT {
+		// The Ingress instance will create the ingress object when handling the URL pull ingress
+	} else {
 		_, err = s.io.CreateIngress(ctx, info)
 		switch err {
 		case nil:
@@ -214,7 +210,6 @@ func (s *IngressService) CreateIngressWithUrl(ctx context.Context, urlStr string
 			return nil, err
 		}
 	}
-	// END OPENVIDU BLOCK
 
 	return info, nil
 }

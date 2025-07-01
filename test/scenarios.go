@@ -164,6 +164,32 @@ func scenarioDataPublish(t *testing.T) {
 	})
 }
 
+func scenarioDataUnlabeledPublish(t *testing.T) {
+	c1 := createRTCClient("dp1", defaultServerPort, nil)
+	c2 := createRTCClient("dp2", secondServerPort, nil)
+	waitUntilConnected(t, c1, c2)
+	defer stopClients(c1, c2)
+
+	payload := "test unlabeled bytes"
+
+	received := atomic.NewBool(false)
+	c2.OnDataReceived = func(data []byte, _sid string) {
+		if string(data) == payload {
+			received.Store(true)
+		}
+	}
+
+	require.NoError(t, c1.PublishDataUnlabeled([]byte(payload)))
+
+	testutils.WithTimeout(t, func() string {
+		if received.Load() {
+			return ""
+		} else {
+			return "c2 did not receive published data unlabeled"
+		}
+	})
+}
+
 func scenarioJoinClosedRoom(t *testing.T) {
 	c1 := createRTCClient("jcr1", defaultServerPort, nil)
 	waitUntilConnected(t, c1)

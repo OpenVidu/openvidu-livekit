@@ -17,7 +17,6 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math/rand"
 	"net/http"
 	"slices"
@@ -43,13 +42,19 @@ import (
 	"github.com/livekit/psrpc"
 )
 
-const agentWorkerLoadTarget = 0.65
-
 type AgentSocketUpgrader struct {
 	websocket.Upgrader
 }
 
-func (u AgentSocketUpgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeader http.Header) (*websocket.Conn, agent.WorkerProtocolVersion, bool) {
+func (u AgentSocketUpgrader) Upgrade(
+	w http.ResponseWriter,
+	r *http.Request,
+	responseHeader http.Header,
+) (
+	conn *websocket.Conn,
+	registration agent.WorkerRegistration,
+	ok bool,
+) {
 	if u.CheckOrigin == nil {
 		// allow connections from any origin, since script may be hosted anywhere
 		// security is enforced by access tokens
@@ -61,29 +66,31 @@ func (u AgentSocketUpgrader) Upgrade(w http.ResponseWriter, r *http.Request, res
 	// reject non websocket requests
 	if !websocket.IsWebSocketUpgrade(r) {
 		w.WriteHeader(404)
-		return nil, 0, false
+		return
 	}
 
 	// require a claim
 	claims := GetGrants(r.Context())
 	if claims == nil || claims.Video == nil || !claims.Video.Agent {
-		handleError(w, r, http.StatusUnauthorized, rtc.ErrPermissionDenied)
-		return nil, 0, false
+		HandleError(w, r, http.StatusUnauthorized, rtc.ErrPermissionDenied)
+		return
 	}
+
+	registration = agent.MakeWorkerRegistration()
+	registration.ClientIP = GetClientIP(r)
 
 	// upgrade
 	conn, err := u.Upgrader.Upgrade(w, r, responseHeader)
 	if err != nil {
-		handleError(w, r, http.StatusInternalServerError, err)
-		return nil, 0, false
+		HandleError(w, r, http.StatusInternalServerError, err)
+		return
 	}
 
-	var protocol agent.WorkerProtocolVersion = agent.CurrentProtocol
 	if pv, err := strconv.Atoi(r.FormValue("protocol")); err == nil {
-		protocol = agent.WorkerProtocolVersion(pv)
+		registration.Protocol = agent.WorkerProtocolVersion(pv)
 	}
 
-	return conn, protocol, true
+	return conn, registration, true
 }
 
 func DispatchAgentWorkerSignal(c agent.SignalConn, h agent.WorkerSignalHandler, l logger.Logger) bool {
@@ -105,8 +112,8 @@ func DispatchAgentWorkerSignal(c agent.SignalConn, h agent.WorkerSignalHandler, 
 	return true
 }
 
-func HandshakeAgentWorker(c agent.SignalConn, serverInfo *livekit.ServerInfo, protocol agent.WorkerProtocolVersion, l logger.Logger) (r agent.WorkerRegistration, ok bool) {
-	wr := agent.NewWorkerRegisterer(c, serverInfo, protocol)
+func HandshakeAgentWorker(c agent.SignalConn, serverInfo *livekit.ServerInfo, registration agent.WorkerRegistration, l logger.Logger) (r agent.WorkerRegistration, ok bool) {
+	wr := agent.NewWorkerRegisterer(c, serverInfo, registration)
 	if err := c.SetReadDeadline(wr.Deadline()); err != nil {
 		return
 	}
@@ -155,7 +162,8 @@ type workerKey struct {
 	jobType   livekit.JobType
 }
 
-func NewAgentService(conf *config.Config,
+func NewAgentService(
+	conf *config.Config,
 	currentNode routing.LocalNode,
 	bus psrpc.MessageBus,
 	keyProvider auth.KeyProvider,
@@ -187,9 +195,9 @@ func NewAgentService(conf *config.Config,
 	return s, nil
 }
 
-func (s *AgentService) ServeHTTP(writer http.ResponseWriter, r *http.Request) {
-	if conn, protocol, ok := s.upgrader.Upgrade(writer, r, nil); ok {
-		s.HandleConnection(r.Context(), NewWSSignalConnection(conn), protocol)
+func (s *AgentService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if conn, registration, ok := s.upgrader.Upgrade(w, r, nil); ok {
+		s.HandleConnection(r.Context(), NewWSSignalConnection(conn), registration)
 		conn.Close()
 	}
 }
@@ -217,8 +225,8 @@ func NewAgentHandler(
 	}
 }
 
-func (h *AgentHandler) HandleConnection(ctx context.Context, conn agent.SignalConn, protocol agent.WorkerProtocolVersion) {
-	registration, ok := HandshakeAgentWorker(conn, h.serverInfo, protocol, h.logger)
+func (h *AgentHandler) HandleConnection(ctx context.Context, conn agent.SignalConn, registration agent.WorkerRegistration) {
+	registration, ok := HandshakeAgentWorker(conn, h.serverInfo, registration, h.logger)
 	if !ok {
 		return
 	}
@@ -259,8 +267,6 @@ func (h *AgentHandler) registerWorker(w *agent.Worker) {
 		case livekit.JobType_JT_PARTICIPANT:
 			typeTopic = h.participantTopic
 		}
-
-		fmt.Println(">>> register worker", typeTopic)
 
 		err := h.agentServer.RegisterJobRequestTopic(nameTopic, typeTopic)
 		if err != nil {
@@ -431,7 +437,7 @@ func (h *AgentHandler) JobRequestAffinity(ctx context.Context, job *livekit.Job)
 		}
 
 		if w.Status() == livekit.WorkerStatus_WS_AVAILABLE {
-			affinity += max(0, agentWorkerLoadTarget-w.Load())
+			affinity += max(0, 1-w.Load())
 		}
 	}
 

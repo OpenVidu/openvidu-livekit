@@ -28,17 +28,34 @@ var StaticConfigurations = []ConfigurationItem{
 	// },
 	{
 		Match: &ScriptMatch{Expr: `c.browser == "safari"`},
-		Configuration: &livekit.ClientConfiguration{DisabledCodecs: &livekit.DisabledCodecs{Codecs: []*livekit.Codec{
-			{Mime: mime.MimeTypeAV1.String()},
-		}}},
-		Merge: false,
+		Configuration: &livekit.ClientConfiguration{
+			DisabledCodecs: &livekit.DisabledCodecs{
+				Codecs: []*livekit.Codec{
+					{Mime: mime.MimeTypeAV1.String()},
+				},
+			},
+		},
+		Merge: true,
+	},
+	{
+		Match: &ScriptMatch{Expr: `c.browser == "safari" && c.browser_version > "18.3"`},
+		Configuration: &livekit.ClientConfiguration{
+			DisabledCodecs: &livekit.DisabledCodecs{
+				Publish: []*livekit.Codec{
+					{Mime: mime.MimeTypeVP9.String()},
+				},
+			},
+		},
+		Merge: true,
 	},
 	{
 		Match: &ScriptMatch{Expr: `(c.device_model == "xiaomi 2201117ti" && c.os == "android") ||
 		  ((c.browser == "firefox" || c.browser == "firefox mobile") && (c.os == "linux" || c.os == "android"))`},
 		Configuration: &livekit.ClientConfiguration{
 			DisabledCodecs: &livekit.DisabledCodecs{
-				Publish: []*livekit.Codec{{Mime: mime.MimeTypeH264.String()}},
+				Publish: []*livekit.Codec{
+					{Mime: mime.MimeTypeH264.String()},
+				},
 			},
 		},
 		Merge: false,

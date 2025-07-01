@@ -25,6 +25,7 @@ import (
 
 	"github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/livekit-server/pkg/telemetry/prometheus"
+	"github.com/livekit/livekit-server/pkg/utils"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/protocol/rpc"
@@ -88,11 +89,13 @@ func (r *signalClient) StartParticipantSignal(
 		return
 	}
 
-	l := logger.GetLogger().WithValues(
+	l := utils.GetLogger(ctx).WithValues(
 		"room", roomName,
 		"reqNodeID", nodeID,
 		"participant", pi.Identity,
 		"connID", connectionID,
+		"participantInit", pi,
+		"startSession", logger.Proto(ss),
 	)
 
 	l.Debugw("starting signal connection")

@@ -22,17 +22,17 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/livekit/livekit-server/pkg/utils"
 	"github.com/livekit/protocol/livekit"
-	"github.com/livekit/protocol/logger"
 )
 
-func handleError(w http.ResponseWriter, r *http.Request, status int, err error, keysAndValues ...interface{}) {
+func HandleError(w http.ResponseWriter, r *http.Request, status int, err error, keysAndValues ...interface{}) {
 	keysAndValues = append(keysAndValues, "status", status)
 	if r != nil && r.URL != nil {
 		keysAndValues = append(keysAndValues, "method", r.Method, "path", r.URL.Path)
 	}
 	if !errors.Is(err, context.Canceled) && !errors.Is(r.Context().Err(), context.Canceled) {
-		logger.GetLogger().WithCallDepth(1).Warnw("error handling request", err, keysAndValues...)
+		utils.GetLogger(r.Context()).WithCallDepth(1).Warnw("error handling request", err, keysAndValues...)
 	}
 	w.WriteHeader(status)
 	_, _ = w.Write([]byte(err.Error()))

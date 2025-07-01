@@ -60,7 +60,8 @@ func InitializeServer(conf *config.Config, currentNode routing.LocalNode) (*Live
 	if err != nil {
 		return nil, err
 	}
-	router := routing.CreateRouter(universalClient, currentNode, signalClient, roomManagerClient, keepalivePubSub)
+	nodeStatsConfig := getNodeStatsConfig(conf)
+	router := routing.CreateRouter(universalClient, currentNode, signalClient, roomManagerClient, keepalivePubSub, nodeStatsConfig)
 	objectStore := createStore(universalClient)
 	roomAllocator, err := NewRoomAllocator(conf, router, objectStore)
 	if err != nil {
@@ -119,7 +120,15 @@ func InitializeServer(conf *config.Config, currentNode routing.LocalNode) (*Live
 		return nil, err
 	}
 	sipService := NewSIPService(sipConfig, nodeID, messageBus, sipClient, sipStore, roomService, telemetryService)
-	rtcService := NewRTCService(conf, roomAllocator, objectStore, router, currentNode, telemetryService)
+	rtcService := NewRTCService(conf, roomAllocator, router, telemetryService)
+	rtcRestParticipantClient, err := rpc.NewTypedRTCRestParticipantClient(clientParams)
+	if err != nil {
+		return nil, err
+	}
+	serviceRTCRestService, err := NewRTCRestService(conf, router, roomAllocator, clientParams, topicFormatter, rtcRestParticipantClient)
+	if err != nil {
+		return nil, err
+	}
 	agentService, err := NewAgentService(conf, currentNode, messageBus, keyProvider)
 	if err != nil {
 		return nil, err
@@ -146,7 +155,7 @@ func InitializeServer(conf *config.Config, currentNode routing.LocalNode) (*Live
 	if err != nil {
 		return nil, err
 	}
-	livekitServer, err := NewLivekitServer(conf, roomService, agentDispatchService, egressService, ingressService, sipService, ioInfoService, rtcService, agentService, keyProvider, router, roomManager, signalServer, server, currentNode)
+	livekitServer, err := NewLivekitServer(conf, roomService, agentDispatchService, egressService, ingressService, sipService, ioInfoService, rtcService, serviceRTCRestService, agentService, keyProvider, router, roomManager, signalServer, server, currentNode)
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +185,8 @@ func InitializeRouter(conf *config.Config, currentNode routing.LocalNode) (routi
 	if err != nil {
 		return nil, err
 	}
-	router := routing.CreateRouter(universalClient, currentNode, signalClient, roomManagerClient, keepalivePubSub)
+	nodeStatsConfig := getNodeStatsConfig(conf)
+	router := routing.CreateRouter(universalClient, currentNode, signalClient, roomManagerClient, keepalivePubSub, nodeStatsConfig)
 	return router, nil
 }
 
@@ -217,15 +227,13 @@ func createKeyProvider(conf *config.Config) (auth.KeyProvider, error) {
 
 func createWebhookNotifier(conf *config.Config, provider auth.KeyProvider) (webhook.QueuedNotifier, error) {
 	wc := conf.WebHook
-	if len(wc.URLs) == 0 {
-		return nil, nil
-	}
+
 	secret := provider.GetSecret(wc.APIKey)
-	if secret == "" {
+	if secret == "" && len(wc.URLs) > 0 {
 		return nil, ErrWebHookMissingAPIKey
 	}
 
-	return webhook.NewDefaultNotifier(wc.APIKey, secret, wc.URLs), nil
+	return webhook.NewDefaultNotifier(wc, provider)
 }
 
 func createRedisClient(conf *config.Config) (redis.UniversalClient, error) {
@@ -328,4 +336,8 @@ func createForwardStats(conf *config.Config) *sfu.ForwardStats {
 
 func newInProcessTurnServer(conf *config.Config, authHandler turn.AuthHandler) (*turn.Server, error) {
 	return NewTurnServer(conf, authHandler, false)
+}
+
+func getNodeStatsConfig(config2 *config.Config) config.NodeStatsConfig {
+	return config2.NodeStats
 }

@@ -22,13 +22,14 @@ import (
 
 	"github.com/livekit/livekit-server/pkg/sfu/mime"
 	"github.com/livekit/livekit-server/pkg/telemetry/prometheus"
+	"github.com/livekit/protocol/egress"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/protocol/utils/guid"
 	"github.com/livekit/protocol/webhook"
 )
 
-func (t *telemetryService) NotifyEvent(ctx context.Context, event *livekit.WebhookEvent) {
+func (t *telemetryService) NotifyEvent(ctx context.Context, event *livekit.WebhookEvent, opts ...webhook.NotifyOption) {
 	if t.notifier == nil {
 		return
 	}
@@ -36,7 +37,7 @@ func (t *telemetryService) NotifyEvent(ctx context.Context, event *livekit.Webho
 	event.CreatedAt = time.Now().Unix()
 	event.Id = guid.New("EV_")
 
-	if err := t.notifier.QueueNotify(ctx, event); err != nil {
+	if err := t.notifier.QueueNotify(ctx, event, opts...); err != nil {
 		logger.Warnw("failed to notify webhook", err, "event", event.Event)
 	}
 }
@@ -428,12 +429,19 @@ func (t *telemetryService) TrackSubscribeRTPStats(
 	})
 }
 
+func (t *telemetryService) NotifyEgressEvent(ctx context.Context, event string, info *livekit.EgressInfo) {
+	opts := egress.GetEgressNotifyOptions(info)
+
+	t.NotifyEvent(ctx, &livekit.WebhookEvent{
+		Event:      event,
+		EgressInfo: info,
+	}, opts...)
+}
+
 func (t *telemetryService) EgressStarted(ctx context.Context, info *livekit.EgressInfo) {
+
 	t.enqueue(func() {
-		t.NotifyEvent(ctx, &livekit.WebhookEvent{
-			Event:      webhook.EventEgressStarted,
-			EgressInfo: info,
-		})
+		t.NotifyEgressEvent(ctx, webhook.EventEgressStarted, info)
 
 		t.SendEvent(ctx, newEgressEvent(livekit.AnalyticsEventType_EGRESS_STARTED, info))
 	})
@@ -441,20 +449,15 @@ func (t *telemetryService) EgressStarted(ctx context.Context, info *livekit.Egre
 
 func (t *telemetryService) EgressUpdated(ctx context.Context, info *livekit.EgressInfo) {
 	t.enqueue(func() {
-		t.NotifyEvent(ctx, &livekit.WebhookEvent{
-			Event:      webhook.EventEgressUpdated,
-			EgressInfo: info,
-		})
+		t.NotifyEgressEvent(ctx, webhook.EventEgressUpdated, info)
+
 		t.SendEvent(ctx, newEgressEvent(livekit.AnalyticsEventType_EGRESS_UPDATED, info))
 	})
 }
 
 func (t *telemetryService) EgressEnded(ctx context.Context, info *livekit.EgressInfo) {
 	t.enqueue(func() {
-		t.NotifyEvent(ctx, &livekit.WebhookEvent{
-			Event:      webhook.EventEgressEnded,
-			EgressInfo: info,
-		})
+		t.NotifyEgressEvent(ctx, webhook.EventEgressEnded, info)
 
 		t.SendEvent(ctx, newEgressEvent(livekit.AnalyticsEventType_EGRESS_ENDED, info))
 	})

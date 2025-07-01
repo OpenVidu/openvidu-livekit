@@ -35,6 +35,7 @@ import (
 	"github.com/pkg/errors"
 	"go.uber.org/atomic"
 	"go.uber.org/zap/zapcore"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/livekit-server/pkg/rtc/transport"
@@ -93,6 +94,11 @@ var (
 	ErrMidNotFound                      = errors.New("mid not found")
 	ErrNotSynchronousPeerConnectionMode = errors.New("not using synchronous peer connection mode")
 	ErrNoRemoteDescription              = errors.New("no remote description")
+	ErrNoLocalDescription               = errors.New("no local description")
+	ErrInvalidSDPFragment               = errors.New("invalid sdp fragment")
+	ErrNoBundleMid                      = errors.New("could not get bundle mid")
+	ErrMidMismatch                      = errors.New("media mid does not match bundle mid")
+	ErrICECredentialMismatch            = errors.New("ice credential mismatch")
 )
 
 // -------------------------------------------------------------------------
@@ -196,6 +202,7 @@ type PCTransport struct {
 	reliableDCOpened        bool
 	lossyDC                 *datachannel.DataChannelWriter[*webrtc.DataChannel]
 	lossyDCOpened           bool
+	unlabeledDataChannels   []*datachannel.DataChannelWriter[*webrtc.DataChannel]
 
 	iceStartedAt               time.Time
 	iceConnectedAt             time.Time
@@ -249,8 +256,6 @@ type PCTransport struct {
 
 type TransportParams struct {
 	Handler                      transport.Handler
-	ParticipantID                livekit.ParticipantID
-	ParticipantIdentity          livekit.ParticipantIdentity
 	ProtocolVersion              types.ProtocolVersion
 	Config                       *WebRTCConfig
 	Twcc                         *lktwcc.Responder
@@ -486,12 +491,19 @@ func NewPCTransport(params TransportParams) (*PCTransport, error) {
 
 	if params.IsSendSide {
 		if params.CongestionControlConfig.UseSendSideBWE {
-			params.Logger.Infow("using send side BWE")
+			params.Logger.Infow("using send side BWE", "pacerBehavior", params.CongestionControlConfig.SendSideBWEPacer)
 			t.bwe = sendsidebwe.NewSendSideBWE(sendsidebwe.SendSideBWEParams{
 				Config: params.CongestionControlConfig.SendSideBWE,
 				Logger: params.Logger,
 			})
-			t.pacer = pacer.NewNoQueue(params.Logger, t.bwe)
+			switch pacer.PacerBehavior(params.CongestionControlConfig.SendSideBWEPacer) {
+			case pacer.PacerBehaviorPassThrough:
+				t.pacer = pacer.NewPassThrough(params.Logger, t.bwe)
+			case pacer.PacerBehaviorNoQueue:
+				t.pacer = pacer.NewNoQueue(params.Logger, t.bwe)
+			default:
+				t.pacer = pacer.NewNoQueue(params.Logger, t.bwe)
+			}
 		} else {
 			t.bwe = remotebwe.NewRemoteBWE(remotebwe.RemoteBWEParams{
 				Config: params.CongestionControlConfig.RemoteBWE,
@@ -782,6 +794,7 @@ func (t *PCTransport) onDataChannel(dc *webrtc.DataChannel) {
 	dc.OnOpen(func() {
 		t.params.Logger.Debugw(dc.Label() + " data channel open")
 		var kind livekit.DataPacket_Kind
+		var isUnlabeled bool
 		switch dc.Label() {
 		case ReliableDataChannel:
 			kind = livekit.DataPacket_RELIABLE
@@ -790,8 +803,8 @@ func (t *PCTransport) onDataChannel(dc *webrtc.DataChannel) {
 			kind = livekit.DataPacket_LOSSY
 
 		default:
-			t.params.Logger.Warnw("unsupported datachannel added", nil, "label", dc.Label())
-			return
+			t.params.Logger.Infow("unlabeled datachannel added", "label", dc.Label())
+			isUnlabeled = true
 		}
 
 		rawDC, err := dc.DetachWithDeadline()
@@ -800,8 +813,16 @@ func (t *PCTransport) onDataChannel(dc *webrtc.DataChannel) {
 			return
 		}
 
-		switch kind {
-		case livekit.DataPacket_RELIABLE:
+		switch {
+		case isUnlabeled:
+			t.lock.Lock()
+			t.unlabeledDataChannels = append(
+				t.unlabeledDataChannels,
+				datachannel.NewDataChannelWriter(dc, rawDC, t.params.DatachannelSlowThreshold),
+			)
+			t.lock.Unlock()
+
+		case kind == livekit.DataPacket_RELIABLE:
 			t.lock.Lock()
 			if t.reliableDC != nil {
 				t.reliableDC.Close()
@@ -810,7 +831,7 @@ func (t *PCTransport) onDataChannel(dc *webrtc.DataChannel) {
 			t.reliableDCOpened = true
 			t.lock.Unlock()
 
-		case livekit.DataPacket_LOSSY:
+		case kind == livekit.DataPacket_LOSSY:
 			t.lock.Lock()
 			if t.lossyDC != nil {
 				t.lossyDC.Close()
@@ -832,7 +853,11 @@ func (t *PCTransport) onDataChannel(dc *webrtc.DataChannel) {
 					return
 				}
 
-				t.params.Handler.OnDataPacket(kind, buffer[:n])
+				if isUnlabeled {
+					t.params.Handler.OnDataMessageUnlabeled(buffer[:n])
+				} else {
+					t.params.Handler.OnDataMessage(kind, buffer[:n])
+				}
 			}
 		}()
 
@@ -850,7 +875,7 @@ func (t *PCTransport) isFullyEstablished() bool {
 	t.lock.RLock()
 	defer t.lock.RUnlock()
 
-	dataChannelReady := t.firstOfferNoDataChannel || (t.reliableDCOpened && t.lossyDCOpened)
+	dataChannelReady := t.params.UseOneShotSignallingMode || t.firstOfferNoDataChannel || (t.reliableDCOpened && t.lossyDCOpened)
 
 	return dataChannelReady && !t.connectedAt.IsZero()
 }
@@ -962,15 +987,14 @@ func (t *PCTransport) CreateDataChannel(label string, dci *webrtc.DataChannelIni
 		return err
 	}
 	var (
-		dcPtr   **datachannel.DataChannelWriter[*webrtc.DataChannel]
-		dcReady *bool
+		dcPtr       **datachannel.DataChannelWriter[*webrtc.DataChannel]
+		dcReady     *bool
+		isUnlabeled bool
 	)
 	switch dc.Label() {
 	default:
-		// TODO: Appears that it's never called, so not sure what needs to be done here. We just keep the DC open?
-		//       Maybe just add "reliable" parameter instead of checking the label.
-		t.params.Logger.Warnw("unknown data channel label", nil, "label", dc.Label())
-		return nil
+		isUnlabeled = true
+		t.params.Logger.Infow("unlabeled datachannel added", "label", dc.Label())
 	case ReliableDataChannel:
 		dcPtr = &t.reliableDC
 		dcReady = &t.reliableDCOpened
@@ -987,22 +1011,70 @@ func (t *PCTransport) CreateDataChannel(label string, dci *webrtc.DataChannelIni
 		}
 
 		var slowThreshold int
-		if dc.Label() == ReliableDataChannel {
+		if dc.Label() == ReliableDataChannel || isUnlabeled {
 			slowThreshold = t.params.DatachannelSlowThreshold
 		}
 
 		t.lock.Lock()
-		if *dcPtr != nil {
-			(*dcPtr).Close()
+		if isUnlabeled {
+			t.unlabeledDataChannels = append(
+				t.unlabeledDataChannels,
+				datachannel.NewDataChannelWriter(dc, rawDC, slowThreshold),
+			)
+		} else {
+			if *dcPtr != nil {
+				(*dcPtr).Close()
+			}
+			*dcPtr = datachannel.NewDataChannelWriter(dc, rawDC, slowThreshold)
+			*dcReady = true
 		}
-		*dcPtr = datachannel.NewDataChannelWriter(dc, rawDC, slowThreshold)
-		*dcReady = true
 		t.lock.Unlock()
 		t.params.Logger.Debugw(dc.Label() + " data channel open")
 
 		t.maybeNotifyFullyEstablished()
 	})
 
+	return nil
+}
+
+// for testing only
+func (t *PCTransport) CreateReadableDataChannel(label string, dci *webrtc.DataChannelInit) error {
+	dc, err := t.pc.CreateDataChannel(label, dci)
+	if err != nil {
+		return err
+	}
+
+	dc.OnOpen(func() {
+		t.params.Logger.Debugw(dc.Label() + " data channel open")
+		rawDC, err := dc.DetachWithDeadline()
+		if err != nil {
+			t.params.Logger.Errorw("failed to detach data channel", err, "label", dc.Label())
+			return
+		}
+
+		t.lock.Lock()
+		t.unlabeledDataChannels = append(
+			t.unlabeledDataChannels,
+			datachannel.NewDataChannelWriter(dc, rawDC, t.params.DatachannelSlowThreshold),
+		)
+		t.lock.Unlock()
+
+		go func() {
+			defer rawDC.Close()
+			buffer := make([]byte, dataChannelBufferSize)
+			for {
+				n, _, err := rawDC.ReadDataChannel(buffer)
+				if err != nil {
+					if !errors.Is(err, io.EOF) && !strings.Contains(err.Error(), "state=Closed") {
+						t.params.Logger.Warnw("error reading data channel", err, "label", dc.Label())
+					}
+					return
+				}
+
+				t.params.Handler.OnDataMessageUnlabeled(buffer[:n])
+			}
+		}()
+	})
 	return nil
 }
 
@@ -1062,20 +1134,87 @@ func (t *PCTransport) GetICEConnectionInfo() *types.ICEConnectionInfo {
 	return t.connectionDetails.GetInfo()
 }
 
+func (t *PCTransport) GetICEConnectionType() types.ICEConnectionType {
+	return t.connectionDetails.GetConnectionType()
+}
+
 func (t *PCTransport) WriteRTCP(pkts []rtcp.Packet) error {
 	return t.pc.WriteRTCP(pkts)
 }
 
-func (t *PCTransport) SendDataPacket(kind livekit.DataPacket_Kind, encoded []byte) error {
+func (t *PCTransport) SendDataMessage(kind livekit.DataPacket_Kind, data []byte) error {
+	convertFromUserPacket := false
 	var dc *datachannel.DataChannelWriter[*webrtc.DataChannel]
 	t.lock.RLock()
-	if kind == livekit.DataPacket_RELIABLE {
-		dc = t.reliableDC
+	if t.params.UseOneShotSignallingMode {
+		if len(t.unlabeledDataChannels) > 0 {
+			// use the first unlabeled to send
+			dc = t.unlabeledDataChannels[0]
+		}
+		convertFromUserPacket = true
 	} else {
-		dc = t.lossyDC
+		if kind == livekit.DataPacket_RELIABLE {
+			dc = t.reliableDC
+		} else {
+			dc = t.lossyDC
+		}
 	}
 	t.lock.RUnlock()
 
+	if convertFromUserPacket {
+		dp := &livekit.DataPacket{}
+		if err := proto.Unmarshal(data, dp); err != nil {
+			return err
+		}
+
+		switch payload := dp.Value.(type) {
+		case *livekit.DataPacket_User:
+			return t.sendDataMessage(dc, payload.User.Payload)
+		default:
+			return errors.New("cannot forward non user data packet")
+		}
+	}
+
+	return t.sendDataMessage(dc, data)
+}
+
+func (t *PCTransport) SendDataMessageUnlabeled(data []byte, useRaw bool, sender livekit.ParticipantIdentity) error {
+	convertToUserPacket := false
+	var dc *datachannel.DataChannelWriter[*webrtc.DataChannel]
+	t.lock.RLock()
+	if t.params.UseOneShotSignallingMode || useRaw {
+		if len(t.unlabeledDataChannels) > 0 {
+			// use the first unlabeled to send
+			dc = t.unlabeledDataChannels[0]
+		}
+	} else {
+		if t.reliableDC != nil {
+			dc = t.reliableDC
+		} else if t.lossyDC != nil {
+			dc = t.lossyDC
+		}
+
+		convertToUserPacket = true
+	}
+	t.lock.RUnlock()
+
+	if convertToUserPacket {
+		dpData, err := proto.Marshal(&livekit.DataPacket{
+			ParticipantIdentity: string(sender),
+			Value: &livekit.DataPacket_User{
+				User: &livekit.UserPacket{Payload: data},
+			},
+		})
+		if err != nil {
+			return err
+		}
+		return t.sendDataMessage(dc, dpData)
+	}
+
+	return t.sendDataMessage(dc, data)
+}
+
+func (t *PCTransport) sendDataMessage(dc *datachannel.DataChannelWriter[*webrtc.DataChannel], data []byte) error {
 	if dc == nil {
 		return ErrDataChannelUnavailable
 	}
@@ -1087,7 +1226,7 @@ func (t *PCTransport) SendDataPacket(kind livekit.DataPacket_Kind, encoded []byt
 	if t.params.DatachannelSlowThreshold == 0 && t.params.DataChannelMaxBufferedAmount > 0 && dc.BufferedAmountGetter().BufferedAmount() > t.params.DataChannelMaxBufferedAmount {
 		return ErrDataChannelBufferFull
 	}
-	_, err := dc.Write(encoded)
+	_, err := dc.Write(data)
 
 	return err
 }
@@ -1121,6 +1260,11 @@ func (t *PCTransport) Close() {
 		t.lossyDC.Close()
 		t.lossyDC = nil
 	}
+
+	for _, dc := range t.unlabeledDataChannels {
+		dc.Close()
+	}
+	t.unlabeledDataChannels = nil
 
 	if t.mayFailedICEStatsTimer != nil {
 		t.mayFailedICEStatsTimer.Stop()
@@ -1169,8 +1313,17 @@ func (t *PCTransport) HandleRemoteDescription(sd webrtc.SessionDescription) erro
 		err = t.pc.SetRemoteDescription(sd)
 		if err != nil {
 			t.params.Logger.Errorw("could not set remote description on synchronous mode peer connection", err)
+			return err
 		}
-		return err
+
+		rtxRepairs := nonSimulcastRTXRepairsFromSDP(parsed, t.params.Logger)
+		if len(rtxRepairs) > 0 {
+			t.params.Logger.Debugw("rtx pairs found from sdp", "ssrcs", rtxRepairs)
+			for repair, base := range rtxRepairs {
+				t.params.Config.BufferFactory.SetRTXPair(repair, base)
+			}
+		}
+		return nil
 	}
 
 	t.postEvent(event{
@@ -1226,6 +1379,221 @@ func (t *PCTransport) GetAnswer() (webrtc.SessionDescription, error) {
 	}
 
 	return *cld, nil
+}
+
+func (t *PCTransport) GetICESessionUfrag() (string, error) {
+	cld := t.pc.CurrentLocalDescription()
+	if cld == nil {
+		return "", ErrNoLocalDescription
+	}
+
+	parsed, err := cld.Unmarshal()
+	if err != nil {
+		return "", err
+	}
+
+	ufrag, _, err := lksdp.ExtractICECredential(parsed)
+	if err != nil {
+		return "", err
+	}
+
+	return ufrag, nil
+}
+
+// Handles SDP Fragment for ICE Trickle in WHIP
+func (t *PCTransport) HandleICETrickleSDPFragment(sdpFragment string) error {
+	if !t.params.UseOneShotSignallingMode {
+		return ErrNotSynchronousPeerConnectionMode
+	}
+
+	parsedFragment := &lksdp.SDPFragment{}
+	if err := parsedFragment.Unmarshal(sdpFragment); err != nil {
+		t.params.Logger.Warnw("could not parse SDP fragment", err, "sdpFragment", sdpFragment)
+		return ErrInvalidSDPFragment
+	}
+
+	crd := t.pc.CurrentRemoteDescription()
+	if crd == nil {
+		t.params.Logger.Warnw("no remote description", nil)
+		return ErrNoRemoteDescription
+	}
+
+	parsedRemote, err := crd.Unmarshal()
+	if err != nil {
+		t.params.Logger.Warnw("could not parse remote description", err, "offer", crd)
+		return err
+	}
+
+	// check if BUNDLE mid matches the "mid" in the SDP fragment
+	bundleMid, found := lksdp.GetBundleMid(parsedRemote)
+	if !found {
+		return ErrNoBundleMid
+	}
+
+	if parsedFragment.Mid() != bundleMid {
+		t.params.Logger.Warnw("incorrect mid", nil, "sdpFragment", sdpFragment)
+		return ErrMidMismatch
+	}
+
+	fragmentICEUfrag, fragmentICEPwd, err := parsedFragment.ExtractICECredential()
+	if err != nil {
+		t.params.Logger.Warnw(
+			"could not get ICE crendential from fragment", err,
+			"sdpFragment", sdpFragment,
+		)
+		return ErrInvalidSDPFragment
+	}
+	remoteICEUfrag, remoteICEPwd, err := lksdp.ExtractICECredential(parsedRemote)
+	if err != nil {
+		t.params.Logger.Warnw("could not get ICE crendential from remote description", err, "sdpFragment", sdpFragment, "remoteDescription", crd)
+		return err
+	}
+	if fragmentICEUfrag != "" && fragmentICEUfrag != remoteICEUfrag {
+		t.params.Logger.Warnw(
+			"ice ufrag mismatch", nil,
+			"remoteICEUfrag", remoteICEUfrag,
+			"fragmentICEUfrag", fragmentICEUfrag,
+			"sdpFragment", sdpFragment,
+			"remoteDescription", crd,
+		)
+		return ErrICECredentialMismatch
+	}
+	if fragmentICEPwd != "" && fragmentICEPwd != remoteICEPwd {
+		t.params.Logger.Warnw(
+			"ice pwd mismatch", nil,
+			"remoteICEPwd", remoteICEPwd,
+			"fragmentICEPwd", fragmentICEPwd,
+			"sdpFragment", sdpFragment,
+			"remoteDescription", crd,
+		)
+		return ErrICECredentialMismatch
+	}
+
+	// add candidates from media description
+	for _, ic := range parsedFragment.Candidates() {
+		c, err := ice.UnmarshalCandidate(ic)
+		if err == nil {
+			t.connectionDetails.AddRemoteICECandidate(c, false, false, false)
+		}
+
+		candidate := webrtc.ICECandidateInit{
+			Candidate: ic,
+		}
+		if err := t.pc.AddICECandidate(candidate); err != nil {
+			t.params.Logger.Warnw("failed to add ICE candidate", err, "candidate", candidate)
+		} else {
+			t.params.Logger.Debugw("added ICE candidate", "candidate", candidate)
+		}
+	}
+	return nil
+}
+
+// Handles SDP Fragment for ICE Restart in WHIP
+func (t *PCTransport) HandleICERestartSDPFragment(sdpFragment string) (string, error) {
+	if !t.params.UseOneShotSignallingMode {
+		return "", ErrNotSynchronousPeerConnectionMode
+	}
+
+	parsedFragment := &lksdp.SDPFragment{}
+	if err := parsedFragment.Unmarshal(sdpFragment); err != nil {
+		t.params.Logger.Warnw("could not parse SDP fragment", err, "sdpFragment", sdpFragment)
+		return "", ErrInvalidSDPFragment
+	}
+
+	crd := t.pc.CurrentRemoteDescription()
+	if crd == nil {
+		t.params.Logger.Warnw("no remote description", nil)
+		return "", ErrNoRemoteDescription
+	}
+
+	parsedRemote, err := crd.Unmarshal()
+	if err != nil {
+		t.params.Logger.Warnw("could not parse remote description", err, "offer", crd)
+		return "", err
+	}
+
+	if err := parsedFragment.PatchICECredentialAndCandidatesIntoSDP(parsedRemote); err != nil {
+		t.params.Logger.Warnw("could not patch SDP fragment into remote description", err, "offer", crd, "sdpFragment", sdpFragment)
+		return "", err
+	}
+
+	bytes, err := parsedRemote.Marshal()
+	if err != nil {
+		t.params.Logger.Warnw("could not marshal SDP with patched remote", err)
+		return "", err
+	}
+	sd := webrtc.SessionDescription{
+		SDP:  string(bytes),
+		Type: webrtc.SDPTypeOffer,
+	}
+	if err := t.pc.SetRemoteDescription(sd); err != nil {
+		t.params.Logger.Warnw("could not set remote description", err)
+		return "", err
+	}
+
+	// clear out connection details on ICE restart and re-populate
+	t.connectionDetails.Clear()
+	for _, candidate := range parsedFragment.Candidates() {
+		c, err := ice.UnmarshalCandidate(candidate)
+		if err != nil {
+			continue
+		}
+		t.connectionDetails.AddRemoteICECandidate(c, false, false, false)
+	}
+
+	ans, err := t.pc.CreateAnswer(nil)
+	if err != nil {
+		t.params.Logger.Warnw("could not create answer", err)
+		return "", err
+	}
+
+	if err = t.pc.SetLocalDescription(ans); err != nil {
+		t.params.Logger.Warnw("could not set local description", err)
+		return "", err
+	}
+
+	// wait for gathering to complete to include all candidates in the answer
+	<-webrtc.GatheringCompletePromise(t.pc)
+
+	cld := t.pc.CurrentLocalDescription()
+
+	// add local candidates to ICE connection details
+	parsedAnswer, err := cld.Unmarshal()
+	if err != nil {
+		t.params.Logger.Warnw("could not parse local description", err)
+		return "", err
+	}
+
+	addLocalICECandidates := func(attrs []sdp.Attribute) {
+		for _, a := range attrs {
+			if a.IsICECandidate() {
+				c, err := ice.UnmarshalCandidate(a.Value)
+				if err != nil {
+					continue
+				}
+				t.connectionDetails.AddLocalICECandidate(c, false, false)
+			}
+		}
+	}
+
+	addLocalICECandidates(parsedAnswer.Attributes)
+	for _, m := range parsedAnswer.MediaDescriptions {
+		addLocalICECandidates(m.Attributes)
+	}
+
+	parsedFragmentAnswer, err := lksdp.ExtractSDPFragment(parsedAnswer)
+	if err != nil {
+		t.params.Logger.Warnw("could not extract SDP fragment", err)
+		return "", err
+	}
+
+	answerFragment, err := parsedFragmentAnswer.Marshal()
+	if err != nil {
+		t.params.Logger.Warnw("could not marshal answer SDP fragment", err)
+		return "", err
+	}
+
+	return answerFragment, nil
 }
 
 func (t *PCTransport) OnNegotiationStateChanged(f func(state transport.NegotiationState)) {
@@ -1314,9 +1682,9 @@ func (t *PCTransport) AddTrackToStreamAllocator(subTrack types.SubscribedTrack) 
 	}
 
 	t.streamAllocator.AddTrack(subTrack.DownTrack(), streamallocator.AddTrackParams{
-		Source:      subTrack.MediaTrack().Source(),
-		IsSimulcast: subTrack.MediaTrack().IsSimulcast(),
-		PublisherID: subTrack.MediaTrack().PublisherID(),
+		Source:         subTrack.MediaTrack().Source(),
+		IsMultiLayered: len(subTrack.MediaTrack().ToProto().GetLayers()) > 1,
+		PublisherID:    subTrack.MediaTrack().PublisherID(),
 	})
 }
 
@@ -1663,7 +2031,7 @@ func (t *PCTransport) handleRemoteICECandidate(e event) error {
 	}
 
 	if err := t.pc.AddICECandidate(*c); err != nil {
-		t.params.Logger.Warnw("failed to add cached ICE candidate", err, "candidate", c)
+		t.params.Logger.Warnw("failed to add ICE candidate", err, "candidate", c)
 		return errors.Wrap(err, "add ice candidate failed")
 	} else {
 		t.params.Logger.Debugw("added ICE candidate", "candidate", c)

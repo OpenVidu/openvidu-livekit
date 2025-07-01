@@ -38,6 +38,7 @@ import (
 	"github.com/livekit/livekit-server/pkg/sfu/mime"
 	"github.com/livekit/livekit-server/pkg/sfu/rtpstats"
 	"github.com/livekit/livekit-server/pkg/telemetry"
+	sutils "github.com/livekit/livekit-server/pkg/utils"
 )
 
 const (
@@ -120,7 +121,7 @@ func (r *simulcastReceiver) IsRegressed() bool {
 type MediaTrackReceiverParams struct {
 	MediaTrack            types.MediaTrack
 	IsRelayed             bool
-	ParticipantID         livekit.ParticipantID
+	ParticipantID         func() livekit.ParticipantID
 	ParticipantIdentity   livekit.ParticipantIdentity
 	ParticipantVersion    uint32
 	ReceiverConfig        ReceiverConfig
@@ -376,7 +377,7 @@ func (t *MediaTrackReceiver) ClearReceiver(mime mime.MimeType, isExpectedToResum
 }
 
 func (t *MediaTrackReceiver) ClearAllReceivers(isExpectedToResume bool) {
-	t.params.Logger.Debugw("clearing all receivers")
+	t.params.Logger.Debugw("clearing all receivers", "isExpectedToResume", isExpectedToResume)
 	t.lock.Lock()
 	receivers := t.receivers
 	t.receivers = nil
@@ -408,12 +409,15 @@ func (t *MediaTrackReceiver) IsOpen() bool {
 	return true
 }
 
-func (t *MediaTrackReceiver) SetClosing() {
+func (t *MediaTrackReceiver) SetClosing(isExpectedToResume bool) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
+
 	if t.state == mediaTrackReceiverStateOpen {
 		t.state = mediaTrackReceiverStateClosing
 	}
+
+	t.isExpectedToResume = isExpectedToResume
 }
 
 func (t *MediaTrackReceiver) TryClose() bool {
@@ -476,7 +480,7 @@ func (t *MediaTrackReceiver) Stream() string {
 }
 
 func (t *MediaTrackReceiver) PublisherID() livekit.ParticipantID {
-	return t.params.ParticipantID
+	return t.params.ParticipantID()
 }
 
 func (t *MediaTrackReceiver) PublisherIdentity() livekit.ParticipantIdentity {
@@ -590,6 +594,7 @@ func (t *MediaTrackReceiver) AddSubscriber(sub types.LocalParticipant) (types.Su
 		Logger:         tLogger,
 		DisableRed:     t.TrackInfo().GetDisableRed() || !t.params.AudioConfig.ActiveREDEncoding,
 	})
+	subID := sub.ID()
 	subTrack, err := t.MediaTrackSubscriptions.AddSubscriber(sub, wr)
 
 	// media track could have been closed while adding subscription
@@ -603,7 +608,8 @@ func (t *MediaTrackReceiver) AddSubscriber(sub types.LocalParticipant) (types.Su
 	t.lock.RUnlock()
 
 	if remove {
-		_ = t.MediaTrackSubscriptions.RemoveSubscriber(sub.ID(), isExpectedToResume)
+		t.params.Logger.Debugw("removing subscriber on a not-open track", "subscriberID", subID, "isExpectedToResume", isExpectedToResume)
+		_ = t.MediaTrackSubscriptions.RemoveSubscriber(subID, isExpectedToResume)
 		return nil, ErrNotOpen
 	}
 
@@ -617,7 +623,7 @@ func (t *MediaTrackReceiver) RemoveSubscriber(subscriberID livekit.ParticipantID
 }
 
 func (t *MediaTrackReceiver) removeAllSubscribersForMime(mime mime.MimeType, isExpectedToResume bool) {
-	t.params.Logger.Debugw("removing all subscribers for mime", "mime", mime)
+	t.params.Logger.Debugw("removing all subscribers for mime", "mime", mime, "isExpectedToResume", isExpectedToResume)
 	for _, subscriberID := range t.MediaTrackSubscriptions.GetAllSubscribersForMime(mime) {
 		t.RemoveSubscriber(subscriberID, isExpectedToResume)
 	}
@@ -776,7 +782,9 @@ func (t *MediaTrackReceiver) UpdateAudioTrack(update *livekit.UpdateLocalAudioTr
 	t.lock.Lock()
 	trackInfo := t.TrackInfo()
 	clonedInfo := utils.CloneProto(trackInfo)
-	clonedInfo.AudioFeatures = update.Features
+
+	clonedInfo.AudioFeatures = sutils.DedupeSlice(update.Features)
+
 	clonedInfo.Stereo = false
 	clonedInfo.DisableDtx = false
 	for _, feature := range update.Features {
@@ -787,6 +795,7 @@ func (t *MediaTrackReceiver) UpdateAudioTrack(update *livekit.UpdateLocalAudioTr
 			clonedInfo.DisableDtx = true
 		}
 	}
+
 	if proto.Equal(trackInfo, clonedInfo) {
 		t.lock.Unlock()
 		return
