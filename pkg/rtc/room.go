@@ -1732,12 +1732,6 @@ func BroadcastDataPacketForRoom(
 				continue
 			}
 		}
-		if op.State() == livekit.ParticipantInfo_JOINED && kind == livekit.DataPacket_RELIABLE {
-			// If the destination participant is in state JOINED transitioning to ACTIVE and the data
-			// packet is of kind reliable store it for later delivery just after the participant becomes ACTIVE
-			op.StoreReliableDataPacketForLaterDelivery(dp)
-			continue
-		}
 		if dpData == nil {
 			var err error
 			dpData, err = proto.Marshal(dp)

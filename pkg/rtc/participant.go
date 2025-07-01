@@ -3356,20 +3356,3 @@ func (p *ParticipantImpl) MoveToRoom(params types.MoveToRoomParams) {
 func (p *ParticipantImpl) helper() types.LocalParticipantHelper {
 	return p.participantHelper.Load().(types.LocalParticipantHelper)
 }
-
-func (p *ParticipantImpl) StoreReliableDataPacketForLaterDelivery(dp *livekit.DataPacket) {
-	p.reliableDataPacketsQueue = append(p.reliableDataPacketsQueue, dp)
-}
-
-func (p *ParticipantImpl) DeliverStoredReliableDataPackets() {
-	for _, dp := range p.reliableDataPacketsQueue {
-		var dpData, err = proto.Marshal(dp)
-		if err != nil {
-			logger.Errorw("failed to marshal data packet", err)
-			continue
-		}
-		p.GetLogger().Debugw("resending stored reliable data packet", "source", dp.ParticipantIdentity, "destinationIdentities", dp.DestinationIdentities)
-		p.SendDataPacket(livekit.DataPacket_RELIABLE, dpData)
-	}
-	p.reliableDataPacketsQueue = p.reliableDataPacketsQueue[:0]
-}
