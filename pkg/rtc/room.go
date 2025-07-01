@@ -453,11 +453,6 @@ func (r *Room) Join(participant types.LocalParticipant, requestSource routing.Me
 		onStateChangeMu.Lock()
 		defer onStateChangeMu.Unlock()
 		if state := p.State(); state == livekit.ParticipantInfo_ACTIVE {
-			// BEGIN OPENVIDU BLOCK
-			// send stored data packets received when the participant was in state JOINED waiting to be ACTIVE
-			p.DeliverStoredReliableDataPackets()
-			// END OPENVIDU BLOCK
-
 			// subscribe participant to existing published tracks
 			r.subscribeToExistingTracks(p)
 

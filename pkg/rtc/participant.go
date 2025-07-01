@@ -266,11 +266,6 @@ type ParticipantImpl struct {
 	metricsCollector  *metric.MetricsCollector
 	metricsReporter   *metric.MetricsReporter
 
-	// BEGIN OPENVIDU BLOCK
-	// reliable data packets received while transitioning from JOINED to ACTIVE state. Stored for later delivery
-	reliableDataPacketsQueue []*livekit.DataPacket
-	// END OPENVIDU BLOCK
-
 	// loggers for publisher and subscriber
 	pubLogger logger.Logger
 	subLogger logger.Logger
@@ -287,9 +282,6 @@ func NewParticipant(params ParticipantParams) (*ParticipantImpl, error) {
 		return nil, ErrMissingGrants
 	}
 	p := &ParticipantImpl{
-		// BEGIN OPENVIDU BLOCK
-		reliableDataPacketsQueue: make([]*livekit.DataPacket, 0),
-		// END OPENVIDU BLOCK
 		params:       params,
 		disconnected: make(chan struct{}),
 		pubRTCPQueue: sutils.NewTypedOpsQueue[postRtcpOp](sutils.OpsQueueParams{
