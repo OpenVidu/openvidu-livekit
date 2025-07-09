@@ -199,10 +199,11 @@ func (m *MongoDatabaseClient) createMongoJsonIndexDocuments() error {
 		{Keys: bson.D{{Key: "type", Value: 1}}},
 		{Keys: bson.D{{Key: "room.sid", Value: 1}}},
 		{Keys: bson.D{{Key: "participant.sid", Value: 1}}},
-		{Keys: bson.D{{Key: "participant_id", Value: 1}}},
-		{Keys: bson.D{{Key: "egress_id", Value: 1}}},
 		{Keys: bson.D{{Key: "timestamp.seconds", Value: 1}}},
 		{Keys: bson.D{{Key: "openvidu_expire_at", Value: 1}}, Options: options.Index().SetExpireAfterSeconds(0)},
+		{Keys: bson.D{{Key: "participant_id", Value: 1}, {Key: "type", Value: 1}}},
+		{Keys: bson.D{{Key: "egress_id", Value: 1}, {Key: "type", Value: 1}}},
+		{Keys: bson.D{{Key: "room.sid", Value: 1}, {Key: "type", Value: 1}}},
 	})
 	if err != nil {
 		logger.Errorw("failed to create MongoDB event indexes", err)
