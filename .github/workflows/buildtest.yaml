@@ -57,7 +57,7 @@ jobs:
           args: build
 
       - name: Static Check
-        uses: amarpal/staticcheck-action@master
+        uses: dominikh/staticcheck-action@v1
         with:
           checks: '["all", "-ST1000", "-ST1003", "-ST1020", "-ST1021", "-ST1022", "-SA1019"]'
           install-go: false
