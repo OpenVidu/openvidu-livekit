@@ -35,6 +35,7 @@ import (
 
 type MongoDatabaseClient struct {
 	BaseDatabaseClient
+	databaseName          string
 	client                *mongo.Client
 	fakeCloseEvents       []interface{}
 	deletedActiveEntities []interface{}
@@ -64,6 +65,12 @@ func NewMongoDatabaseClient(conf *openviduconfig.AnalyticsConfig, livekithelper 
 	}
 	mongoDatabaseClient.owner = sender
 	mongoDatabaseClient.livekitHelper = livekithelper
+
+	if conf.Database != "" {
+		mongoDatabaseClient.databaseName = conf.Database
+	} else {
+		mongoDatabaseClient.databaseName = "openvidu"
+	}
 
 	return mongoDatabaseClient, nil
 }
@@ -102,7 +109,7 @@ func (m *MongoDatabaseClient) sendEventsBatch() {
 			deletedActiveEntities = m.deleteActiveEntityForDestructionEvents(event, deletedActiveEntities)
 		}
 
-		openviduDb := m.client.Database("openvidu")
+		openviduDb := m.client.Database(m.databaseName)
 		eventCollection := openviduDb.Collection("events")
 		activeEntityCollection := openviduDb.Collection("active_entities")
 
@@ -175,7 +182,7 @@ func (m *MongoDatabaseClient) sendStatsBatch() {
 
 	logger.Debugw("inserting stats into MongoDB...")
 
-	openviduDb := m.client.Database("openvidu")
+	openviduDb := m.client.Database(m.databaseName)
 	statCollection := openviduDb.Collection("stats")
 
 	result, err := statCollection.InsertMany(context.Background(), parsedStats, options.InsertMany().SetOrdered(false))
@@ -191,7 +198,7 @@ func (m *MongoDatabaseClient) sendStatsBatch() {
 func (m *MongoDatabaseClient) createMongoJsonIndexDocuments() error {
 	context := context.TODO()
 
-	openviduDb := m.client.Database("openvidu")
+	openviduDb := m.client.Database(m.databaseName)
 	logger.Infow("created database openvidu", "result", openviduDb)
 
 	eventCollection := openviduDb.Collection("events")
@@ -412,7 +419,7 @@ func (m *MongoDatabaseClient) FixActiveEntities() {
 	 */
 	m.filterFakeCloseEvents()
 
-	openviduDb := m.client.Database("openvidu")
+	openviduDb := m.client.Database(m.databaseName)
 	callback := func(sessCtx mongo.SessionContext) (interface{}, error) {
 		// Insert all necessary fake close events in MongoDB
 		if len(m.fakeCloseEvents) > 0 {
@@ -484,7 +491,7 @@ func (m *MongoDatabaseClient) FixActiveEntities() {
 }
 
 func (m *MongoDatabaseClient) getActiveEntities() *ActiveEntities {
-	activeEntityCollection := m.client.Database("openvidu").Collection("active_entities")
+	activeEntityCollection := m.client.Database(m.databaseName).Collection("active_entities")
 
 	// Get all active entities from MongoDB
 	activeEntitiesCursor, err := activeEntityCollection.Find(context.Background(), bson.D{})
@@ -537,7 +544,7 @@ func (m *MongoDatabaseClient) fixActiveRooms(activeRoomsDb []string, lastAlive T
 	for _, roomId := range activeRoomsDb {
 		if !activeRoomsSet[roomId] {
 			// Save "ROOM_ENDED" fake event to keep consistency
-			eventCollection := m.client.Database("openvidu").Collection("events")
+			eventCollection := m.client.Database(m.databaseName).Collection("events")
 
 			// Get info from "ROOM_CREATED" event
 			var roomCreatedEventMap map[string]interface{}
@@ -599,7 +606,7 @@ func (m *MongoDatabaseClient) fixActiveParticipants(activeParticipantsDb []strin
 	for _, participantId := range activeParticipantsDb {
 		if !activeParticipantsSet[participantId] {
 			// Save "PARTICIPANT_LEFT" fake event to keep consistency
-			eventCollection := m.client.Database("openvidu").Collection("events")
+			eventCollection := m.client.Database(m.databaseName).Collection("events")
 
 			// Get info from "PARTICIPANT_ACTIVE" event
 			var participantActiveEventMap map[string]interface{}
@@ -664,7 +671,7 @@ func (m *MongoDatabaseClient) fixActiveEgresses(activeEgressesDb []string, lastA
 	for _, egressId := range activeEgressesDb {
 		if !activeEgressesSet[egressId] {
 			// Save "EGRESS_ENDED" fake event to keep consistency
-			eventCollection := m.client.Database("openvidu").Collection("events")
+			eventCollection := m.client.Database(m.databaseName).Collection("events")
 
 			// Get info from "EGRESS_STARTED" event
 			var egressStartedEventMap map[string]interface{}
@@ -745,7 +752,7 @@ func (m *MongoDatabaseClient) fixActiveIngresses(activeIngressesDb []string, las
 	for _, ingressResourceId := range activeIngressesDb {
 		if !activeIngressesSet[ingressResourceId] {
 			// Save "INGRESS_ENDED" fake event to keep consistency
-			eventCollection := m.client.Database("openvidu").Collection("events")
+			eventCollection := m.client.Database(m.databaseName).Collection("events")
 
 			// Get info from "INGRESS_STARTED" event
 			var ingressStartedEventMap map[string]interface{}
@@ -828,7 +835,7 @@ func (m *MongoDatabaseClient) filterEventsByType(
 	event interface{},
 	filteredEvents []interface{},
 ) []interface{} {
-	eventCollection := m.client.Database("openvidu").Collection("events")
+	eventCollection := m.client.Database(m.databaseName).Collection("events")
 	result := eventCollection.FindOne(
 		context.Background(),
 		bson.D{
@@ -854,7 +861,7 @@ func (m *MongoDatabaseClient) filterEventsByType(
 }
 
 func (m *MongoDatabaseClient) getLastTimestampAlive() Timestamp {
-	lastAliveCollection := m.client.Database("openvidu").Collection("last_alive")
+	lastAliveCollection := m.client.Database(m.databaseName).Collection("last_alive")
 
 	var lastAlive LastAlive
 	err := lastAliveCollection.FindOne(context.Background(), bson.D{{Key: "_id", Value: "server"}}).Decode(&lastAlive)
@@ -866,7 +873,7 @@ func (m *MongoDatabaseClient) getLastTimestampAlive() Timestamp {
 }
 
 func (m *MongoDatabaseClient) updateLastTimestampAlive() {
-	lastAliveCollection := m.client.Database("openvidu").Collection("last_alive")
+	lastAliveCollection := m.client.Database(m.databaseName).Collection("last_alive")
 	lastActive := LastAlive{
 		ID:        "server",
 		LastAlive: getCurrentTimestamp(),

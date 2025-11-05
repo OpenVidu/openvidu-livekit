@@ -25,6 +25,7 @@ type OpenViduConfig struct {
 type AnalyticsConfig struct {
 	Enabled       bool          `yaml:"enabled,omitempty"`
 	MongoUrl      string        `yaml:"mongo_url,omitempty"`
+	Database      string        `yaml:"database,omitempty" default:"openvidu"`
 	Interval      time.Duration `yaml:"interval,omitempty"`
 	FixerInterval time.Duration `yaml:"fixer_interval,omitempty"`
 	Expiration    time.Duration `yaml:"expiration,omitempty"`
