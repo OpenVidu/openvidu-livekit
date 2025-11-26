@@ -39,6 +39,11 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH GO111MODULE=on go build -a -o li
 
 FROM alpine
 
+# BEGIN OPENVIDU BLOCK
+# Add support for timezone data
+RUN apk add --no-cache tzdata
+# END OPENVIDU BLOCK
+
 COPY --from=builder /workspace/livekit-server /livekit-server
 
 # Run the binary.
