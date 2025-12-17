@@ -111,3 +111,19 @@ func (u *signallingUnimplemented) SignalSubscriptionPermissionUpdate(subscriptio
 func (u *signallingUnimplemented) SignalMediaSectionsRequirement(mediaSectionsRequirement *livekit.MediaSectionsRequirement) proto.Message {
 	return nil
 }
+
+func (u *signallingUnimplemented) SignalSubscribedAudioCodecUpdate(subscribedAudioCodecUpdate *livekit.SubscribedAudioCodecUpdate) proto.Message {
+	return nil
+}
+
+func (u *signallingUnimplemented) SignalPublishDataTrackResponse(publishDataTrackResponse *livekit.PublishDataTrackResponse) proto.Message {
+	return nil
+}
+
+func (u *signallingUnimplemented) SignalUnpublishDataTrackResponse(unpublishDataTrackResponse *livekit.UnpublishDataTrackResponse) proto.Message {
+	return nil
+}
+
+func (u *signallingUnimplemented) SignalDataTrackSubscriberHandles(dataTrackSubscriberHandles *livekit.DataTrackSubscriberHandles) proto.Message {
+	return nil
+}

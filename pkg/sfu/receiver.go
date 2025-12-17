@@ -29,6 +29,7 @@ import (
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/protocol/utils"
+	"github.com/livekit/protocol/utils/mono"
 
 	"github.com/livekit/livekit-server/pkg/sfu/audio"
 	"github.com/livekit/livekit-server/pkg/sfu/buffer"
@@ -36,6 +37,7 @@ import (
 	"github.com/livekit/livekit-server/pkg/sfu/mime"
 	"github.com/livekit/livekit-server/pkg/sfu/rtpstats"
 	"github.com/livekit/livekit-server/pkg/sfu/streamtracker"
+	sfuutils "github.com/livekit/livekit-server/pkg/sfu/utils"
 )
 
 var (
@@ -147,7 +149,7 @@ type TrackReceiver interface {
 }
 
 type REDTransformer interface {
-	ForwardRTP(pkt *buffer.ExtPacket, spatialLayer int32) int
+	ForwardRTP(pkt *buffer.ExtPacket, spatialLayer int32) int32
 	ForwardRTCPSenderReport(
 		payloadType webrtc.PayloadType,
 		layer int32,
@@ -196,7 +198,7 @@ type WebRTCReceiver struct {
 
 	streamTrackerManager *StreamTrackerManager
 
-	downTrackSpreader *DownTrackSpreader
+	downTrackSpreader *sfuutils.DownTrackSpreader[TrackSender]
 
 	connectionStats *connectionquality.ConnectionStats
 
@@ -273,7 +275,7 @@ func NewWebRTCReceiver(
 	}
 	w.trackInfo.Store(utils.CloneProto(trackInfo))
 
-	w.downTrackSpreader = NewDownTrackSpreader(DownTrackSpreaderParams{
+	w.downTrackSpreader = sfuutils.NewDownTrackSpreader[TrackSender](sfuutils.DownTrackSpreaderParams{
 		Threshold: w.lbThreshold,
 		Logger:    logger,
 	})
@@ -470,6 +472,7 @@ func (w *WebRTCReceiver) AddUpTrack(track TrackRemote, buff *buffer.Buffer) erro
 	buff.SetPaused(w.streamTrackerManager.IsPaused())
 
 	go w.forwardRTP(layer, buff)
+	w.logger.Debugw("starting forwarder", "layer", layer)
 	return nil
 }
 
@@ -601,7 +604,7 @@ func (w *WebRTCReceiver) GetLayeredBitrate() ([]int32, Bitrates) {
 	return w.streamTrackerManager.GetLayeredBitrate()
 }
 
-// OnCloseHandler method to be called on remote tracked removed
+// OnCloseHandler method to be called on remote track removed
 func (w *WebRTCReceiver) OnCloseHandler(fn func()) {
 	w.onCloseHandler = fn
 }
@@ -783,12 +786,14 @@ func (w *WebRTCReceiver) forwardRTP(layer int32, buff *buffer.Buffer) {
 		return
 	}
 
-	pktBuf := make([]byte, bucket.MaxPktSize)
+	pktBuf := make([]byte, bucket.RTPMaxPktSize)
+	w.logger.Debugw("starting forwarding", "layer", layer)
 	for {
 		pkt, err := buff.ReadExtended(pktBuf)
 		if err == io.EOF {
 			return
 		}
+		dequeuedAt := mono.UnixNano()
 
 		if pkt.Packet.PayloadType != uint8(w.codec.PayloadType) {
 			// drop packets as we don't support codec fallback directly
@@ -816,17 +821,27 @@ func (w *WebRTCReceiver) forwardRTP(layer int32, buff *buffer.Buffer) {
 			continue
 		}
 
-		writeCount := w.downTrackSpreader.Broadcast(func(dt TrackSender) {
-			_ = dt.WriteRTP(pkt, spatialLayer)
+		var writeCount atomic.Int32
+		w.downTrackSpreader.Broadcast(func(dt TrackSender) {
+			writeCount.Add(dt.WriteRTP(pkt, spatialLayer))
 		})
 
 		if rt := w.redTransformer.Load(); rt != nil {
-			writeCount += rt.(REDTransformer).ForwardRTP(pkt, spatialLayer)
+			writeCount.Add(rt.(REDTransformer).ForwardRTP(pkt, spatialLayer))
 		}
 
 		// track delay/jitter
-		if writeCount > 0 && w.forwardStats != nil {
-			w.forwardStats.Update(pkt.Arrival, time.Now().UnixNano())
+		if writeCount.Load() > 0 && w.forwardStats != nil && !pkt.IsBuffered {
+			if latency, isHigh := w.forwardStats.Update(pkt.Arrival, mono.UnixNano()); isHigh {
+				w.logger.Debugw(
+					"high forwarding latency",
+					"latency", time.Duration(latency),
+					"queuingLatency", time.Duration(dequeuedAt-pkt.Arrival),
+					"writeCount", writeCount.Load(),
+					"isOutOfOrder", pkt.IsOutOfOrder,
+					"layer", layer,
+				)
+			}
 		}
 
 		// track video layers
@@ -853,6 +868,8 @@ func (w *WebRTCReceiver) forwardRTP(layer int32, buff *buffer.Buffer) {
 		}
 
 		numPacketsForwarded++
+
+		buffer.ReleaseExtPacket(pkt)
 	}
 }
 
@@ -905,7 +922,7 @@ func (w *WebRTCReceiver) GetPrimaryReceiverForRed() TrackReceiver {
 
 	rt := w.redTransformer.Load()
 	if rt == nil {
-		pr := NewRedPrimaryReceiver(w, DownTrackSpreaderParams{
+		pr := NewRedPrimaryReceiver(w, sfuutils.DownTrackSpreaderParams{
 			Threshold: w.lbThreshold,
 			Logger:    w.logger,
 		})
@@ -929,7 +946,7 @@ func (w *WebRTCReceiver) GetRedReceiver() TrackReceiver {
 
 	rt := w.redTransformer.Load()
 	if rt == nil {
-		pr := NewRedReceiver(w, DownTrackSpreaderParams{
+		pr := NewRedReceiver(w, sfuutils.DownTrackSpreaderParams{
 			Threshold: w.lbThreshold,
 			Logger:    w.logger,
 		})

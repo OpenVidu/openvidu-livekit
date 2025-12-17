@@ -41,6 +41,9 @@ type RoomService struct {
 	topicFormatter    rpc.TopicFormatter
 	roomClient        rpc.TypedRoomClient
 	participantClient rpc.TypedParticipantClient
+
+	rpc.UnimplementedRoomServer
+	rpc.UnimplementedParticipantServer
 }
 
 func NewRoomService(
@@ -72,7 +75,7 @@ func (s *RoomService) CreateRoom(ctx context.Context, req *livekit.CreateRoomReq
 	redactedReq := redactCreateRoomRequest(req)
 	RecordRequest(ctx, redactedReq)
 
-	AppendLogFields(ctx, "room", req.Name, "request", logger.Proto(redactedReq))
+	AppendLogFields(ctx, "room", req.Name, "request", logger.Proto(req))
 	if err := EnsureCreatePermission(ctx); err != nil {
 		return nil, twirpAuthError(err)
 	} else if req.Egress != nil && s.egressLauncher == nil {
@@ -352,6 +355,24 @@ func (s *RoomService) MoveParticipant(ctx context.Context, req *livekit.MovePart
 	return res, err
 }
 
+func (s *RoomService) PerformRpc(ctx context.Context, req *livekit.PerformRpcRequest) (*livekit.PerformRpcResponse, error) {
+	RecordRequest(ctx, req)
+
+	roomName := livekit.RoomName(req.Room)
+	AppendLogFields(ctx, "room", roomName, "participant", req.DestinationIdentity)
+
+	if err := EnsureAdminPermission(ctx, roomName); err != nil {
+		return nil, twirpAuthError(err)
+	}
+	if req.DestinationIdentity == "" {
+		return nil, ErrDestinationIdentityRequired
+	}
+
+	res, err := s.participantClient.PerformRpc(ctx, s.topicFormatter.ParticipantTopic(ctx, roomName, livekit.ParticipantIdentity(req.DestinationIdentity)), req)
+	RecordResponse(ctx, res)
+	return res, err
+}
+
 func redactCreateRoomRequest(req *livekit.CreateRoomRequest) *livekit.CreateRoomRequest {
 	if req.Egress == nil && req.Metadata == "" {
 		// nothing to redact
@@ -418,7 +439,7 @@ func redactSendDataRequest(req *livekit.SendDataRequest) *livekit.SendDataReques
 	clone := utils.CloneProto(req)
 
 	// replace with size of data to provide visibility on request size
-	clone.Data = []byte(fmt.Sprintf("__size: %d", len(clone.Data)))
+	clone.Data = fmt.Appendf(nil, "__size: %d", len(clone.Data))
 
 	return clone
 }

@@ -31,7 +31,6 @@ import (
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
-	"github.com/livekit/protocol/observability"
 	"github.com/livekit/protocol/observability/roomobs"
 	"github.com/livekit/protocol/rpc"
 	"github.com/livekit/protocol/utils"
@@ -75,7 +74,6 @@ type RoomManager struct {
 	whipServer        rpc.WHIPServer[livekit.NodeID]
 	roomStore         ObjectStore
 	telemetry         telemetry.TelemetryService
-	recorder          observability.Reporter
 	clientConfManager clientconfiguration.ClientConfigurationManager
 	agentClient       agent.Client
 	agentStore        AgentStore
@@ -95,6 +93,10 @@ type RoomManager struct {
 	iceConfigCache *sutils.IceConfigCache[iceConfigCacheKey]
 
 	forwardStats *sfu.ForwardStats
+
+	rpc.UnimplementedParticipantServer
+	rpc.UnimplementedRoomServer
+	rpc.UnimplementedRoomManagerServer
 }
 
 func NewLocalRoomManager(
@@ -156,7 +158,11 @@ func NewLocalRoomManager(
 		return nil, err
 	}
 
-	r.whipServer, err = rpc.NewWHIPServer[livekit.NodeID](whipService{r}, bus, rpc.WithDefaultServerOptions(conf.PSRPC, logger.GetLogger()))
+	whipService, err := newWhipService(r)
+	if err != nil {
+		return nil, err
+	}
+	r.whipServer, err = rpc.NewWHIPServer[livekit.NodeID](whipService, bus, rpc.WithDefaultServerOptions(conf.PSRPC, logger.GetLogger()))
 	if err != nil {
 		return nil, err
 	}
@@ -349,6 +355,7 @@ func (r *RoomManager) StartSession(
 						Leave: leave,
 					},
 				})
+				prometheus.IncrementParticipantRtcCanceled(1)
 				return errors.New("could not restart closed participant")
 			}
 
@@ -406,6 +413,7 @@ func (r *RoomManager) StartSession(
 				Leave: leave,
 			},
 		})
+		prometheus.IncrementParticipantRtcCanceled(1)
 		return errors.New("could not restart participant")
 	}
 
@@ -490,26 +498,29 @@ func (r *RoomManager) StartSession(
 		AdaptiveStream:          pi.AdaptiveStream,
 		AllowTCPFallback:        allowFallback,
 		TURNSEnabled:            r.config.IsTURNSEnabled(),
+		ParticipantListener:     room.LocalParticipantListener(),
 		ParticipantHelper: &roomManagerParticipantHelper{
 			room:                     room,
 			codecRegressionThreshold: r.config.Video.CodecRegressionThreshold,
 		},
-		ReconnectOnPublicationError:  reconnectOnPublicationError,
-		ReconnectOnSubscriptionError: reconnectOnSubscriptionError,
-		ReconnectOnDataChannelError:  reconnectOnDataChannelError,
-		VersionGenerator:             r.versionGenerator,
-		SubscriberAllowPause:         subscriberAllowPause,
-		SubscriptionLimitAudio:       r.config.Limit.SubscriptionLimitAudio,
-		SubscriptionLimitVideo:       r.config.Limit.SubscriptionLimitVideo,
-		PlayoutDelay:                 roomInternal.GetPlayoutDelay(),
-		SyncStreams:                  roomInternal.GetSyncStreams(),
-		ForwardStats:                 r.forwardStats,
-		MetricConfig:                 r.config.Metric,
-		UseOneShotSignallingMode:     useOneShotSignallingMode,
-		DataChannelMaxBufferedAmount: r.config.RTC.DataChannelMaxBufferedAmount,
-		DatachannelSlowThreshold:     r.config.RTC.DatachannelSlowThreshold,
-		FireOnTrackBySdp:             true,
-		UseSinglePeerConnection:      pi.UseSinglePeerConnection,
+		ReconnectOnPublicationError:   reconnectOnPublicationError,
+		ReconnectOnSubscriptionError:  reconnectOnSubscriptionError,
+		ReconnectOnDataChannelError:   reconnectOnDataChannelError,
+		VersionGenerator:              r.versionGenerator,
+		SubscriberAllowPause:          subscriberAllowPause,
+		SubscriptionLimitAudio:        r.config.Limit.SubscriptionLimitAudio,
+		SubscriptionLimitVideo:        r.config.Limit.SubscriptionLimitVideo,
+		PlayoutDelay:                  roomInternal.GetPlayoutDelay(),
+		SyncStreams:                   roomInternal.GetSyncStreams(),
+		ForwardStats:                  r.forwardStats,
+		MetricConfig:                  r.config.Metric,
+		UseOneShotSignallingMode:      useOneShotSignallingMode,
+		DataChannelMaxBufferedAmount:  r.config.RTC.DataChannelMaxBufferedAmount,
+		DatachannelSlowThreshold:      r.config.RTC.DatachannelSlowThreshold,
+		DatachannelLossyTargetLatency: r.config.RTC.DatachannelLossyTargetLatency,
+		FireOnTrackBySdp:              true,
+		UseSinglePeerConnection:       pi.UseSinglePeerConnection,
+		EnableDataTracks:              r.config.EnableDataTracks,
 	})
 	if err != nil {
 		return err
@@ -566,8 +577,8 @@ func (r *RoomManager) StartSession(
 	persistRoomForParticipantCount(room.ToProto())
 
 	clientMeta := &livekit.AnalyticsClientMeta{Region: r.currentNode.Region(), Node: string(r.currentNode.NodeID())}
-	r.telemetry.ParticipantJoined(ctx, protoRoom, participant.ToProto(), pi.Client, clientMeta, true)
-	participant.OnClose(func(p types.LocalParticipant) {
+	r.telemetry.ParticipantJoined(ctx, protoRoom, participant.ToProto(), pi.Client, clientMeta, true, participant.TelemetryGuard())
+	participant.AddOnClose(types.ParticipantCloseKeyNormal, func(p types.LocalParticipant) {
 		participantServerClosers.Close()
 
 		if err := r.roomStore.DeleteParticipant(ctx, room.Name(), p.Identity()); err != nil {
@@ -577,7 +588,7 @@ func (r *RoomManager) StartSession(
 		// update room store with new numParticipants
 		proto := room.ToProto()
 		persistRoomForParticipantCount(proto)
-		r.telemetry.ParticipantLeft(ctx, proto, p.ToProto(), true)
+		r.telemetry.ParticipantLeft(ctx, proto, p.ToProto(), true, participant.TelemetryGuard())
 	})
 	participant.OnClaimsChanged(func(participant types.LocalParticipant) {
 		pLogger.Debugw("refreshing client token after claims change")
@@ -672,7 +683,7 @@ func (r *RoomManager) getOrCreateRoom(ctx context.Context, createRoom *livekit.C
 		}
 	})
 
-	newRoom.OnParticipantChanged(func(p types.LocalParticipant) {
+	newRoom.OnParticipantChanged(func(p types.Participant) {
 		if !p.IsDisconnected() {
 			if err := r.roomStore.StoreParticipant(ctx, roomName, p.ToProto()); err != nil {
 				newRoom.Logger().Errorw("could not handle participant change", err)
@@ -836,6 +847,30 @@ func (r *RoomManager) MoveParticipant(ctx context.Context, req *livekit.MovePart
 	return nil, errors.New("not implemented")
 }
 
+func (r *RoomManager) PerformRpc(ctx context.Context, req *livekit.PerformRpcRequest) (*livekit.PerformRpcResponse, error) {
+	room := r.GetRoom(ctx, livekit.RoomName(req.GetRoom()))
+	if room == nil {
+		return nil, ErrRoomNotFound
+	}
+
+	participant := room.GetParticipant(livekit.ParticipantIdentity(req.GetDestinationIdentity()))
+	if participant == nil {
+		return nil, ErrParticipantNotFound
+	}
+
+	resultChan := make(chan string, 1)
+	errorChan := make(chan error, 1)
+
+	participant.PerformRpc(req, resultChan, errorChan)
+
+	select {
+	case result := <-resultChan:
+		return &livekit.PerformRpcResponse{Payload: result}, nil
+	case err := <-errorChan:
+		return nil, err
+	}
+}
+
 func (r *RoomManager) DeleteRoom(ctx context.Context, req *livekit.DeleteRoomRequest) (*livekit.DeleteRoomResponse, error) {
 	room := r.GetRoom(ctx, livekit.RoomName(req.Room))
 	if room == nil {
@@ -993,9 +1028,10 @@ func (r *RoomManager) iceServersForParticipant(apiKey string, participant types.
 		for _, s := range r.config.RTC.TURNServers {
 			scheme := "turn"
 			transport := "tcp"
-			if s.Protocol == "tls" {
+			switch s.Protocol {
+			case "tls":
 				scheme = "turns"
-			} else if s.Protocol == "udp" {
+			case "udp":
 				transport = "udp"
 			}
 			is := &livekit.ICEServer{
@@ -1099,6 +1135,10 @@ func (h *roomManagerParticipantHelper) GetSubscriberForwarderState(lp types.Loca
 
 func (h *roomManagerParticipantHelper) ResolveMediaTrack(lp types.LocalParticipant, trackID livekit.TrackID) types.MediaResolverResult {
 	return h.room.ResolveMediaTrackForSubscriber(lp, trackID)
+}
+
+func (h *roomManagerParticipantHelper) ResolveDataTrack(lp types.LocalParticipant, trackID livekit.TrackID) types.DataResolverResult {
+	return h.room.ResolveDataTrackForSubscriber(lp, trackID)
 }
 
 func (h *roomManagerParticipantHelper) ShouldRegressCodec() bool {

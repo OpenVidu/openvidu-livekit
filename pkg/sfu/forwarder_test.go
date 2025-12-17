@@ -33,7 +33,13 @@ func disable(f *Forwarder) {
 }
 
 func newForwarder(codec webrtc.RTPCodecCapability, kind webrtc.RTPCodecType) *Forwarder {
-	f := NewForwarder(kind, logger.GetLogger(), true, nil)
+	f := NewForwarder(
+		kind,
+		logger.GetLogger(),
+		true, // skipReferenceTS
+		true, // disableOpportunisticAllocation
+		nil,
+	)
 	f.DetermineCodec(codec, nil, livekit.VideoLayer_MODE_UNUSED)
 	return f
 }
@@ -464,6 +470,9 @@ func TestForwarderProvisionalAllocate(t *testing.T) {
 	f.SetMaxPublishedLayer(buffer.DefaultMaxLayerSpatial)
 	f.SetMaxTemporalLayerSeen(buffer.DefaultMaxLayerTemporal)
 
+	// Reset to invalid layers for testing allocation from scratch
+	disable(f)
+
 	bitrates := Bitrates{
 		{1, 2, 3, 4},
 		{5, 6, 7, 8},
@@ -682,6 +691,9 @@ func TestForwarderProvisionalAllocateMute(t *testing.T) {
 	f.SetMaxSpatialLayer(buffer.DefaultMaxLayerSpatial)
 	f.SetMaxTemporalLayer(buffer.DefaultMaxLayerTemporal)
 
+	// Reset to invalid layers for testing muted state
+	disable(f)
+
 	bitrates := Bitrates{
 		{1, 2, 3, 4},
 		{5, 6, 7, 8},
@@ -722,6 +734,9 @@ func TestForwarderProvisionalAllocateGetCooperativeTransition(t *testing.T) {
 	f.SetMaxTemporalLayer(buffer.DefaultMaxLayerTemporal)
 	f.SetMaxPublishedLayer(buffer.DefaultMaxLayerSpatial)
 	f.SetMaxTemporalLayerSeen(buffer.DefaultMaxLayerTemporal)
+
+	// Reset to invalid layers for testing cooperative transition from scratch
+	disable(f)
 
 	availableLayers := []int32{0, 1, 2}
 	bitrates := Bitrates{
@@ -1273,22 +1288,41 @@ func TestForwarderGetTranslationParamsAudio(t *testing.T) {
 	f := newForwarder(testutils.TestOpusCodec, webrtc.RTPCodecTypeAudio)
 
 	params := &testutils.TestExtPacketParams{
+		SequenceNumber: 23332,
+		Timestamp:      0xabcdef,
+		SSRC:           0x12345678,
+		PayloadSize:    20,
+		IsOutOfOrder:   true,
+	}
+	extPkt, _ := testutils.GetTestExtPacket(params)
+
+	// should not start on an out-of-order packet
+	expectedTP := TranslationParams{
+		shouldDrop: true,
+	}
+	actualTP, err := f.GetTranslationParams(extPkt, 0)
+	require.NoError(t, err)
+	require.Equal(t, expectedTP, actualTP)
+	require.False(t, f.started)
+	require.Zero(t, f.lastSSRC)
+
+	params = &testutils.TestExtPacketParams{
 		SequenceNumber: 23333,
 		Timestamp:      0xabcdef,
 		SSRC:           0x12345678,
 		PayloadSize:    20,
 	}
-	extPkt, _ := testutils.GetTestExtPacket(params)
+	extPkt, _ = testutils.GetTestExtPacket(params)
 
-	// should lock onto the first packet
-	expectedTP := TranslationParams{
+	// should lock onto the first in-order packet
+	expectedTP = TranslationParams{
 		rtp: TranslationParamsRTP{
 			snOrdering:        SequenceNumberOrderingContiguous,
 			extSequenceNumber: 23333,
 			extTimestamp:      0xabcdef,
 		},
 	}
-	actualTP, err := f.GetTranslationParams(extPkt, 0)
+	actualTP, err = f.GetTranslationParams(extPkt, 0)
 	require.NoError(t, err)
 	require.Equal(t, expectedTP, actualTP)
 	require.True(t, f.started)
@@ -1437,11 +1471,12 @@ func TestForwarderGetTranslationParamsVideo(t *testing.T) {
 	f := newForwarder(testutils.TestVP8Codec, webrtc.RTPCodecTypeVideo)
 
 	params := &testutils.TestExtPacketParams{
-		SequenceNumber: 23333,
+		SequenceNumber: 23332,
 		Timestamp:      0xabcdef,
 		SSRC:           0x12345678,
 		PayloadSize:    20,
-		SetMarker:      true,
+		Marker:         true,
+		IsOutOfOrder:   true,
 	}
 	vp8 := &buffer.VP8{
 		FirstByte:  25,
@@ -1460,11 +1495,45 @@ func TestForwarderGetTranslationParamsVideo(t *testing.T) {
 	}
 	extPkt, _ := testutils.GetTestExtPacketVP8(params, vp8)
 
-	// no target layers, should drop
+	// should not start on an out-of-order packet
 	expectedTP := TranslationParams{
 		shouldDrop: true,
 	}
 	actualTP, err := f.GetTranslationParams(extPkt, 0)
+	require.NoError(t, err)
+	require.Equal(t, expectedTP, actualTP)
+	require.False(t, f.started)
+	require.Zero(t, f.lastSSRC)
+
+	params = &testutils.TestExtPacketParams{
+		SequenceNumber: 23333,
+		Timestamp:      0xabcdef,
+		SSRC:           0x12345678,
+		PayloadSize:    20,
+		Marker:         true,
+	}
+	vp8 = &buffer.VP8{
+		FirstByte:  25,
+		I:          true,
+		M:          true,
+		PictureID:  13467,
+		L:          true,
+		TL0PICIDX:  233,
+		T:          true,
+		TID:        0,
+		Y:          true,
+		K:          true,
+		KEYIDX:     23,
+		HeaderSize: 6,
+		IsKeyFrame: false,
+	}
+	extPkt, _ = testutils.GetTestExtPacketVP8(params, vp8)
+
+	// no target layers, should drop
+	expectedTP = TranslationParams{
+		shouldDrop: true,
+	}
+	actualTP, err = f.GetTranslationParams(extPkt, 0)
 	require.NoError(t, err)
 	require.Equal(t, expectedTP, actualTP)
 
@@ -1889,7 +1958,7 @@ func TestForwarderGetSnTsForPadding(t *testing.T) {
 	disable(f)
 
 	// should get back frame end needed as the last packet did not have RTP marker set
-	snts, err := f.GetSnTsForPadding(5, false)
+	snts, err := f.GetSnTsForPadding(5, 0, false)
 	require.NoError(t, err)
 
 	numPadding := 5
@@ -1905,7 +1974,7 @@ func TestForwarderGetSnTsForPadding(t *testing.T) {
 	require.Equal(t, sntsExpected, snts)
 
 	// now that there is a marker, timestamp should jump on first padding when asked again
-	snts, err = f.GetSnTsForPadding(numPadding, false)
+	snts, err = f.GetSnTsForPadding(numPadding, 0, false)
 	require.NoError(t, err)
 
 	for i := 0; i < numPadding; i++ {

@@ -265,7 +265,7 @@ func TestFractionLostReport(t *testing.T) {
 		HeaderExtensions: nil,
 		Codecs:           []webrtc.RTPCodecParameters{opusCodec},
 	}, opusCodec.RTPCodecCapability, 0)
-	for i := 0; i < 15; i++ {
+	for i := range 15 {
 		pkt := rtp.Packet{
 			Header: rtp.Header{
 				Version:        2,
@@ -303,7 +303,7 @@ func TestFractionLostReport(t *testing.T) {
 		HeaderExtensions: nil,
 		Codecs:           []webrtc.RTPCodecParameters{opusCodec},
 	}, opusCodec.RTPCodecCapability, 0)
-	for i := 0; i < 15; i++ {
+	for i := range 15 {
 		pkt := rtp.Packet{
 			Header: rtp.Header{
 				Version:        2,
@@ -431,5 +431,14 @@ func BenchmarkMemcpu(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		copy(buf2, buf)
+	}
+}
+
+func BenchmarkExtPacketFactory(b *testing.B) {
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		extPkt := ExtPacketFactory.Get().(*ExtPacket)
+		*extPkt = ExtPacket{}
+		ExtPacketFactory.Put(extPkt)
 	}
 }

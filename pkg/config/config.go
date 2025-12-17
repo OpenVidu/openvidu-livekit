@@ -26,6 +26,7 @@ import (
 	"github.com/urfave/cli/v3"
 	"gopkg.in/yaml.v3"
 
+	"github.com/livekit/livekit-server/pkg/agent"
 	"github.com/livekit/livekit-server/pkg/metric"
 	"github.com/livekit/livekit-server/pkg/sfu"
 	"github.com/livekit/livekit-server/pkg/sfu/bwe/remotebwe"
@@ -83,12 +84,15 @@ type Config struct {
 	LogLevel string        `yaml:"log_level,omitempty"`
 	Logging  LoggingConfig `yaml:"logging,omitempty"`
 	Limit    LimitConfig   `yaml:"limit,omitempty"`
+	Agents   agent.Config  `yaml:"agents,omitempty"`
 
 	Development bool `yaml:"development,omitempty"`
 
 	Metric metric.MetricConfig `yaml:"metric,omitempty"`
 
 	NodeStats NodeStatsConfig `yaml:"node_stats,omitempty"`
+
+	EnableDataTracks bool `yaml:"enable_data_tracks,omitempty"`
 }
 
 type RTCConfig struct {
@@ -129,6 +133,9 @@ type RTCConfig struct {
 	// Threshold of data channel writing to be considered too slow, data packet could
 	// be dropped for a slow data channel to avoid blocking the room.
 	DatachannelSlowThreshold int `yaml:"datachannel_slow_threshold,omitempty"`
+
+	// Target latency for lossy data channels, used to drop packets to reduce latency.
+	DatachannelLossyTargetLatency time.Duration `yaml:"datachannel_lossy_target_latency,omitempty"`
 
 	ForwardStats ForwardStatsConfig `yaml:"forward_stats,omitempty"`
 }
@@ -218,6 +225,7 @@ type TURNConfig struct {
 type NodeSelectorConfig struct {
 	Kind         string         `yaml:"kind,omitempty"`
 	SortBy       string         `yaml:"sort_by,omitempty"`
+	Algorithm    string         `yaml:"algorithm,omitempty"`
 	CPULoadLimit float32        `yaml:"cpu_load_limit,omitempty"`
 	SysloadLimit float32        `yaml:"sysload_limit,omitempty"`
 	Regions      []RegionConfig `yaml:"regions,omitempty"`
@@ -401,6 +409,7 @@ var DefaultConfig = Config{
 		SortBy:       "random",
 		SysloadLimit: 0.9,
 		CPULoadLimit: 0.9,
+		Algorithm:    "lowest",
 	},
 	SignalRelay: SignalRelayConfig{
 		RetryTimeout:     7500 * time.Millisecond,
