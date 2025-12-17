@@ -19,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/livekit/livekit-server/pkg/sfu/mime"
 	"github.com/livekit/protocol/livekit"
 )
 
@@ -30,129 +31,174 @@ func TestRidConversion(t *testing.T) {
 	tests := []struct {
 		name       string
 		trackInfo  *livekit.TrackInfo
+		mimeType   mime.MimeType
 		ridToLayer map[string]RidAndLayer
 	}{
 		{
 			"no track info",
 			nil,
+			mime.MimeTypeVP8,
 			map[string]RidAndLayer{
-				"":                {rid: QuarterResolution, layer: 0},
-				QuarterResolution: {rid: QuarterResolution, layer: 0},
-				HalfResolution:    {rid: HalfResolution, layer: 1},
-				FullResolution:    {rid: FullResolution, layer: 2},
+				"":                 {rid: quarterResolutionQ, layer: 0},
+				quarterResolutionQ: {rid: quarterResolutionQ, layer: 0},
+				halfResolutionH:    {rid: halfResolutionH, layer: 1},
+				fullResolutionF:    {rid: fullResolutionF, layer: 2},
 			},
 		},
 		{
 			"no layers",
 			&livekit.TrackInfo{},
+			mime.MimeTypeVP8,
 			map[string]RidAndLayer{
-				"":                {rid: QuarterResolution, layer: 0},
-				QuarterResolution: {rid: QuarterResolution, layer: 0},
-				HalfResolution:    {rid: HalfResolution, layer: 1},
-				FullResolution:    {rid: FullResolution, layer: 2},
+				"":                 {rid: quarterResolutionQ, layer: 0},
+				quarterResolutionQ: {rid: quarterResolutionQ, layer: 0},
+				halfResolutionH:    {rid: halfResolutionH, layer: 1},
+				fullResolutionF:    {rid: fullResolutionF, layer: 2},
 			},
 		},
 		{
 			"single layer, low",
 			&livekit.TrackInfo{
-				Layers: []*livekit.VideoLayer{
-					{Quality: livekit.VideoQuality_LOW},
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_LOW},
+						},
+					},
 				},
 			},
+			mime.MimeTypeVP8,
 			map[string]RidAndLayer{
-				"":                {rid: QuarterResolution, layer: 0},
-				QuarterResolution: {rid: QuarterResolution, layer: 0},
-				HalfResolution:    {rid: QuarterResolution, layer: 0},
-				FullResolution:    {rid: QuarterResolution, layer: 0},
+				"":                 {rid: quarterResolutionQ, layer: 0},
+				quarterResolutionQ: {rid: quarterResolutionQ, layer: 0},
+				halfResolutionH:    {rid: quarterResolutionQ, layer: 0},
+				fullResolutionF:    {rid: quarterResolutionQ, layer: 0},
 			},
 		},
 		{
 			"single layer, medium",
 			&livekit.TrackInfo{
-				Layers: []*livekit.VideoLayer{
-					{Quality: livekit.VideoQuality_MEDIUM},
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_MEDIUM},
+						},
+					},
 				},
 			},
+			mime.MimeTypeVP8,
 			map[string]RidAndLayer{
-				"":                {rid: QuarterResolution, layer: 0},
-				QuarterResolution: {rid: QuarterResolution, layer: 0},
-				HalfResolution:    {rid: QuarterResolution, layer: 0},
-				FullResolution:    {rid: QuarterResolution, layer: 0},
+				"":                 {rid: quarterResolutionQ, layer: 0},
+				quarterResolutionQ: {rid: quarterResolutionQ, layer: 0},
+				halfResolutionH:    {rid: quarterResolutionQ, layer: 0},
+				fullResolutionF:    {rid: quarterResolutionQ, layer: 0},
 			},
 		},
 		{
 			"single layer, high",
 			&livekit.TrackInfo{
-				Layers: []*livekit.VideoLayer{
-					{Quality: livekit.VideoQuality_HIGH},
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_MEDIUM},
+						},
+					},
 				},
 			},
+			mime.MimeTypeVP8,
 			map[string]RidAndLayer{
-				"":                {rid: QuarterResolution, layer: 0},
-				QuarterResolution: {rid: QuarterResolution, layer: 0},
-				HalfResolution:    {rid: QuarterResolution, layer: 0},
-				FullResolution:    {rid: QuarterResolution, layer: 0},
+				"":                 {rid: quarterResolutionQ, layer: 0},
+				quarterResolutionQ: {rid: quarterResolutionQ, layer: 0},
+				halfResolutionH:    {rid: quarterResolutionQ, layer: 0},
+				fullResolutionF:    {rid: quarterResolutionQ, layer: 0},
 			},
 		},
 		{
 			"two layers, low and medium",
 			&livekit.TrackInfo{
-				Layers: []*livekit.VideoLayer{
-					{Quality: livekit.VideoQuality_LOW},
-					{Quality: livekit.VideoQuality_MEDIUM},
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_LOW},
+							{Quality: livekit.VideoQuality_MEDIUM},
+						},
+					},
 				},
 			},
+			mime.MimeTypeVP8,
 			map[string]RidAndLayer{
-				"":                {rid: QuarterResolution, layer: 0},
-				QuarterResolution: {rid: QuarterResolution, layer: 0},
-				HalfResolution:    {rid: HalfResolution, layer: 1},
-				FullResolution:    {rid: HalfResolution, layer: 1},
+				"":                 {rid: quarterResolutionQ, layer: 0},
+				quarterResolutionQ: {rid: quarterResolutionQ, layer: 0},
+				halfResolutionH:    {rid: halfResolutionH, layer: 1},
+				fullResolutionF:    {rid: halfResolutionH, layer: 1},
 			},
 		},
 		{
 			"two layers, low and high",
 			&livekit.TrackInfo{
-				Layers: []*livekit.VideoLayer{
-					{Quality: livekit.VideoQuality_LOW},
-					{Quality: livekit.VideoQuality_HIGH},
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_LOW},
+							{Quality: livekit.VideoQuality_HIGH},
+						},
+					},
 				},
 			},
+			mime.MimeTypeVP8,
 			map[string]RidAndLayer{
-				"":                {rid: QuarterResolution, layer: 0},
-				QuarterResolution: {rid: QuarterResolution, layer: 0},
-				HalfResolution:    {rid: HalfResolution, layer: 1},
-				FullResolution:    {rid: HalfResolution, layer: 1},
+				"":                 {rid: quarterResolutionQ, layer: 0},
+				quarterResolutionQ: {rid: quarterResolutionQ, layer: 0},
+				halfResolutionH:    {rid: halfResolutionH, layer: 1},
+				fullResolutionF:    {rid: halfResolutionH, layer: 1},
 			},
 		},
 		{
 			"two layers, medium and high",
 			&livekit.TrackInfo{
-				Layers: []*livekit.VideoLayer{
-					{Quality: livekit.VideoQuality_MEDIUM},
-					{Quality: livekit.VideoQuality_HIGH},
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_MEDIUM},
+							{Quality: livekit.VideoQuality_HIGH},
+						},
+					},
 				},
 			},
+			mime.MimeTypeVP8,
 			map[string]RidAndLayer{
-				"":                {rid: QuarterResolution, layer: 0},
-				QuarterResolution: {rid: QuarterResolution, layer: 0},
-				HalfResolution:    {rid: HalfResolution, layer: 1},
-				FullResolution:    {rid: HalfResolution, layer: 1},
+				"":                 {rid: quarterResolutionQ, layer: 0},
+				quarterResolutionQ: {rid: quarterResolutionQ, layer: 0},
+				halfResolutionH:    {rid: halfResolutionH, layer: 1},
+				fullResolutionF:    {rid: halfResolutionH, layer: 1},
 			},
 		},
 		{
 			"three layers",
 			&livekit.TrackInfo{
-				Layers: []*livekit.VideoLayer{
-					{Quality: livekit.VideoQuality_LOW},
-					{Quality: livekit.VideoQuality_MEDIUM},
-					{Quality: livekit.VideoQuality_HIGH},
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_LOW},
+							{Quality: livekit.VideoQuality_MEDIUM},
+							{Quality: livekit.VideoQuality_HIGH},
+						},
+					},
 				},
 			},
+			mime.MimeTypeVP8,
 			map[string]RidAndLayer{
-				"":                {rid: QuarterResolution, layer: 0},
-				QuarterResolution: {rid: QuarterResolution, layer: 0},
-				HalfResolution:    {rid: HalfResolution, layer: 1},
-				FullResolution:    {rid: FullResolution, layer: 2},
+				"":                 {rid: quarterResolutionQ, layer: 0},
+				quarterResolutionQ: {rid: quarterResolutionQ, layer: 0},
+				halfResolutionH:    {rid: halfResolutionH, layer: 1},
+				fullResolutionF:    {rid: fullResolutionF, layer: 2},
 			},
 		},
 	}
@@ -160,10 +206,10 @@ func TestRidConversion(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			for testRid, expectedResult := range test.ridToLayer {
-				actualLayer := RidToSpatialLayer(testRid, test.trackInfo)
+				actualLayer := RidToSpatialLayer(test.mimeType, testRid, test.trackInfo, DefaultVideoLayersRid)
 				require.Equal(t, expectedResult.layer, actualLayer)
 
-				actualRid := SpatialLayerToRid(actualLayer, test.trackInfo)
+				actualRid := SpatialLayerToRid(test.mimeType, actualLayer, test.trackInfo, DefaultVideoLayersRid)
 				require.Equal(t, expectedResult.rid, actualRid)
 			}
 		})
@@ -178,11 +224,13 @@ func TestQualityConversion(t *testing.T) {
 	tests := []struct {
 		name           string
 		trackInfo      *livekit.TrackInfo
+		mimeType       mime.MimeType
 		qualityToLayer map[livekit.VideoQuality]QualityAndLayer
 	}{
 		{
 			"no track info",
 			nil,
+			mime.MimeTypeVP8,
 			map[livekit.VideoQuality]QualityAndLayer{
 				livekit.VideoQuality_LOW:    {quality: livekit.VideoQuality_LOW, layer: 0},
 				livekit.VideoQuality_MEDIUM: {quality: livekit.VideoQuality_MEDIUM, layer: 1},
@@ -192,6 +240,7 @@ func TestQualityConversion(t *testing.T) {
 		{
 			"no layers",
 			&livekit.TrackInfo{},
+			mime.MimeTypeVP8,
 			map[livekit.VideoQuality]QualityAndLayer{
 				livekit.VideoQuality_LOW:    {quality: livekit.VideoQuality_LOW, layer: 0},
 				livekit.VideoQuality_MEDIUM: {quality: livekit.VideoQuality_MEDIUM, layer: 1},
@@ -201,10 +250,16 @@ func TestQualityConversion(t *testing.T) {
 		{
 			"single layer, low",
 			&livekit.TrackInfo{
-				Layers: []*livekit.VideoLayer{
-					{Quality: livekit.VideoQuality_LOW},
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_LOW},
+						},
+					},
 				},
 			},
+			mime.MimeTypeVP8,
 			map[livekit.VideoQuality]QualityAndLayer{
 				livekit.VideoQuality_LOW:    {quality: livekit.VideoQuality_LOW, layer: 0},
 				livekit.VideoQuality_MEDIUM: {quality: livekit.VideoQuality_LOW, layer: 0},
@@ -214,10 +269,16 @@ func TestQualityConversion(t *testing.T) {
 		{
 			"single layer, medium",
 			&livekit.TrackInfo{
-				Layers: []*livekit.VideoLayer{
-					{Quality: livekit.VideoQuality_MEDIUM},
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_MEDIUM},
+						},
+					},
 				},
 			},
+			mime.MimeTypeVP8,
 			map[livekit.VideoQuality]QualityAndLayer{
 				livekit.VideoQuality_LOW:    {quality: livekit.VideoQuality_MEDIUM, layer: 0},
 				livekit.VideoQuality_MEDIUM: {quality: livekit.VideoQuality_MEDIUM, layer: 0},
@@ -227,10 +288,16 @@ func TestQualityConversion(t *testing.T) {
 		{
 			"single layer, high",
 			&livekit.TrackInfo{
-				Layers: []*livekit.VideoLayer{
-					{Quality: livekit.VideoQuality_HIGH},
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_HIGH},
+						},
+					},
 				},
 			},
+			mime.MimeTypeVP8,
 			map[livekit.VideoQuality]QualityAndLayer{
 				livekit.VideoQuality_LOW:    {quality: livekit.VideoQuality_HIGH, layer: 0},
 				livekit.VideoQuality_MEDIUM: {quality: livekit.VideoQuality_HIGH, layer: 0},
@@ -240,11 +307,17 @@ func TestQualityConversion(t *testing.T) {
 		{
 			"two layers, low and medium",
 			&livekit.TrackInfo{
-				Layers: []*livekit.VideoLayer{
-					{Quality: livekit.VideoQuality_LOW},
-					{Quality: livekit.VideoQuality_MEDIUM},
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_LOW},
+							{Quality: livekit.VideoQuality_MEDIUM},
+						},
+					},
 				},
 			},
+			mime.MimeTypeVP8,
 			map[livekit.VideoQuality]QualityAndLayer{
 				livekit.VideoQuality_LOW:    {quality: livekit.VideoQuality_LOW, layer: 0},
 				livekit.VideoQuality_MEDIUM: {quality: livekit.VideoQuality_MEDIUM, layer: 1},
@@ -254,11 +327,17 @@ func TestQualityConversion(t *testing.T) {
 		{
 			"two layers, low and high",
 			&livekit.TrackInfo{
-				Layers: []*livekit.VideoLayer{
-					{Quality: livekit.VideoQuality_LOW},
-					{Quality: livekit.VideoQuality_HIGH},
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_LOW},
+							{Quality: livekit.VideoQuality_HIGH},
+						},
+					},
 				},
 			},
+			mime.MimeTypeVP8,
 			map[livekit.VideoQuality]QualityAndLayer{
 				livekit.VideoQuality_LOW:    {quality: livekit.VideoQuality_LOW, layer: 0},
 				livekit.VideoQuality_MEDIUM: {quality: livekit.VideoQuality_HIGH, layer: 1},
@@ -268,11 +347,17 @@ func TestQualityConversion(t *testing.T) {
 		{
 			"two layers, medium and high",
 			&livekit.TrackInfo{
-				Layers: []*livekit.VideoLayer{
-					{Quality: livekit.VideoQuality_MEDIUM},
-					{Quality: livekit.VideoQuality_HIGH},
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_MEDIUM},
+							{Quality: livekit.VideoQuality_HIGH},
+						},
+					},
 				},
 			},
+			mime.MimeTypeVP8,
 			map[livekit.VideoQuality]QualityAndLayer{
 				livekit.VideoQuality_LOW:    {quality: livekit.VideoQuality_MEDIUM, layer: 0},
 				livekit.VideoQuality_MEDIUM: {quality: livekit.VideoQuality_MEDIUM, layer: 0},
@@ -282,12 +367,18 @@ func TestQualityConversion(t *testing.T) {
 		{
 			"three layers",
 			&livekit.TrackInfo{
-				Layers: []*livekit.VideoLayer{
-					{Quality: livekit.VideoQuality_LOW},
-					{Quality: livekit.VideoQuality_MEDIUM},
-					{Quality: livekit.VideoQuality_HIGH},
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_LOW},
+							{Quality: livekit.VideoQuality_MEDIUM},
+							{Quality: livekit.VideoQuality_HIGH},
+						},
+					},
 				},
 			},
+			mime.MimeTypeVP8,
 			map[livekit.VideoQuality]QualityAndLayer{
 				livekit.VideoQuality_LOW:    {quality: livekit.VideoQuality_LOW, layer: 0},
 				livekit.VideoQuality_MEDIUM: {quality: livekit.VideoQuality_MEDIUM, layer: 1},
@@ -299,10 +390,10 @@ func TestQualityConversion(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			for testQuality, expectedResult := range test.qualityToLayer {
-				actualLayer := VideoQualityToSpatialLayer(testQuality, test.trackInfo)
+				actualLayer := VideoQualityToSpatialLayer(test.mimeType, testQuality, test.trackInfo)
 				require.Equal(t, expectedResult.layer, actualLayer)
 
-				actualQuality := SpatialLayerToVideoQuality(actualLayer, test.trackInfo)
+				actualQuality := SpatialLayerToVideoQuality(test.mimeType, actualLayer, test.trackInfo)
 				require.Equal(t, expectedResult.quality, actualQuality)
 			}
 		})
@@ -313,120 +404,165 @@ func TestVideoQualityToRidConversion(t *testing.T) {
 	tests := []struct {
 		name         string
 		trackInfo    *livekit.TrackInfo
+		mimeTye      mime.MimeType
 		qualityToRid map[livekit.VideoQuality]string
 	}{
 		{
 			"no track info",
 			nil,
+			mime.MimeTypeVP8,
 			map[livekit.VideoQuality]string{
-				livekit.VideoQuality_LOW:    QuarterResolution,
-				livekit.VideoQuality_MEDIUM: HalfResolution,
-				livekit.VideoQuality_HIGH:   FullResolution,
+				livekit.VideoQuality_LOW:    quarterResolutionQ,
+				livekit.VideoQuality_MEDIUM: halfResolutionH,
+				livekit.VideoQuality_HIGH:   fullResolutionF,
 			},
 		},
 		{
 			"no layers",
 			&livekit.TrackInfo{},
+			mime.MimeTypeVP8,
 			map[livekit.VideoQuality]string{
-				livekit.VideoQuality_LOW:    QuarterResolution,
-				livekit.VideoQuality_MEDIUM: HalfResolution,
-				livekit.VideoQuality_HIGH:   FullResolution,
+				livekit.VideoQuality_LOW:    quarterResolutionQ,
+				livekit.VideoQuality_MEDIUM: halfResolutionH,
+				livekit.VideoQuality_HIGH:   fullResolutionF,
 			},
 		},
 		{
 			"single layer, low",
 			&livekit.TrackInfo{
-				Layers: []*livekit.VideoLayer{
-					{Quality: livekit.VideoQuality_LOW},
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_LOW},
+						},
+					},
 				},
 			},
+			mime.MimeTypeVP8,
 			map[livekit.VideoQuality]string{
-				livekit.VideoQuality_LOW:    QuarterResolution,
-				livekit.VideoQuality_MEDIUM: QuarterResolution,
-				livekit.VideoQuality_HIGH:   QuarterResolution,
+				livekit.VideoQuality_LOW:    quarterResolutionQ,
+				livekit.VideoQuality_MEDIUM: quarterResolutionQ,
+				livekit.VideoQuality_HIGH:   quarterResolutionQ,
 			},
 		},
 		{
 			"single layer, medium",
 			&livekit.TrackInfo{
-				Layers: []*livekit.VideoLayer{
-					{Quality: livekit.VideoQuality_MEDIUM},
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_MEDIUM},
+						},
+					},
 				},
 			},
+			mime.MimeTypeVP8,
 			map[livekit.VideoQuality]string{
-				livekit.VideoQuality_LOW:    QuarterResolution,
-				livekit.VideoQuality_MEDIUM: QuarterResolution,
-				livekit.VideoQuality_HIGH:   QuarterResolution,
+				livekit.VideoQuality_LOW:    quarterResolutionQ,
+				livekit.VideoQuality_MEDIUM: quarterResolutionQ,
+				livekit.VideoQuality_HIGH:   quarterResolutionQ,
 			},
 		},
 		{
 			"single layer, high",
 			&livekit.TrackInfo{
-				Layers: []*livekit.VideoLayer{
-					{Quality: livekit.VideoQuality_HIGH},
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_HIGH},
+						},
+					},
 				},
 			},
+			mime.MimeTypeVP8,
 			map[livekit.VideoQuality]string{
-				livekit.VideoQuality_LOW:    QuarterResolution,
-				livekit.VideoQuality_MEDIUM: QuarterResolution,
-				livekit.VideoQuality_HIGH:   QuarterResolution,
+				livekit.VideoQuality_LOW:    quarterResolutionQ,
+				livekit.VideoQuality_MEDIUM: quarterResolutionQ,
+				livekit.VideoQuality_HIGH:   quarterResolutionQ,
 			},
 		},
 		{
 			"two layers, low and medium",
 			&livekit.TrackInfo{
-				Layers: []*livekit.VideoLayer{
-					{Quality: livekit.VideoQuality_LOW},
-					{Quality: livekit.VideoQuality_MEDIUM},
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_LOW},
+							{Quality: livekit.VideoQuality_MEDIUM},
+						},
+					},
 				},
 			},
+			mime.MimeTypeVP8,
 			map[livekit.VideoQuality]string{
-				livekit.VideoQuality_LOW:    QuarterResolution,
-				livekit.VideoQuality_MEDIUM: HalfResolution,
-				livekit.VideoQuality_HIGH:   HalfResolution,
+				livekit.VideoQuality_LOW:    quarterResolutionQ,
+				livekit.VideoQuality_MEDIUM: halfResolutionH,
+				livekit.VideoQuality_HIGH:   halfResolutionH,
 			},
 		},
 		{
 			"two layers, low and high",
 			&livekit.TrackInfo{
-				Layers: []*livekit.VideoLayer{
-					{Quality: livekit.VideoQuality_LOW},
-					{Quality: livekit.VideoQuality_HIGH},
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_LOW},
+							{Quality: livekit.VideoQuality_HIGH},
+						},
+					},
 				},
 			},
+			mime.MimeTypeVP8,
 			map[livekit.VideoQuality]string{
-				livekit.VideoQuality_LOW:    QuarterResolution,
-				livekit.VideoQuality_MEDIUM: HalfResolution,
-				livekit.VideoQuality_HIGH:   HalfResolution,
+				livekit.VideoQuality_LOW:    quarterResolutionQ,
+				livekit.VideoQuality_MEDIUM: halfResolutionH,
+				livekit.VideoQuality_HIGH:   halfResolutionH,
 			},
 		},
 		{
 			"two layers, medium and high",
 			&livekit.TrackInfo{
-				Layers: []*livekit.VideoLayer{
-					{Quality: livekit.VideoQuality_MEDIUM},
-					{Quality: livekit.VideoQuality_HIGH},
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_MEDIUM},
+							{Quality: livekit.VideoQuality_HIGH},
+						},
+					},
 				},
 			},
+			mime.MimeTypeVP8,
 			map[livekit.VideoQuality]string{
-				livekit.VideoQuality_LOW:    QuarterResolution,
-				livekit.VideoQuality_MEDIUM: QuarterResolution,
-				livekit.VideoQuality_HIGH:   HalfResolution,
+				livekit.VideoQuality_LOW:    quarterResolutionQ,
+				livekit.VideoQuality_MEDIUM: quarterResolutionQ,
+				livekit.VideoQuality_HIGH:   halfResolutionH,
 			},
 		},
 		{
 			"three layers",
 			&livekit.TrackInfo{
-				Layers: []*livekit.VideoLayer{
-					{Quality: livekit.VideoQuality_LOW},
-					{Quality: livekit.VideoQuality_MEDIUM},
-					{Quality: livekit.VideoQuality_HIGH},
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_LOW},
+							{Quality: livekit.VideoQuality_MEDIUM},
+							{Quality: livekit.VideoQuality_HIGH},
+						},
+					},
 				},
 			},
+			mime.MimeTypeVP8,
 			map[livekit.VideoQuality]string{
-				livekit.VideoQuality_LOW:    QuarterResolution,
-				livekit.VideoQuality_MEDIUM: HalfResolution,
-				livekit.VideoQuality_HIGH:   FullResolution,
+				livekit.VideoQuality_LOW:    quarterResolutionQ,
+				livekit.VideoQuality_MEDIUM: halfResolutionH,
+				livekit.VideoQuality_HIGH:   fullResolutionF,
 			},
 		},
 	}
@@ -434,9 +570,323 @@ func TestVideoQualityToRidConversion(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			for testQuality, expectedRid := range test.qualityToRid {
-				actualRid := VideoQualityToRid(testQuality, test.trackInfo)
+				actualRid := VideoQualityToRid(test.mimeTye, testQuality, test.trackInfo, DefaultVideoLayersRid)
 				require.Equal(t, expectedRid, actualRid)
 			}
+		})
+	}
+}
+
+func TestGetSpatialLayerForRid(t *testing.T) {
+	tests := []struct {
+		name              string
+		trackInfo         *livekit.TrackInfo
+		mimeType          mime.MimeType
+		ridToSpatialLayer map[string]int32
+	}{
+		{
+			"no track info",
+			nil,
+			mime.MimeTypeVP8,
+			map[string]int32{
+				quarterResolutionQ: InvalidLayerSpatial,
+				halfResolutionH:    InvalidLayerSpatial,
+				fullResolutionF:    InvalidLayerSpatial,
+			},
+		},
+		{
+			"no layers",
+			&livekit.TrackInfo{},
+			mime.MimeTypeVP8,
+			map[string]int32{
+				// SIMULCAST-CODEC-TODO
+				// quarterResolutionQ: InvalidLayerSpatial,
+				// halfResolutionH:    InvalidLayerSpatial,
+				// fullResolutionF:    InvalidLayerSpatial,
+				quarterResolutionQ: 0,
+				halfResolutionH:    0,
+				fullResolutionF:    0,
+			},
+		},
+		{
+			"no rid",
+			&livekit.TrackInfo{},
+			mime.MimeTypeVP8,
+			map[string]int32{
+				"": 0,
+			},
+		},
+		{
+			"single layer",
+			&livekit.TrackInfo{
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_LOW, SpatialLayer: 0},
+						},
+					},
+				},
+			},
+			mime.MimeTypeVP8,
+			map[string]int32{
+				quarterResolutionQ: 0,
+				halfResolutionH:    0,
+				fullResolutionF:    0,
+			},
+		},
+		{
+			"layers",
+			&livekit.TrackInfo{
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_LOW, SpatialLayer: 0, Rid: quarterResolutionQ},
+							{Quality: livekit.VideoQuality_MEDIUM, SpatialLayer: 1, Rid: halfResolutionH},
+						},
+					},
+				},
+			},
+			mime.MimeTypeVP8,
+			map[string]int32{
+				quarterResolutionQ: 0,
+				halfResolutionH:    1,
+				// SIMULCAST-CODEC-TODO
+				// fullResolutionF:    InvalidLayerSpatial,
+				fullResolutionF: 0,
+			},
+		},
+		{
+			"layers - no rid",
+			&livekit.TrackInfo{
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_LOW, SpatialLayer: 0},
+							{Quality: livekit.VideoQuality_MEDIUM, SpatialLayer: 1},
+						},
+					},
+				},
+			},
+			mime.MimeTypeVP8,
+			map[string]int32{
+				quarterResolutionQ: 0,
+				halfResolutionH:    0,
+				fullResolutionF:    0,
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for testRid, expectedSpatialLayer := range test.ridToSpatialLayer {
+				actualSpatialLayer := GetSpatialLayerForRid(test.mimeType, testRid, test.trackInfo)
+				require.Equal(t, expectedSpatialLayer, actualSpatialLayer)
+			}
+		})
+	}
+}
+
+func TestGetSpatialLayerForVideoQuality(t *testing.T) {
+	tests := []struct {
+		name                       string
+		trackInfo                  *livekit.TrackInfo
+		mimeType                   mime.MimeType
+		videoQualityToSpatialLayer map[livekit.VideoQuality]int32
+	}{
+		{
+			"no track info",
+			nil,
+			mime.MimeTypeVP8,
+			map[livekit.VideoQuality]int32{
+				livekit.VideoQuality_LOW:    InvalidLayerSpatial,
+				livekit.VideoQuality_MEDIUM: InvalidLayerSpatial,
+				livekit.VideoQuality_HIGH:   InvalidLayerSpatial,
+				livekit.VideoQuality_OFF:    InvalidLayerSpatial,
+			},
+		},
+		{
+			"no layers",
+			&livekit.TrackInfo{},
+			mime.MimeTypeVP8,
+			map[livekit.VideoQuality]int32{
+				livekit.VideoQuality_LOW:    0,
+				livekit.VideoQuality_MEDIUM: 0,
+				livekit.VideoQuality_HIGH:   0,
+				livekit.VideoQuality_OFF:    InvalidLayerSpatial,
+			},
+		},
+		{
+			"not all layers",
+			&livekit.TrackInfo{
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_LOW, SpatialLayer: 0, Rid: quarterResolutionQ},
+							{Quality: livekit.VideoQuality_MEDIUM, SpatialLayer: 1, Rid: halfResolutionH},
+						},
+					},
+				},
+			},
+			mime.MimeTypeVP8,
+			map[livekit.VideoQuality]int32{
+				livekit.VideoQuality_LOW:    0,
+				livekit.VideoQuality_MEDIUM: 1,
+				livekit.VideoQuality_HIGH:   1,
+				livekit.VideoQuality_OFF:    InvalidLayerSpatial,
+			},
+		},
+		{
+			"all layers",
+			&livekit.TrackInfo{
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_LOW, SpatialLayer: 0, Rid: quarterResolutionQ},
+							{Quality: livekit.VideoQuality_MEDIUM, SpatialLayer: 1, Rid: halfResolutionH},
+							{Quality: livekit.VideoQuality_HIGH, SpatialLayer: 2, Rid: fullResolutionF},
+						},
+					},
+				},
+			},
+			mime.MimeTypeVP8,
+			map[livekit.VideoQuality]int32{
+				livekit.VideoQuality_LOW:    0,
+				livekit.VideoQuality_MEDIUM: 1,
+				livekit.VideoQuality_HIGH:   2,
+				livekit.VideoQuality_OFF:    InvalidLayerSpatial,
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for testVideoQuality, expectedSpatialLayer := range test.videoQualityToSpatialLayer {
+				actualSpatialLayer := GetSpatialLayerForVideoQuality(test.mimeType, testVideoQuality, test.trackInfo)
+				require.Equal(t, expectedSpatialLayer, actualSpatialLayer)
+			}
+		})
+	}
+}
+
+func TestGetVideoQualityorSpatialLayer(t *testing.T) {
+	tests := []struct {
+		name                       string
+		trackInfo                  *livekit.TrackInfo
+		mimeType                   mime.MimeType
+		spatialLayerToVideoQuality map[int32]livekit.VideoQuality
+	}{
+		{
+			"no track info",
+			nil,
+			mime.MimeTypeVP8,
+			map[int32]livekit.VideoQuality{
+				InvalidLayerSpatial: livekit.VideoQuality_OFF,
+				0:                   livekit.VideoQuality_OFF,
+				1:                   livekit.VideoQuality_OFF,
+				2:                   livekit.VideoQuality_OFF,
+			},
+		},
+		{
+			"no layers",
+			&livekit.TrackInfo{},
+			mime.MimeTypeVP8,
+			map[int32]livekit.VideoQuality{
+				InvalidLayerSpatial: livekit.VideoQuality_OFF,
+				0:                   livekit.VideoQuality_OFF,
+				1:                   livekit.VideoQuality_OFF,
+				2:                   livekit.VideoQuality_OFF,
+			},
+		},
+		{
+			"layers",
+			&livekit.TrackInfo{
+				Codecs: []*livekit.SimulcastCodecInfo{
+					{
+						MimeType: mime.MimeTypeVP8.String(),
+						Layers: []*livekit.VideoLayer{
+							{Quality: livekit.VideoQuality_LOW, SpatialLayer: 0, Rid: quarterResolutionQ},
+							{Quality: livekit.VideoQuality_MEDIUM, SpatialLayer: 1, Rid: halfResolutionH},
+						},
+					},
+				},
+			},
+			mime.MimeTypeVP8,
+			map[int32]livekit.VideoQuality{
+				InvalidLayerSpatial: livekit.VideoQuality_OFF,
+				0:                   livekit.VideoQuality_LOW,
+				1:                   livekit.VideoQuality_MEDIUM,
+				2:                   livekit.VideoQuality_OFF,
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for testSpatialLayer, expectedVideoQuality := range test.spatialLayerToVideoQuality {
+				actualVideoQuality := GetVideoQualityForSpatialLayer(test.mimeType, testSpatialLayer, test.trackInfo)
+				require.Equal(t, expectedVideoQuality, actualVideoQuality)
+			}
+		})
+	}
+}
+
+func TestNormalizeVideoLayersRid(t *testing.T) {
+	tests := []struct {
+		name       string
+		rids       VideoLayersRid
+		normalized VideoLayersRid
+	}{
+		{
+			"empty",
+			VideoLayersRid{},
+			VideoLayersRid{},
+		},
+		{
+			"unknown pattern",
+			VideoLayersRid{"3", "2", "1"},
+			VideoLayersRid{"3", "2", "1"},
+		},
+		{
+			"qhf",
+			videoLayersRidQHF,
+			videoLayersRidQHF,
+		},
+		{
+			"scrambled qhf",
+			VideoLayersRid{"f", "h", "q"},
+			videoLayersRidQHF,
+		},
+		{
+			"partial qhf",
+			VideoLayersRid{"h", "q"},
+			VideoLayersRid{"q", "h", ""},
+		},
+		{
+			"210",
+			videoLayersRid210,
+			videoLayersRid210,
+		},
+		{
+			"scrambled 210",
+			VideoLayersRid{"2", "0", "1"},
+			videoLayersRid210,
+		},
+		{
+			"partial 210",
+			VideoLayersRid{"1", "2"},
+			VideoLayersRid{"2", "1", ""},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			normalizedRids := NormalizeVideoLayersRid(test.rids)
+			require.Equal(t, test.normalized, normalizedRids)
 		})
 	}
 }

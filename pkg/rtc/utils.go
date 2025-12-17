@@ -15,13 +15,13 @@
 package rtc
 
 import (
-	"encoding/json"
 	"errors"
 	"io"
 	"net"
 	"strings"
 
 	"github.com/pion/webrtc/v4"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/livekit/livekit-server/pkg/sfu/mime"
 	"github.com/livekit/protocol/livekit"
@@ -78,49 +78,6 @@ func UnpackDataTrackLabel(packed string) (participantID livekit.ParticipantID, t
 	trackID = livekit.TrackID(parts[1])
 	label = parts[2]
 	return
-}
-
-func ToProtoSessionDescription(sd webrtc.SessionDescription) *livekit.SessionDescription {
-	return &livekit.SessionDescription{
-		Type: sd.Type.String(),
-		Sdp:  sd.SDP,
-	}
-}
-
-func FromProtoSessionDescription(sd *livekit.SessionDescription) webrtc.SessionDescription {
-	var sdType webrtc.SDPType
-	switch sd.Type {
-	case webrtc.SDPTypeOffer.String():
-		sdType = webrtc.SDPTypeOffer
-	case webrtc.SDPTypeAnswer.String():
-		sdType = webrtc.SDPTypeAnswer
-	case webrtc.SDPTypePranswer.String():
-		sdType = webrtc.SDPTypePranswer
-	case webrtc.SDPTypeRollback.String():
-		sdType = webrtc.SDPTypeRollback
-	}
-	return webrtc.SessionDescription{
-		Type: sdType,
-		SDP:  sd.Sdp,
-	}
-}
-
-func ToProtoTrickle(candidateInit webrtc.ICECandidateInit, target livekit.SignalTarget, final bool) *livekit.TrickleRequest {
-	data, _ := json.Marshal(candidateInit)
-	return &livekit.TrickleRequest{
-		CandidateInit: string(data),
-		Target:        target,
-		Final:         final,
-	}
-}
-
-func FromProtoTrickle(trickle *livekit.TrickleRequest) (webrtc.ICECandidateInit, error) {
-	ci := webrtc.ICECandidateInit{}
-	err := json.Unmarshal([]byte(trickle.CandidateInit), &ci)
-	if err != nil {
-		return webrtc.ICECandidateInit{}, err
-	}
-	return ci, nil
 }
 
 func ToProtoTrackKind(kind webrtc.RTPCodecType) livekit.TrackType {
@@ -214,4 +171,24 @@ func MaybeTruncateIP(addr string) string {
 	}
 
 	return addr[:len(addr)-3] + "..."
+}
+
+func ChunkProtoBatch[T proto.Message](batch []T, target int) [][]T {
+	var chunks [][]T
+	var start, size int
+	for i, m := range batch {
+		s := proto.Size(m)
+		if size+s > target {
+			if start < i {
+				chunks = append(chunks, batch[start:i])
+			}
+			start = i
+			size = 0
+		}
+		size += s
+	}
+	if start < len(batch) {
+		chunks = append(chunks, batch[start:])
+	}
+	return chunks
 }

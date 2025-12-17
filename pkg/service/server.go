@@ -47,21 +47,21 @@ import (
 )
 
 type LivekitServer struct {
-	config         *config.Config
-	ioService      *IOInfoService
-	rtcService     *RTCService
-	rtcRestService *RTCRestService
-	agentService   *AgentService
-	httpServer     *http.Server
-	promServer     *http.Server
-	router         routing.Router
-	roomManager    *RoomManager
-	signalServer   *SignalServer
-	turnServer     *turn.Server
-	currentNode    routing.LocalNode
-	running        atomic.Bool
-	doneChan       chan struct{}
-	closedChan     chan struct{}
+	config       *config.Config
+	ioService    *IOInfoService
+	rtcService   *RTCService
+	whipService  *WHIPService
+	agentService *AgentService
+	httpServer   *http.Server
+	promServer   *http.Server
+	router       routing.Router
+	roomManager  *RoomManager
+	signalServer *SignalServer
+	turnServer   *turn.Server
+	currentNode  routing.LocalNode
+	running      atomic.Bool
+	doneChan     chan struct{}
+	closedChan   chan struct{}
 }
 
 func NewLivekitServer(conf *config.Config,
@@ -72,7 +72,7 @@ func NewLivekitServer(conf *config.Config,
 	sipService *SIPService,
 	ioService *IOInfoService,
 	rtcService *RTCService,
-	rtcRestService *RTCRestService,
+	whipService *WHIPService,
 	agentService *AgentService,
 	keyProvider auth.KeyProvider,
 	router routing.Router,
@@ -82,14 +82,14 @@ func NewLivekitServer(conf *config.Config,
 	currentNode routing.LocalNode,
 ) (s *LivekitServer, err error) {
 	s = &LivekitServer{
-		config:         conf,
-		ioService:      ioService,
-		rtcService:     rtcService,
-		rtcRestService: rtcRestService,
-		agentService:   agentService,
-		router:         router,
-		roomManager:    roomManager,
-		signalServer:   signalServer,
+		config:       conf,
+		ioService:    ioService,
+		rtcService:   rtcService,
+		whipService:  whipService,
+		agentService: agentService,
+		router:       router,
+		roomManager:  roomManager,
+		signalServer: signalServer,
 		// turn server starts automatically
 		turnServer:  turnServer,
 		currentNode: currentNode,
@@ -148,9 +148,8 @@ func NewLivekitServer(conf *config.Config,
 	xtwirp.RegisterServer(mux, egressServer)
 	xtwirp.RegisterServer(mux, ingressServer)
 	xtwirp.RegisterServer(mux, sipServer)
-	mux.Handle("/rtc", rtcService)
 	rtcService.SetupRoutes(mux)
-	rtcRestService.SetupRoutes(mux)
+	whipService.SetupRoutes(mux)
 	mux.Handle("/agent", agentService)
 	mux.HandleFunc("/", s.defaultHandler)
 

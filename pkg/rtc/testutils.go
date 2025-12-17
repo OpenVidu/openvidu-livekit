@@ -17,6 +17,7 @@ package rtc
 import (
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
+	"github.com/livekit/protocol/observability/roomobs"
 	"github.com/livekit/protocol/utils"
 	"github.com/livekit/protocol/utils/guid"
 
@@ -67,7 +68,7 @@ func NewMockParticipant(identity livekit.ParticipantIdentity, protocol types.Pro
 		}
 	}
 
-	p.SetTrackMutedCalls(func(sid livekit.TrackID, muted bool, fromServer bool) *livekit.TrackInfo {
+	p.SetTrackMutedCalls(func(mute *livekit.MuteTrackRequest, fromServer bool) *livekit.TrackInfo {
 		updateTrack()
 		return nil
 	})
@@ -75,6 +76,7 @@ func NewMockParticipant(identity livekit.ParticipantIdentity, protocol types.Pro
 		updateTrack()
 	})
 	p.GetLoggerReturns(logger.GetLogger())
+	p.GetReporterReturns(roomobs.NewNoopParticipantSessionReporter())
 
 	return p
 }

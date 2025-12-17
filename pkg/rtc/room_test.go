@@ -179,7 +179,7 @@ func TestParticipantUpdate(t *testing.T) {
 			"track mutes are sent to everyone",
 			true,
 			func(p types.LocalParticipant) {
-				p.SetTrackMuted("", true, false)
+				p.SetTrackMuted(&livekit.MuteTrackRequest{Muted: true}, false)
 			},
 		},
 		{
@@ -651,7 +651,7 @@ func TestDataChannel(t *testing.T) {
 						continue
 					}
 					require.Equal(t, 1, fp.SendDataMessageCallCount())
-					_, got := fp.SendDataMessageArgsForCall(0)
+					_, got, _, _ := fp.SendDataMessageArgsForCall(0)
 					require.Equal(t, encoded, got)
 				}
 			})
@@ -698,7 +698,7 @@ func TestDataChannel(t *testing.T) {
 					}
 				}
 				require.Equal(t, 1, p1.SendDataMessageCallCount())
-				_, got := p1.SendDataMessageArgsForCall(0)
+				_, got, _, _ := p1.SendDataMessageArgsForCall(0)
 				require.Equal(t, encoded, got)
 			})
 		}

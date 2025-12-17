@@ -15,9 +15,14 @@
 package service
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"net/http"
 	"os"
@@ -26,20 +31,20 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/ua-parser/uap-go/uaparser"
 	"go.uber.org/atomic"
 	"golang.org/x/exp/maps"
+	"google.golang.org/protobuf/proto"
+
+	"github.com/livekit/protocol/livekit"
+	"github.com/livekit/protocol/logger"
+	"github.com/livekit/psrpc"
 
 	"github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/livekit-server/pkg/routing"
-	"github.com/livekit/livekit-server/pkg/routing/selector"
 	"github.com/livekit/livekit-server/pkg/rtc"
 	"github.com/livekit/livekit-server/pkg/telemetry"
 	"github.com/livekit/livekit-server/pkg/telemetry/prometheus"
 	"github.com/livekit/livekit-server/pkg/utils"
-	"github.com/livekit/protocol/livekit"
-	"github.com/livekit/protocol/logger"
-	"github.com/livekit/psrpc"
 )
 
 type RTCService struct {
@@ -49,7 +54,6 @@ type RTCService struct {
 	config        *config.Config
 	isDev         bool
 	limits        config.LimitConfig
-	parser        *uaparser.Parser
 	telemetry     telemetry.TelemetryService
 
 	mu          sync.Mutex
@@ -68,7 +72,6 @@ func NewRTCService(
 		config:        conf,
 		isDev:         conf.Development,
 		limits:        conf.Limit,
-		parser:        uaparser.NewFromSaved(),
 		telemetry:     telemetry,
 		connections:   map[*websocket.Conn]struct{}{},
 	}
@@ -87,11 +90,13 @@ func NewRTCService(
 }
 
 func (s *RTCService) SetupRoutes(mux *http.ServeMux) {
+	mux.Handle("/rtc", s)
 	mux.HandleFunc("/rtc/validate", s.validate)
 }
 
 func (s *RTCService) validate(w http.ResponseWriter, r *http.Request) {
-	_, _, code, err := s.validateInternal(r)
+	lgr := utils.GetLogger(r.Context())
+	_, _, code, err := s.validateInternal(lgr, r, true)
 	if err != nil {
 		HandleError(w, r, code, err)
 		return
@@ -99,111 +104,143 @@ func (s *RTCService) validate(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("success"))
 }
 
-func (s *RTCService) validateInternal(r *http.Request) (livekit.RoomName, routing.ParticipantInit, int, error) {
-	claims := GetGrants(r.Context())
-	var pi routing.ParticipantInit
-
-	// require a claim
-	if claims == nil || claims.Video == nil {
-		return "", pi, http.StatusUnauthorized, rtc.ErrPermissionDenied
-	}
-
-	onlyName, err := EnsureJoinPermission(r.Context())
+func decodeAttributes(str string) (map[string]string, error) {
+	data, err := base64.URLEncoding.DecodeString(str)
 	if err != nil {
-		return "", pi, http.StatusUnauthorized, err
+		return nil, err
 	}
+	var attrs map[string]string
+	if err := json.Unmarshal(data, &attrs); err != nil {
+		return nil, err
+	}
+	return attrs, nil
+}
 
-	if claims.Identity == "" {
-		return "", pi, http.StatusBadRequest, ErrIdentityEmpty
-	}
-	if limit := s.config.Limit.MaxParticipantIdentityLength; limit > 0 && len(claims.Identity) > limit {
-		return "", pi, http.StatusBadRequest, fmt.Errorf("%w: max length %d", ErrParticipantIdentityExceedsLimits, limit)
-	}
+func (s *RTCService) validateInternal(lgr logger.Logger, r *http.Request, strict bool) (livekit.RoomName, routing.ParticipantInit, int, error) {
+	var params ValidateConnectRequestParams
+	useSinglePeerConnection := false
+	joinRequest := &livekit.JoinRequest{}
 
-	roomName := livekit.RoomName(r.FormValue("room"))
-	reconnectParam := r.FormValue("reconnect")
-	reconnectReason, _ := strconv.Atoi(r.FormValue("reconnect_reason")) // 0 means unknown reason
-	autoSubParam := r.FormValue("auto_subscribe")
-	publishParam := r.FormValue("publish")
-	adaptiveStreamParam := r.FormValue("adaptive_stream")
-	participantID := r.FormValue("sid")
-	subscriberAllowPauseParam := r.FormValue("subscriber_allow_pause")
-	disableICELite := r.FormValue("disable_ice_lite")
+	wrappedJoinRequestBase64 := r.FormValue("join_request")
+	if wrappedJoinRequestBase64 == "" {
+		params.publish = r.FormValue("publish")
 
-	if onlyName != "" {
-		roomName = onlyName
-	}
-	if limit := s.config.Limit.MaxRoomNameLength; limit > 0 && len(roomName) > limit {
-		return "", pi, http.StatusBadRequest, fmt.Errorf("%w: max length %d", ErrRoomNameExceedsLimits, limit)
-	}
-
-	// this is new connection for existing participant -  with publish only permissions
-	if publishParam != "" {
-		// Make sure grant has GetCanPublish set,
-		if !claims.Video.GetCanPublish() {
-			return "", routing.ParticipantInit{}, http.StatusUnauthorized, rtc.ErrPermissionDenied
-		}
-		// Make sure by default subscribe is off
-		claims.Video.SetCanSubscribe(false)
-		claims.Identity += "#" + publishParam
-	}
-
-	// room allocator validations
-	err = s.roomAllocator.ValidateCreateRoom(r.Context(), roomName)
-	if err != nil {
-		if errors.Is(err, ErrRoomNotFound) {
-			return "", pi, http.StatusNotFound, err
-		} else {
-			return "", pi, http.StatusInternalServerError, err
-		}
-	}
-
-	region := ""
-	if router, ok := s.router.(routing.Router); ok {
-		region = router.GetRegion()
-		if foundNode, err := router.GetNodeForRoom(r.Context(), roomName); err == nil {
-			if selector.LimitsReached(s.limits, foundNode.Stats) {
-				return "", pi, http.StatusServiceUnavailable, rtc.ErrLimitExceeded
+		attributesStrParam := r.FormValue("attributes")
+		if attributesStrParam != "" {
+			attrs, err := decodeAttributes(attributesStrParam)
+			if err != nil {
+				if strict {
+					return "", routing.ParticipantInit{}, http.StatusBadRequest, errors.New("cannot decode attributes")
+				}
+				lgr.Debugw("failed to decode attributes", "error", err)
+				// attrs will be empty here, so just proceed
 			}
+			params.attributes = attrs
+		}
+	} else {
+		useSinglePeerConnection = true
+		if wrappedProtoBytes, err := base64.URLEncoding.DecodeString(wrappedJoinRequestBase64); err != nil {
+			return "", routing.ParticipantInit{}, http.StatusBadRequest, errors.New("cannot base64 decode wrapped join request")
+		} else {
+			wrappedJoinRequest := &livekit.WrappedJoinRequest{}
+			if err := proto.Unmarshal(wrappedProtoBytes, wrappedJoinRequest); err != nil {
+				return "", routing.ParticipantInit{}, http.StatusBadRequest, errors.New("cannot unmarshal wrapped join request")
+			}
+
+			switch wrappedJoinRequest.Compression {
+			case livekit.WrappedJoinRequest_NONE:
+				if err := proto.Unmarshal(wrappedJoinRequest.JoinRequest, joinRequest); err != nil {
+					return "", routing.ParticipantInit{}, http.StatusBadRequest, errors.New("cannot unmarshal join request")
+				}
+
+			case livekit.WrappedJoinRequest_GZIP:
+				b := bytes.NewReader(wrappedJoinRequest.JoinRequest)
+				if reader, err := gzip.NewReader(b); err != nil {
+					return "", routing.ParticipantInit{}, http.StatusBadRequest, errors.New("cannot decompress join request")
+				} else {
+					protoBytes, err := io.ReadAll(reader)
+					reader.Close()
+					if err != nil {
+						return "", routing.ParticipantInit{}, http.StatusBadRequest, errors.New("cannot read decompressed join request")
+					}
+
+					if err := proto.Unmarshal(protoBytes, joinRequest); err != nil {
+						return "", routing.ParticipantInit{}, http.StatusBadRequest, errors.New("cannot unmarshal join request")
+					}
+				}
+			}
+
+			params.metadata = joinRequest.Metadata
+			params.attributes = joinRequest.ParticipantAttributes
 		}
 	}
 
-	createRequest := &livekit.CreateRoomRequest{
-		Name:       string(roomName),
-		RoomPreset: claims.RoomPreset,
-	}
-	SetRoomConfiguration(createRequest, claims.GetRoomConfiguration())
-
-	pi = routing.ParticipantInit{
-		Reconnect:       boolValue(reconnectParam),
-		ReconnectReason: livekit.ReconnectReason(reconnectReason),
-		Identity:        livekit.ParticipantIdentity(claims.Identity),
-		Name:            livekit.ParticipantName(claims.Name),
-		AutoSubscribe:   true,
-		Client:          s.ParseClientInfo(r),
-		Grants:          claims,
-		Region:          region,
-		CreateRoom:      createRequest,
-	}
-	if pi.Reconnect {
-		pi.ID = livekit.ParticipantID(participantID)
+	res, code, err := ValidateConnectRequest(
+		lgr,
+		r,
+		s.limits,
+		params,
+		s.router,
+		s.roomAllocator,
+	)
+	if err != nil {
+		return res.roomName, routing.ParticipantInit{}, code, err
 	}
 
-	if autoSubParam != "" {
-		pi.AutoSubscribe = boolValue(autoSubParam)
+	pi := routing.ParticipantInit{
+		Identity:                livekit.ParticipantIdentity(res.grants.Identity),
+		Name:                    livekit.ParticipantName(res.grants.Name),
+		Grants:                  res.grants,
+		Region:                  res.region,
+		CreateRoom:              res.createRoomRequest,
+		UseSinglePeerConnection: useSinglePeerConnection,
 	}
-	if adaptiveStreamParam != "" {
-		pi.AdaptiveStream = boolValue(adaptiveStreamParam)
-	}
-	if subscriberAllowPauseParam != "" {
-		subscriberAllowPause := boolValue(subscriberAllowPauseParam)
+
+	if wrappedJoinRequestBase64 == "" {
+		pi.Reconnect = boolValue(r.FormValue("reconnect"))
+		pi.Client = ParseClientInfo(r)
+		pi.AutoSubscribe = true
+		pi.AdaptiveStream = boolValue(r.FormValue("adaptive_stream"))
+		pi.DisableICELite = boolValue(r.FormValue("disable_ice_lite"))
+
+		reconnectReason, _ := strconv.Atoi(r.FormValue("reconnect_reason")) // 0 means unknown reason
+		pi.ReconnectReason = livekit.ReconnectReason(reconnectReason)
+
+		if pi.Reconnect {
+			pi.ID = livekit.ParticipantID(r.FormValue("sid"))
+		}
+
+		if autoSubscribe := r.FormValue("auto_subscribe"); autoSubscribe != "" {
+			pi.AutoSubscribe = boolValue(autoSubscribe)
+		}
+
+		subscriberAllowPauseParam := r.FormValue("subscriber_allow_pause")
+		if subscriberAllowPauseParam != "" {
+			subscriberAllowPause := boolValue(subscriberAllowPauseParam)
+			pi.SubscriberAllowPause = &subscriberAllowPause
+		}
+	} else {
+		lgr.Debugw("processing join request", "joinRequest", logger.Proto(joinRequest))
+
+		AugmentClientInfo(joinRequest.ClientInfo, r)
+		pi.Client = joinRequest.ClientInfo
+
+		pi.AutoSubscribe = joinRequest.GetConnectionSettings().GetAutoSubscribe()
+		pi.AdaptiveStream = joinRequest.GetConnectionSettings().GetAdaptiveStream()
+		pi.DisableICELite = joinRequest.GetConnectionSettings().GetDisableIceLite()
+
+		subscriberAllowPause := joinRequest.GetConnectionSettings().GetSubscriberAllowPause()
 		pi.SubscriberAllowPause = &subscriberAllowPause
-	}
-	if disableICELite != "" {
-		pi.DisableICELite = boolValue(disableICELite)
+
+		pi.AddTrackRequests = joinRequest.AddTrackRequests
+		pi.PublisherOffer = joinRequest.PublisherOffer
+
+		pi.Reconnect = joinRequest.Reconnect
+		pi.ReconnectReason = joinRequest.ReconnectReason
+		pi.ID = livekit.ParticipantID(joinRequest.ParticipantSid)
 	}
 
-	return roomName, pi, http.StatusOK, nil
+	return res.roomName, pi, code, err
 }
 
 func (s *RTCService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -257,7 +294,7 @@ func (s *RTCService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		loggerResolved = false
 	}
 
-	roomName, pi, code, err = s.validateInternal(r)
+	roomName, pi, code, err = s.validateInternal(pLogger, r, false)
 	if err != nil {
 		HandleError(w, r, code, err)
 		return
@@ -403,12 +440,15 @@ func (s *RTCService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				switch m := res.Message.(type) {
 				case *livekit.SignalResponse_Offer:
 					pLogger.Debugw("sending offer", "offer", m)
+
 				case *livekit.SignalResponse_Answer:
 					pLogger.Debugw("sending answer", "answer", m)
+
 				case *livekit.SignalResponse_Join:
 					pLogger.Debugw("sending join", "join", m)
 					signalStats.ResolveRoom(m.Join.GetRoom())
 					signalStats.ResolveParticipant(m.Join.GetParticipant())
+
 				case *livekit.SignalResponse_RoomUpdate:
 					updateRoomID := livekit.RoomID(m.RoomUpdate.GetRoom().GetSid())
 					if updateRoomID != "" {
@@ -417,10 +457,14 @@ func (s *RTCService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					}
 					pLogger.Debugw("sending room update", "roomUpdate", m)
 					signalStats.ResolveRoom(m.RoomUpdate.GetRoom())
+
 				case *livekit.SignalResponse_Update:
 					pLogger.Debugw("sending participant update", "participantUpdate", m)
+
 				case *livekit.SignalResponse_RoomMoved:
 					resetLogger()
+					signalStats.Reset()
+
 					roomName = livekit.RoomName(m.RoomMoved.GetRoom().GetName())
 					moveRoomID := livekit.RoomID(m.RoomMoved.GetRoom().GetSid())
 					if moveRoomID != "" {
@@ -429,7 +473,13 @@ func (s *RTCService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					participantIdentity = livekit.ParticipantIdentity(m.RoomMoved.GetParticipant().GetIdentity())
 					pID = livekit.ParticipantID(m.RoomMoved.GetParticipant().GetSid())
 					resolveLogger(false)
+
+					signalStats.ResolveRoom(m.RoomMoved.GetRoom())
+					signalStats.ResolveParticipant(m.RoomMoved.GetParticipant())
 					pLogger.Debugw("sending room moved", "roomMoved", m)
+
+				default:
+					pLogger.Debugw("sending signal response", "response", m)
 				}
 
 				if count, err := sigConn.WriteResponse(res); err != nil {
@@ -488,6 +538,8 @@ func (s *RTCService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			pLogger.Debugw("received offer", "offer", m)
 		case *livekit.SignalRequest_Answer:
 			pLogger.Debugw("received answer", "answer", m)
+		default:
+			pLogger.Debugw("received signal request", "request", m)
 		}
 
 		if err := cr.RequestSink.WriteMessage(req); err != nil {
@@ -495,77 +547,6 @@ func (s *RTCService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-}
-
-func (s *RTCService) ParseClientInfo(r *http.Request) *livekit.ClientInfo {
-	values := r.Form
-	ci := &livekit.ClientInfo{}
-	if pv, err := strconv.Atoi(values.Get("protocol")); err == nil {
-		ci.Protocol = int32(pv)
-	}
-	sdkString := values.Get("sdk")
-	switch sdkString {
-	case "js":
-		ci.Sdk = livekit.ClientInfo_JS
-	case "ios", "swift":
-		ci.Sdk = livekit.ClientInfo_SWIFT
-	case "android":
-		ci.Sdk = livekit.ClientInfo_ANDROID
-	case "flutter":
-		ci.Sdk = livekit.ClientInfo_FLUTTER
-	case "go":
-		ci.Sdk = livekit.ClientInfo_GO
-	case "unity":
-		ci.Sdk = livekit.ClientInfo_UNITY
-	case "reactnative":
-		ci.Sdk = livekit.ClientInfo_REACT_NATIVE
-	case "rust":
-		ci.Sdk = livekit.ClientInfo_RUST
-	case "python":
-		ci.Sdk = livekit.ClientInfo_PYTHON
-	case "cpp":
-		ci.Sdk = livekit.ClientInfo_CPP
-	case "unityweb":
-		ci.Sdk = livekit.ClientInfo_UNITY_WEB
-	case "node":
-		ci.Sdk = livekit.ClientInfo_NODE
-	}
-
-	ci.Version = values.Get("version")
-	ci.Os = values.Get("os")
-	ci.OsVersion = values.Get("os_version")
-	ci.Browser = values.Get("browser")
-	ci.BrowserVersion = values.Get("browser_version")
-	ci.DeviceModel = values.Get("device_model")
-	ci.Network = values.Get("network")
-	// get real address (forwarded http header) - check Cloudflare headers first, fall back to X-Forwarded-For
-	ci.Address = GetClientIP(r)
-
-	// attempt to parse types for SDKs that support browser as a platform
-	if ci.Sdk == livekit.ClientInfo_JS ||
-		ci.Sdk == livekit.ClientInfo_REACT_NATIVE ||
-		ci.Sdk == livekit.ClientInfo_FLUTTER ||
-		ci.Sdk == livekit.ClientInfo_UNITY {
-		client := s.parser.Parse(r.UserAgent())
-		if ci.Browser == "" {
-			ci.Browser = client.UserAgent.Family
-			ci.BrowserVersion = client.UserAgent.ToVersionString()
-		}
-		if ci.Os == "" {
-			ci.Os = client.Os.Family
-			ci.OsVersion = client.Os.ToVersionString()
-		}
-		if ci.DeviceModel == "" {
-			model := client.Device.Family
-			if model != "" && client.Device.Model != "" && model != client.Device.Model {
-				model += " " + client.Device.Model
-			}
-
-			ci.DeviceModel = model
-		}
-	}
-
-	return ci
 }
 
 func (s *RTCService) DrainConnections(interval time.Duration) {

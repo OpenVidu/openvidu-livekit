@@ -38,6 +38,7 @@ import (
 	"github.com/livekit/protocol/utils/mono"
 
 	"github.com/livekit/livekit-server/pkg/sfu/buffer"
+	"github.com/livekit/livekit-server/pkg/sfu/bwe"
 	"github.com/livekit/livekit-server/pkg/sfu/ccutils"
 	"github.com/livekit/livekit-server/pkg/sfu/connectionquality"
 	"github.com/livekit/livekit-server/pkg/sfu/mime"
@@ -64,7 +65,6 @@ type TrackSender interface {
 	SubscriberID() livekit.ParticipantID
 	HandleRTCPSenderReportData(
 		payloadType webrtc.PayloadType,
-		isSVC bool,
 		layer int32,
 		publisherSRData *livekit.RTCPSenderReportState,
 	) error
@@ -193,6 +193,9 @@ type DownTrackStreamAllocatorListener interface {
 	// check if track should participate in BWE
 	IsBWEEnabled(dt *DownTrack) bool
 
+	// get the BWE type in use
+	BWEType() bwe.BWEType
+
 	// check if subscription mute can be applied
 	IsSubscribeMutable(dt *DownTrack) bool
 }
@@ -222,6 +225,8 @@ func (bs bindState) String() string {
 }
 
 // -------------------------------------------------------------------
+
+var _ TrackSender = (*DownTrack)(nil)
 
 type ReceiverReportListener func(dt *DownTrack, report *rtcp.ReceiverReport)
 
@@ -484,27 +489,13 @@ func (d *DownTrack) Bind(t webrtc.TrackLocalContext) (webrtc.RTPCodecParameters,
 	}
 
 	// Bind is called under RTPSender.mu lock, call the RTPSender.GetParameters in goroutine to avoid deadlock
-	go func() {
-		if tr := d.transceiver.Load(); tr != nil {
-			if sender := tr.Sender(); sender != nil {
-				extensions := sender.GetParameters().HeaderExtensions
-				d.params.Logger.Debugw("negotiated downtrack extensions", "extensions", extensions)
-				d.SetRTPHeaderExtensions(extensions)
-			}
-		}
-	}()
+	go d.setRTPHeaderExtensions()
 
 	doBind := func() {
 		d.bindLock.Lock()
 		if d.IsClosed() {
 			d.bindLock.Unlock()
 			d.params.Logger.Debugw("DownTrack closed before bind")
-			return
-		}
-
-		if bs := d.bindState.Load(); bs != bindStateWaitForReceiverReady {
-			d.bindLock.Unlock()
-			d.params.Logger.Debugw("DownTrack.Bind: not in wait for receiver state", "state", bs)
 			return
 		}
 
@@ -586,7 +577,8 @@ func (d *DownTrack) Bind(t webrtc.TrackLocalContext) (webrtc.RTPCodecParameters,
 		d.setBindStateLocked(bindStateBound)
 		d.bindLock.Unlock()
 
-		d.forwarder.DetermineCodec(codec.RTPCodecCapability, d.Receiver().HeaderExtensions())
+		receiver := d.Receiver()
+		d.forwarder.DetermineCodec(codec.RTPCodecCapability, receiver.HeaderExtensions(), receiver.VideoLayerMode())
 		d.connectionStats.Start(d.Mime(), isFECEnabled)
 		d.params.Logger.Debugw("downtrack bound")
 	}
@@ -695,7 +687,8 @@ func (d *DownTrack) handleUpstreamCodecChange(mimeType string) {
 	)
 
 	d.forwarder.Restart()
-	d.forwarder.DetermineCodec(codec.RTPCodecCapability, d.Receiver().HeaderExtensions())
+	receiver := d.Receiver()
+	d.forwarder.DetermineCodec(codec.RTPCodecCapability, receiver.HeaderExtensions(), receiver.VideoLayerMode())
 	d.connectionStats.UpdateCodec(d.Mime(), isFECEnabled)
 }
 
@@ -713,12 +706,9 @@ func (d *DownTrack) SetStreamAllocatorListener(listener DownTrackStreamAllocator
 	d.streamAllocatorListener = listener
 	d.streamAllocatorLock.Unlock()
 
-	if listener != nil {
-		if !listener.IsBWEEnabled(d) {
-			d.absSendTimeExtID = 0
-			d.transportWideExtID = 0
-		}
+	d.setRTPHeaderExtensions()
 
+	if listener != nil {
 		// kick off a gratuitous allocation
 		listener.OnSubscriptionChanged(d)
 	}
@@ -794,15 +784,30 @@ func (d *DownTrack) SetReceiver(r TrackReceiver) {
 }
 
 // Sets RTP header extensions for this track
-func (d *DownTrack) SetRTPHeaderExtensions(rtpHeaderExtensions []webrtc.RTPHeaderExtensionParameter) {
-	isBWEEnabled := true
-	if sal := d.getStreamAllocatorListener(); sal != nil {
-		isBWEEnabled = sal.IsBWEEnabled(d)
+func (d *DownTrack) setRTPHeaderExtensions() {
+	d.bindLock.Lock()
+	defer d.bindLock.Unlock()
+
+	sal := d.getStreamAllocatorListener()
+	if sal == nil {
+		return
 	}
-	for _, ext := range rtpHeaderExtensions {
+
+	var extensions []webrtc.RTPHeaderExtensionParameter
+	if tr := d.transceiver.Load(); tr != nil {
+		if sender := tr.Sender(); sender != nil {
+			extensions = sender.GetParameters().HeaderExtensions
+			d.params.Logger.Debugw("negotiated downtrack extensions", "extensions", extensions)
+		}
+	}
+
+	isBWEEnabled := sal.IsBWEEnabled(d)
+	bweType := sal.BWEType()
+
+	for _, ext := range extensions {
 		switch ext.URI {
 		case sdp.ABSSendTimeURI:
-			if isBWEEnabled {
+			if isBWEEnabled && bweType == bwe.BWETypeRemote {
 				d.absSendTimeExtID = ext.ID
 			} else {
 				d.absSendTimeExtID = 0
@@ -812,7 +817,7 @@ func (d *DownTrack) SetRTPHeaderExtensions(rtpHeaderExtensions []webrtc.RTPHeade
 		case pd.PlayoutDelayURI:
 			d.playoutDelayExtID = ext.ID
 		case sdp.TransportCCURI:
-			if isBWEEnabled {
+			if isBWEEnabled && bweType == bwe.BWETypeSendSide {
 				d.transportWideExtID = ext.ID
 			} else {
 				d.transportWideExtID = 0
@@ -839,13 +844,6 @@ func (d *DownTrack) SSRC() uint32 {
 
 func (d *DownTrack) SSRCRTX() uint32 {
 	return d.ssrcRTX
-}
-
-func (d *DownTrack) Stop() error {
-	if tr := d.transceiver.Load(); tr != nil {
-		return tr.Stop()
-	}
-	return errors.New("downtrack transceiver does not exist")
 }
 
 func (d *DownTrack) SetTransceiver(transceiver *webrtc.RTPTransceiver) {
@@ -1015,7 +1013,7 @@ func (d *DownTrack) WriteRTP(extPkt *buffer.ExtPacket, layer int32) error {
 		// clock domain of publisher. SFU is normalising sender reports of publisher
 		// to SFU clock before sending to subscribers. So, capture time should be
 		// normalized to the same clock. Clear out any offset.
-		_, _, refSenderReport := d.forwarder.GetSenderReportParams()
+		_, _, _, refSenderReport := d.forwarder.GetSenderReportParams()
 		if refSenderReport != nil {
 			actExtCopy := *extPkt.AbsCaptureTimeExt
 			if err = actExtCopy.Rewrite(
@@ -1681,7 +1679,7 @@ func (d *DownTrack) CreateSenderReport() *rtcp.SenderReport {
 		return nil
 	}
 
-	_, tsOffset, refSenderReport := d.forwarder.GetSenderReportParams()
+	_, _, tsOffset, refSenderReport := d.forwarder.GetSenderReportParams()
 	return d.rtpStats.GetRtcpSenderReport(d.ssrc, refSenderReport, tsOffset, !d.params.DisableSenderReportPassThrough)
 
 	// not sending RTCP Sender Report for RTX
@@ -2188,6 +2186,8 @@ func (d *DownTrack) retransmitPackets(nacks []uint16) {
 	src := PacketFactory.Get().(*[]byte)
 	defer PacketFactory.Put(src)
 
+	receiver := d.Receiver()
+
 	nackAcks := uint32(0)
 	nackMisses := uint32(0)
 	numRepeatedNACKs := uint32(0)
@@ -2199,7 +2199,7 @@ func (d *DownTrack) retransmitPackets(nacks []uint16) {
 		nackAcks++
 
 		pktBuff := *src
-		n, err := d.Receiver().ReadRTP(pktBuff, uint8(epm.layer), epm.sourceSeqNo)
+		n, err := receiver.ReadRTP(pktBuff, uint8(epm.layer), epm.sourceSeqNo)
 		if err != nil {
 			if err == io.EOF {
 				break
@@ -2289,6 +2289,8 @@ func (d *DownTrack) WriteProbePackets(bytesToSend int, usePadding bool) int {
 		src := PacketFactory.Get().(*[]byte)
 		defer PacketFactory.Put(src)
 
+		receiver := d.Receiver()
+
 		endExtHighestSequenceNumber := d.rtpStats.ExtHighestSequenceNumber()
 		startExtHighestSequenceNumber := endExtHighestSequenceNumber - 5
 		for esn := startExtHighestSequenceNumber; esn <= endExtHighestSequenceNumber; esn++ {
@@ -2298,7 +2300,7 @@ func (d *DownTrack) WriteProbePackets(bytesToSend int, usePadding bool) int {
 			}
 
 			pktBuff := *src
-			n, err := d.Receiver().ReadRTP(pktBuff, uint8(epm.layer), epm.sourceSeqNo)
+			n, err := receiver.ReadRTP(pktBuff, uint8(epm.layer), epm.sourceSeqNo)
 			if err != nil {
 				if err == io.EOF {
 					break
@@ -2520,14 +2522,13 @@ func (d *DownTrack) sendSilentFrameOnMuteForOpus() {
 
 func (d *DownTrack) HandleRTCPSenderReportData(
 	_payloadType webrtc.PayloadType,
-	isSVC bool,
 	layer int32,
 	publisherSRData *livekit.RTCPSenderReportState,
 ) error {
-	d.forwarder.SetRefSenderReport(isSVC, layer, publisherSRData)
+	d.forwarder.SetRefSenderReport(layer, publisherSRData)
 
-	currentLayer, tsOffset, refSenderReport := d.forwarder.GetSenderReportParams()
-	if layer == currentLayer || (layer == 0 && isSVC) {
+	currentLayer, isSingleStream, tsOffset, refSenderReport := d.forwarder.GetSenderReportParams()
+	if layer == currentLayer || (layer == 0 && isSingleStream) {
 		d.handleRTCPSenderReportData(refSenderReport, tsOffset)
 	}
 	return nil

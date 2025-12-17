@@ -27,6 +27,7 @@ import (
 	"github.com/livekit/protocol/logger"
 
 	"github.com/livekit/livekit-server/pkg/sfu"
+	"github.com/livekit/livekit-server/pkg/sfu/buffer"
 	"github.com/livekit/livekit-server/pkg/sfu/mime"
 )
 
@@ -62,16 +63,10 @@ func NewWrappedReceiver(params WrappedReceiverParams) *WrappedReceiver {
 		normalizedMimeType := mime.NormalizeMimeType(codecs[0].MimeType)
 		if normalizedMimeType == mime.MimeTypeRED {
 			// if upstream is opus/red, then add opus to match clients that don't support red
-			codecs = append(codecs, webrtc.RTPCodecParameters{
-				RTPCodecCapability: OpusCodecCapability,
-				PayloadType:        111,
-			})
+			codecs = append(codecs, OpusCodecParameters)
 		} else if !params.DisableRed && normalizedMimeType == mime.MimeTypeOpus {
 			// if upstream is opus only and red enabled, add red to match clients that support red
-			codecs = append(codecs, webrtc.RTPCodecParameters{
-				RTPCodecCapability: RedCodecCapability,
-				PayloadType:        63,
-			})
+			codecs = append(codecs, RedCodecParameters)
 			// prefer red codec
 			codecs[0], codecs[1] = codecs[1], codecs[0]
 		}
@@ -273,6 +268,13 @@ func (d *DummyReceiver) Mime() mime.MimeType {
 	return mime.NormalizeMimeType(d.codec.MimeType)
 }
 
+func (d *DummyReceiver) VideoLayerMode() livekit.VideoLayer_Mode {
+	if r, ok := d.receiver.Load().(sfu.TrackReceiver); ok {
+		return r.VideoLayerMode()
+	}
+	return buffer.GetVideoLayerModeForMimeType(d.Mime(), d.TrackInfo())
+}
+
 func (d *DummyReceiver) HeaderExtensions() []webrtc.RTPHeaderExtensionParameter {
 	if r, ok := d.receiver.Load().(sfu.TrackReceiver); ok {
 		return r.HeaderExtensions()
@@ -467,6 +469,14 @@ func (d *DummyReceiver) CodecState() sfu.ReceiverCodecState {
 		return r.CodecState()
 	}
 	return sfu.ReceiverCodecStateNormal
+}
+
+func (d *DummyReceiver) VideoSizes() []buffer.VideoSize {
+	if r, ok := d.receiver.Load().(sfu.TrackReceiver); ok {
+		return r.VideoSizes()
+	}
+
+	return nil
 }
 
 // --------------------------------------------

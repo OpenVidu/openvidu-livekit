@@ -31,7 +31,9 @@ import (
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
+	"github.com/livekit/protocol/observability/roomobs"
 	lksdp "github.com/livekit/protocol/sdp"
+	"github.com/livekit/protocol/signalling"
 	"github.com/livekit/protocol/utils"
 	"github.com/livekit/protocol/utils/guid"
 
@@ -130,7 +132,8 @@ func TestTrackPublishing(t *testing.T) {
 			Type: livekit.TrackType_AUDIO,
 		})
 
-		require.Equal(t, 1, sink.WriteMessageCallCount())
+		// error response on duplicate adds a message
+		require.Equal(t, 2, sink.WriteMessageCallCount())
 	})
 
 	t.Run("should queue adding of duplicate tracks if already published by client id in signalling", func(t *testing.T) {
@@ -138,7 +141,7 @@ func TestTrackPublishing(t *testing.T) {
 		sink := p.params.Sink.(*routingfakes.FakeMessageSink)
 
 		track := &typesfakes.FakeLocalMediaTrack{}
-		track.SignalCidReturns("cid")
+		track.HasSignalCidCalls(func(s string) bool { return s == "cid" })
 		track.ToProtoReturns(&livekit.TrackInfo{})
 		// directly add to publishedTracks without lock - for testing purpose only
 		p.UpTrackManager.publishedTracks["cid"] = track
@@ -148,7 +151,8 @@ func TestTrackPublishing(t *testing.T) {
 			Name: "webcam",
 			Type: livekit.TrackType_VIDEO,
 		})
-		require.Equal(t, 0, sink.WriteMessageCallCount())
+		// `queued` `RequestResponse` should add a message
+		require.Equal(t, 1, sink.WriteMessageCallCount())
 		require.Equal(t, 1, len(p.pendingTracks["cid"].trackInfos))
 
 		// add again - it should be added to the queue
@@ -157,7 +161,8 @@ func TestTrackPublishing(t *testing.T) {
 			Name: "webcam",
 			Type: livekit.TrackType_VIDEO,
 		})
-		require.Equal(t, 0, sink.WriteMessageCallCount())
+		// `queued` `RequestResponse`s should have been sent for duplicate additions
+		require.Equal(t, 2, sink.WriteMessageCallCount())
 		require.Equal(t, 2, len(p.pendingTracks["cid"].trackInfos))
 
 		// check SID is the same
@@ -179,7 +184,8 @@ func TestTrackPublishing(t *testing.T) {
 			Name: "webcam",
 			Type: livekit.TrackType_VIDEO,
 		})
-		require.Equal(t, 0, sink.WriteMessageCallCount())
+		// `queued` `RequestResponse` should add a message
+		require.Equal(t, 1, sink.WriteMessageCallCount())
 		require.Equal(t, 1, len(p.pendingTracks["cid"].trackInfos))
 
 		// add again - it should be added to the queue
@@ -188,7 +194,8 @@ func TestTrackPublishing(t *testing.T) {
 			Name: "webcam",
 			Type: livekit.TrackType_VIDEO,
 		})
-		require.Equal(t, 0, sink.WriteMessageCallCount())
+		// `queued` `RequestResponse`s should have been sent for duplicate additions
+		require.Equal(t, 2, sink.WriteMessageCallCount())
 		require.Equal(t, 2, len(p.pendingTracks["cid"].trackInfos))
 
 		// check SID is the same
@@ -218,7 +225,8 @@ func TestTrackPublishing(t *testing.T) {
 			Type:   livekit.TrackType_AUDIO,
 			Source: livekit.TrackSource_MICROPHONE,
 		})
-		require.Equal(t, 1, sink.WriteMessageCallCount())
+		// an error response for disallowed source should send a `RequestResponse`.
+		require.Equal(t, 2, sink.WriteMessageCallCount())
 	})
 }
 
@@ -226,7 +234,7 @@ func TestOutOfOrderUpdates(t *testing.T) {
 	p := newParticipantForTest("test")
 	p.updateState(livekit.ParticipantInfo_JOINED)
 	p.SetMetadata("initial metadata")
-	sink := p.getResponseSink().(*routingfakes.FakeMessageSink)
+	sink := p.GetResponseSink().(*routingfakes.FakeMessageSink)
 	pi1 := p.ToProto()
 	p.SetMetadata("second update")
 	pi2 := p.ToProto()
@@ -276,7 +284,10 @@ func TestMuteSetting(t *testing.T) {
 		ti := &livekit.TrackInfo{Sid: "testTrack"}
 		p.pendingTracks["cid"] = &pendingTrackInfo{trackInfos: []*livekit.TrackInfo{ti}}
 
-		p.SetTrackMuted(livekit.TrackID(ti.Sid), true, false)
+		p.SetTrackMuted(&livekit.MuteTrackRequest{
+			Sid:   ti.Sid,
+			Muted: true,
+		}, false)
 		require.True(t, p.pendingTracks["cid"].trackInfos[0].Muted)
 	})
 
@@ -288,7 +299,7 @@ func TestMuteSetting(t *testing.T) {
 			Muted: true,
 		})
 
-		_, ti, _, _ := p.getPendingTrack("cid", livekit.TrackType_AUDIO, false)
+		_, ti, _, _, _ := p.getPendingTrack("cid", livekit.TrackType_AUDIO, false)
 		require.NotNil(t, ti)
 		require.True(t, ti.Muted)
 	})
@@ -363,28 +374,36 @@ func TestDisableCodecs(t *testing.T) {
 		}
 	}
 	require.True(t, found264)
+	offerId := uint32(42)
 
 	// negotiated codec should not contain h264
 	sink := &routingfakes.FakeMessageSink{}
 	participant.SetResponseSink(sink)
 	var answer webrtc.SessionDescription
+	var answerId uint32
 	var answerReceived atomic.Bool
+	var answerIdReceived atomic.Uint32
 	sink.WriteMessageCalls(func(msg proto.Message) error {
 		if res, ok := msg.(*livekit.SignalResponse); ok {
 			if res.GetAnswer() != nil {
-				answer = FromProtoSessionDescription(res.GetAnswer())
+				answer, answerId = signalling.FromProtoSessionDescription(res.GetAnswer())
 				answerReceived.Store(true)
+				answerIdReceived.Store(answerId)
 			}
 		}
 		return nil
 	})
-	participant.HandleOffer(sdp)
+	participant.HandleOffer(&livekit.SessionDescription{
+		Type: webrtc.SDPTypeOffer.String(),
+		Sdp:  sdp.SDP,
+		Id:   offerId,
+	})
 
 	testutils.WithTimeout(t, func() string {
-		if answerReceived.Load() {
+		if answerReceived.Load() && answerIdReceived.Load() == offerId {
 			return ""
 		} else {
-			return "answer not received"
+			return "answer not received OR answer id mismatch"
 		}
 	})
 	require.NoError(t, pc.SetRemoteDescription(answer), answer.SDP, sdp.SDP)
@@ -464,89 +483,138 @@ func TestDisablePublishCodec(t *testing.T) {
 	require.Eventually(t, func() bool { return publishReceived.Load() }, 5*time.Second, 10*time.Millisecond)
 }
 
-func TestPreferVideoCodecForPublisher(t *testing.T) {
-	participant := newParticipantForTestWithOpts("123", &participantOpts{
-		publisher: true,
-	})
-	participant.SetMigrateState(types.MigrateStateComplete)
-
-	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{})
-	require.NoError(t, err)
-	defer pc.Close()
-
-	for i := 0; i < 2; i++ {
-		// publish h264 track without client preferred codec
-		trackCid := fmt.Sprintf("preferh264video%d", i)
-		participant.AddTrack(&livekit.AddTrackRequest{
-			Type:   livekit.TrackType_VIDEO,
-			Name:   "video",
-			Width:  1280,
-			Height: 720,
-			Source: livekit.TrackSource_CAMERA,
-			SimulcastCodecs: []*livekit.SimulcastCodec{
-				{
-					Codec: "h264",
-					Cid:   trackCid,
-				},
+func TestPreferMediaCodecForPublisher(t *testing.T) {
+	testCases := []struct {
+		name                       string
+		mediaKind                  string
+		trackBaseCid               string
+		preferredCodec             string
+		addTrack                   *livekit.AddTrackRequest
+		mimeTypeStringChecker      func(string) bool
+		mimeTypeCodecStringChecker func(string) bool
+		transceiverMimeType        mime.MimeType
+	}{
+		{
+			name:           "video",
+			mediaKind:      "video",
+			trackBaseCid:   "preferH264Video",
+			preferredCodec: "h264",
+			addTrack: &livekit.AddTrackRequest{
+				Type:   livekit.TrackType_VIDEO,
+				Name:   "video",
+				Width:  1280,
+				Height: 720,
+				Source: livekit.TrackSource_CAMERA,
 			},
-		})
+			mimeTypeStringChecker:      mime.IsMimeTypeStringH264,
+			mimeTypeCodecStringChecker: mime.IsMimeTypeCodecStringH264,
+			transceiverMimeType:        mime.MimeTypeVP8,
+		},
+		{
+			name:           "audio",
+			mediaKind:      "audio",
+			trackBaseCid:   "preferPCMAAudio",
+			preferredCodec: "pcma",
+			addTrack: &livekit.AddTrackRequest{
+				Type:   livekit.TrackType_AUDIO,
+				Name:   "audio",
+				Source: livekit.TrackSource_MICROPHONE,
+			},
+			mimeTypeStringChecker:      mime.IsMimeTypeStringPCMA,
+			mimeTypeCodecStringChecker: mime.IsMimeTypeCodecStringPCMA,
+			transceiverMimeType:        mime.MimeTypeOpus,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			participant := newParticipantForTestWithOpts("123", &participantOpts{
+				publisher: true,
+			})
+			participant.SetMigrateState(types.MigrateStateComplete)
 
-		track, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: "video/vp8"}, trackCid, trackCid)
-		require.NoError(t, err)
-		transceiver, err := pc.AddTransceiverFromTrack(track, webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionSendrecv})
-		require.NoError(t, err)
-		codecs := transceiver.Receiver().GetParameters().Codecs
+			pc, err := webrtc.NewPeerConnection(webrtc.Configuration{})
+			require.NoError(t, err)
+			defer pc.Close()
 
-		if i > 0 {
-			// the negotiated codecs order could be updated by first negotiation, reorder to make h264 not preferred
-			for mime.IsMimeTypeStringH264(codecs[0].MimeType) {
-				codecs = append(codecs[1:], codecs[0])
-			}
-		}
-		// h264 should not be preferred
-		require.False(t, mime.IsMimeTypeStringH264(codecs[0].MimeType), "codecs", codecs)
-
-		sdp, err := pc.CreateOffer(nil)
-		require.NoError(t, err)
-		require.NoError(t, pc.SetLocalDescription(sdp))
-
-		sink := &routingfakes.FakeMessageSink{}
-		participant.SetResponseSink(sink)
-		var answer webrtc.SessionDescription
-		var answerReceived atomic.Bool
-		sink.WriteMessageCalls(func(msg proto.Message) error {
-			if res, ok := msg.(*livekit.SignalResponse); ok {
-				if res.GetAnswer() != nil {
-					answer = FromProtoSessionDescription(res.GetAnswer())
-					pc.SetRemoteDescription(answer)
-					answerReceived.Store(true)
+			for i := 0; i < 2; i++ {
+				// publish preferred track without client using setCodecPreferences()
+				trackCid := fmt.Sprintf("%s-%d", tc.trackBaseCid, i)
+				req := utils.CloneProto(tc.addTrack)
+				req.SimulcastCodecs = []*livekit.SimulcastCodec{
+					{
+						Codec: tc.preferredCodec,
+						Cid:   trackCid,
+					},
 				}
-			}
-			return nil
-		})
-		participant.HandleOffer(sdp)
+				participant.AddTrack(req)
 
-		require.Eventually(t, func() bool { return answerReceived.Load() }, 5*time.Second, 10*time.Millisecond)
+				track, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: tc.transceiverMimeType.String()}, trackCid, trackCid)
+				require.NoError(t, err)
+				transceiver, err := pc.AddTransceiverFromTrack(track, webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionSendrecv})
+				require.NoError(t, err)
+				codecs := transceiver.Receiver().GetParameters().Codecs
 
-		var h264Preferred bool
-		parsed, err := answer.Unmarshal()
-		require.NoError(t, err)
-		var videoSectionIndex int
-		for _, m := range parsed.MediaDescriptions {
-			if m.MediaName.Media == "video" {
-				if videoSectionIndex == i {
-					codecs, err := lksdp.CodecsFromMediaDescription(m)
-					require.NoError(t, err)
-					if mime.IsMimeTypeCodecStringH264(codecs[0].Name) {
-						h264Preferred = true
-						break
+				if i > 0 {
+					// the negotiated codecs order could be updated by first negotiation,
+					// reorder to make tested preferred codec not preferred
+					for tc.mimeTypeStringChecker(codecs[0].MimeType) {
+						codecs = append(codecs[1:], codecs[0])
 					}
 				}
-				videoSectionIndex++
-			}
-		}
+				// preferred codec should not be preferred in `offer`
+				require.False(t, tc.mimeTypeStringChecker(codecs[0].MimeType), "codecs", codecs)
 
-		require.Truef(t, h264Preferred, "h264 should be preferred for video section %d, answer sdp: \n%s", i, answer.SDP)
+				sdp, err := pc.CreateOffer(nil)
+				require.NoError(t, err)
+				require.NoError(t, pc.SetLocalDescription(sdp))
+				offerId := uint32(23)
+
+				sink := &routingfakes.FakeMessageSink{}
+				participant.SetResponseSink(sink)
+				var answer webrtc.SessionDescription
+				var answerId uint32
+				var answerReceived atomic.Bool
+				var answerIdReceived atomic.Uint32
+				sink.WriteMessageCalls(func(msg proto.Message) error {
+					if res, ok := msg.(*livekit.SignalResponse); ok {
+						if res.GetAnswer() != nil {
+							answer, answerId = signalling.FromProtoSessionDescription(res.GetAnswer())
+							pc.SetRemoteDescription(answer)
+							answerReceived.Store(true)
+							answerIdReceived.Store(answerId)
+						}
+					}
+					return nil
+				})
+				participant.HandleOffer(&livekit.SessionDescription{
+					Type: webrtc.SDPTypeOffer.String(),
+					Sdp:  sdp.SDP,
+					Id:   offerId,
+				})
+
+				require.Eventually(t, func() bool { return answerReceived.Load() && answerIdReceived.Load() == offerId }, 5*time.Second, 10*time.Millisecond)
+
+				var havePreferred bool
+				parsed, err := answer.Unmarshal()
+				require.NoError(t, err)
+				var mediaSectionIndex int
+				for _, m := range parsed.MediaDescriptions {
+					if m.MediaName.Media == tc.mediaKind {
+						if mediaSectionIndex == i {
+							codecs, err := lksdp.CodecsFromMediaDescription(m)
+							require.NoError(t, err)
+							if tc.mimeTypeCodecStringChecker(codecs[0].Name) {
+								havePreferred = true
+								break
+							}
+						}
+						mediaSectionIndex++
+					}
+				}
+
+				require.Truef(t, havePreferred, "%s should be preferred for %s section %d, answer sdp: \n%s", tc.preferredCodec, tc.mediaKind, i, answer.SDP)
+			}
+		})
 	}
 }
 
@@ -558,10 +626,7 @@ func TestPreferAudioCodecForRed(t *testing.T) {
 
 	me := webrtc.MediaEngine{}
 	me.RegisterDefaultCodecs()
-	require.NoError(t, me.RegisterCodec(webrtc.RTPCodecParameters{
-		RTPCodecCapability: RedCodecCapability,
-		PayloadType:        63,
-	}, webrtc.RTPCodecTypeAudio))
+	require.NoError(t, me.RegisterCodec(RedCodecParameters, webrtc.RTPCodecTypeAudio))
 
 	api := webrtc.NewAPI(webrtc.WithMediaEngine(&me))
 	pc, err := api.NewPeerConnection(webrtc.Configuration{})
@@ -593,24 +658,32 @@ func TestPreferAudioCodecForRed(t *testing.T) {
 			pc.SetLocalDescription(sdp)
 			// opus should be preferred
 			require.Equal(t, codecs[0].MimeType, "audio/opus", sdp)
+			offerId := uint32(0xffffff)
 
 			sink := &routingfakes.FakeMessageSink{}
 			participant.SetResponseSink(sink)
 			var answer webrtc.SessionDescription
+			var answerId uint32
 			var answerReceived atomic.Bool
+			var answerIdReceived atomic.Uint32
 			sink.WriteMessageCalls(func(msg proto.Message) error {
 				if res, ok := msg.(*livekit.SignalResponse); ok {
 					if res.GetAnswer() != nil {
-						answer = FromProtoSessionDescription(res.GetAnswer())
+						answer, answerId = signalling.FromProtoSessionDescription(res.GetAnswer())
 						pc.SetRemoteDescription(answer)
 						answerReceived.Store(true)
+						answerIdReceived.Store(answerId)
 					}
 				}
 				return nil
 			})
-			participant.HandleOffer(sdp)
+			participant.HandleOffer(&livekit.SessionDescription{
+				Type: webrtc.SDPTypeOffer.String(),
+				Sdp:  sdp.SDP,
+				Id:   offerId,
+			})
 
-			require.Eventually(t, func() bool { return answerReceived.Load() }, 5*time.Second, 10*time.Millisecond)
+			require.Eventually(t, func() bool { return answerReceived.Load() && answerIdReceived.Load() == offerId }, 5*time.Second, 10*time.Millisecond)
 
 			var redPreferred bool
 			parsed, err := answer.Unmarshal()
@@ -703,6 +776,7 @@ func newParticipantForTestWithOpts(identity livekit.ParticipantIdentity, opts *p
 		ClientConf:             opts.clientConf,
 		ClientInfo:             ClientInfo{ClientInfo: opts.clientInfo},
 		Logger:                 LoggerWithParticipant(logger.GetLogger(), identity, sid, false),
+		Reporter:               roomobs.NewNoopParticipantSessionReporter(),
 		Telemetry:              &telemetryfakes.FakeTelemetryService{},
 		VersionGenerator:       utils.NewDefaultTimedVersionGenerator(),
 		ParticipantHelper:      &typesfakes.FakeLocalParticipantHelper{},

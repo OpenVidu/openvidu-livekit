@@ -194,12 +194,11 @@ type FakeParticipant struct {
 	onMetricsArgsForCall []struct {
 		arg1 func(types.Participant, *livekit.DataPacket)
 	}
-	RemovePublishedTrackStub        func(types.MediaTrack, bool, bool)
+	RemovePublishedTrackStub        func(types.MediaTrack, bool)
 	removePublishedTrackMutex       sync.RWMutex
 	removePublishedTrackArgsForCall []struct {
 		arg1 types.MediaTrack
 		arg2 bool
-		arg3 bool
 	}
 	StateStub        func() livekit.ParticipantInfo_State
 	stateMutex       sync.RWMutex
@@ -1223,18 +1222,17 @@ func (fake *FakeParticipant) OnMetricsArgsForCall(i int) func(types.Participant,
 	return argsForCall.arg1
 }
 
-func (fake *FakeParticipant) RemovePublishedTrack(arg1 types.MediaTrack, arg2 bool, arg3 bool) {
+func (fake *FakeParticipant) RemovePublishedTrack(arg1 types.MediaTrack, arg2 bool) {
 	fake.removePublishedTrackMutex.Lock()
 	fake.removePublishedTrackArgsForCall = append(fake.removePublishedTrackArgsForCall, struct {
 		arg1 types.MediaTrack
 		arg2 bool
-		arg3 bool
-	}{arg1, arg2, arg3})
+	}{arg1, arg2})
 	stub := fake.RemovePublishedTrackStub
-	fake.recordInvocation("RemovePublishedTrack", []interface{}{arg1, arg2, arg3})
+	fake.recordInvocation("RemovePublishedTrack", []interface{}{arg1, arg2})
 	fake.removePublishedTrackMutex.Unlock()
 	if stub != nil {
-		fake.RemovePublishedTrackStub(arg1, arg2, arg3)
+		fake.RemovePublishedTrackStub(arg1, arg2)
 	}
 }
 
@@ -1244,17 +1242,17 @@ func (fake *FakeParticipant) RemovePublishedTrackCallCount() int {
 	return len(fake.removePublishedTrackArgsForCall)
 }
 
-func (fake *FakeParticipant) RemovePublishedTrackCalls(stub func(types.MediaTrack, bool, bool)) {
+func (fake *FakeParticipant) RemovePublishedTrackCalls(stub func(types.MediaTrack, bool)) {
 	fake.removePublishedTrackMutex.Lock()
 	defer fake.removePublishedTrackMutex.Unlock()
 	fake.RemovePublishedTrackStub = stub
 }
 
-func (fake *FakeParticipant) RemovePublishedTrackArgsForCall(i int) (types.MediaTrack, bool, bool) {
+func (fake *FakeParticipant) RemovePublishedTrackArgsForCall(i int) (types.MediaTrack, bool) {
 	fake.removePublishedTrackMutex.RLock()
 	defer fake.removePublishedTrackMutex.RUnlock()
 	argsForCall := fake.removePublishedTrackArgsForCall[i]
-	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3
+	return argsForCall.arg1, argsForCall.arg2
 }
 
 func (fake *FakeParticipant) State() livekit.ParticipantInfo_State {
@@ -1538,54 +1536,6 @@ func (fake *FakeParticipant) VersionReturnsOnCall(i int, result1 utils.TimedVers
 func (fake *FakeParticipant) Invocations() map[string][][]interface{} {
 	fake.invocationsMutex.RLock()
 	defer fake.invocationsMutex.RUnlock()
-	fake.canSkipBroadcastMutex.RLock()
-	defer fake.canSkipBroadcastMutex.RUnlock()
-	fake.closeMutex.RLock()
-	defer fake.closeMutex.RUnlock()
-	fake.closeReasonMutex.RLock()
-	defer fake.closeReasonMutex.RUnlock()
-	fake.connectedAtMutex.RLock()
-	defer fake.connectedAtMutex.RUnlock()
-	fake.debugInfoMutex.RLock()
-	defer fake.debugInfoMutex.RUnlock()
-	fake.getAudioLevelMutex.RLock()
-	defer fake.getAudioLevelMutex.RUnlock()
-	fake.getPublishedTrackMutex.RLock()
-	defer fake.getPublishedTrackMutex.RUnlock()
-	fake.getPublishedTracksMutex.RLock()
-	defer fake.getPublishedTracksMutex.RUnlock()
-	fake.hasPermissionMutex.RLock()
-	defer fake.hasPermissionMutex.RUnlock()
-	fake.hiddenMutex.RLock()
-	defer fake.hiddenMutex.RUnlock()
-	fake.iDMutex.RLock()
-	defer fake.iDMutex.RUnlock()
-	fake.identityMutex.RLock()
-	defer fake.identityMutex.RUnlock()
-	fake.isAgentMutex.RLock()
-	defer fake.isAgentMutex.RUnlock()
-	fake.isDependentMutex.RLock()
-	defer fake.isDependentMutex.RUnlock()
-	fake.isPublisherMutex.RLock()
-	defer fake.isPublisherMutex.RUnlock()
-	fake.isRecorderMutex.RLock()
-	defer fake.isRecorderMutex.RUnlock()
-	fake.kindMutex.RLock()
-	defer fake.kindMutex.RUnlock()
-	fake.onMetricsMutex.RLock()
-	defer fake.onMetricsMutex.RUnlock()
-	fake.removePublishedTrackMutex.RLock()
-	defer fake.removePublishedTrackMutex.RUnlock()
-	fake.stateMutex.RLock()
-	defer fake.stateMutex.RUnlock()
-	fake.subscriptionPermissionMutex.RLock()
-	defer fake.subscriptionPermissionMutex.RUnlock()
-	fake.toProtoMutex.RLock()
-	defer fake.toProtoMutex.RUnlock()
-	fake.updateSubscriptionPermissionMutex.RLock()
-	defer fake.updateSubscriptionPermissionMutex.RUnlock()
-	fake.versionMutex.RLock()
-	defer fake.versionMutex.RUnlock()
 	copiedInvocations := map[string][][]interface{}{}
 	for key, value := range fake.invocations {
 		copiedInvocations[key] = value

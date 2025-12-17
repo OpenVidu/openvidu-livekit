@@ -51,7 +51,7 @@ type signalClient struct {
 }
 
 func NewSignalClient(nodeID livekit.NodeID, bus psrpc.MessageBus, config config.SignalRelayConfig) (SignalClient, error) {
-	c, err := rpc.NewTypedSignalClient(
+	client, err := rpc.NewTypedSignalClient(
 		nodeID,
 		bus,
 		middleware.WithClientMetrics(rpc.PSRPCMetricsObserver{}),
@@ -64,7 +64,7 @@ func NewSignalClient(nodeID livekit.NodeID, bus psrpc.MessageBus, config config.
 	return &signalClient{
 		nodeID: nodeID,
 		config: config,
-		client: c,
+		client: client,
 	}, nil
 }
 
@@ -142,6 +142,8 @@ func (r *signalClient) StartParticipantSignal(
 	return connectionID, sink, resChan, nil
 }
 
+// ------------------------------
+
 type signalRequestMessageWriter struct{}
 
 func (e signalRequestMessageWriter) Write(seq uint64, close bool, msgs []proto.Message) *rpc.RelaySignalRequest {
@@ -156,6 +158,8 @@ func (e signalRequestMessageWriter) Write(seq uint64, close bool, msgs []proto.M
 	return r
 }
 
+// -------------------------------
+
 type signalResponseMessageReader struct{}
 
 func (e signalResponseMessageReader) Read(rm *rpc.RelaySignalResponse) ([]proto.Message, error) {
@@ -165,6 +169,8 @@ func (e signalResponseMessageReader) Read(rm *rpc.RelaySignalResponse) ([]proto.
 	}
 	return msgs, nil
 }
+
+// -----------------------------------------
 
 type RelaySignalMessage interface {
 	proto.Message
@@ -212,6 +218,8 @@ func CopySignalStreamToMessageChannel[SendType, RecvType RelaySignalMessage](
 	return stream.Err()
 }
 
+// ----------------------------------------
+
 type signalMessageReader[SendType, RecvType RelaySignalMessage] struct {
 	seq    uint64
 	reader SignalMessageReader[RecvType]
@@ -238,6 +246,8 @@ func (r *signalMessageReader[SendType, RecvType]) Read(msg RecvType) ([]proto.Me
 
 	return res, nil
 }
+
+// ----------------------------------------
 
 type SignalSinkParams[SendType, RecvType RelaySignalMessage] struct {
 	Stream         psrpc.Stream[SendType, RecvType]

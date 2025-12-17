@@ -42,9 +42,8 @@ var (
 	// ensuring this is longer than iceFailedTimeout so we are certain the participant won't return
 	notFoundTimeout = time.Minute
 	// amount of time to try otherwise before flagging subscription as failed
-	subscriptionTimeout    = iceFailedTimeoutTotal
-	trackRemoveGracePeriod = time.Second
-	maxUnsubscribeWait     = time.Second
+	subscriptionTimeout = iceFailedTimeoutTotal
+	maxUnsubscribeWait  = time.Second
 )
 
 const (
@@ -139,8 +138,8 @@ func (m *SubscriptionManager) isClosed() bool {
 	}
 }
 
-func (m *SubscriptionManager) SubscribeToTrack(trackID livekit.TrackID) {
-	if m.params.UseOneShotSignallingMode {
+func (m *SubscriptionManager) SubscribeToTrack(trackID livekit.TrackID, isSync bool) {
+	if m.params.UseOneShotSignallingMode || isSync {
 		m.subscribeSynchronous(trackID)
 		return
 	}
@@ -556,7 +555,7 @@ func (m *SubscriptionManager) subscribe(s *trackSubscription) error {
 
 	permChanged := s.setHasPermission(res.HasPermission)
 	if permChanged {
-		m.params.Participant.SubscriptionPermissionUpdate(s.getPublisherID(), trackID, res.HasPermission)
+		m.params.Participant.SendSubscriptionPermissionUpdate(s.getPublisherID(), trackID, res.HasPermission)
 	}
 	if !res.HasPermission {
 		return ErrNoTrackPermission
@@ -1140,7 +1139,15 @@ func (s *trackSubscription) maybeRecordSuccess(ts telemetry.TelemetryService, pI
 	d := time.Since(*s.subscribeAt.Load())
 	s.logger.Debugw("track subscribed", "cost", d.Milliseconds())
 	subscriber := subTrack.Subscriber()
-	prometheus.RecordSubscribeTime(mediaTrack.Source(), mediaTrack.Kind(), d, subscriber.GetClientInfo().GetSdk(), subscriber.Kind(), int(s.succRecordCounter.Inc()))
+	prometheus.RecordSubscribeTime(
+		subscriber.GetCountry(),
+		mediaTrack.Source(),
+		mediaTrack.Kind(),
+		d,
+		subscriber.GetClientInfo().GetSdk(),
+		subscriber.Kind(),
+		int(s.succRecordCounter.Inc()),
+	)
 
 	eventSent := s.eventSent.Swap(true)
 

@@ -17,17 +17,18 @@ package clientconfiguration
 import (
 	"github.com/livekit/livekit-server/pkg/sfu/mime"
 	"github.com/livekit/protocol/livekit"
+	"github.com/livekit/protocol/utils/must"
 )
 
 // StaticConfigurations list specific device-side limitations that should be disabled at a global level
 var StaticConfigurations = []ConfigurationItem{
 	// {
-	// 	Match:         &ScriptMatch{Expr: `c.protocol <= 5 || c.browser == "firefox"`},
+	// 	Match:         must.Get(NewScriptMatch(`c.protocol <= 5 || c.browser == "firefox"`)),
 	// 	Configuration: &livekit.ClientConfiguration{ResumeConnection: livekit.ClientConfigSetting_DISABLED},
 	// 	Merge:         false,
 	// },
 	{
-		Match: &ScriptMatch{Expr: `c.browser == "safari"`},
+		Match: must.Get(NewScriptMatch(`c.browser == "safari"`)),
 		Configuration: &livekit.ClientConfiguration{
 			DisabledCodecs: &livekit.DisabledCodecs{
 				Codecs: []*livekit.Codec{
@@ -38,7 +39,7 @@ var StaticConfigurations = []ConfigurationItem{
 		Merge: true,
 	},
 	{
-		Match: &ScriptMatch{Expr: `c.browser == "safari" && c.browser_version > "18.3"`},
+		Match: must.Get(NewScriptMatch(`c.browser == "safari" && c.browser_version > "18.3"`)),
 		Configuration: &livekit.ClientConfiguration{
 			DisabledCodecs: &livekit.DisabledCodecs{
 				Publish: []*livekit.Codec{
@@ -49,8 +50,8 @@ var StaticConfigurations = []ConfigurationItem{
 		Merge: true,
 	},
 	{
-		Match: &ScriptMatch{Expr: `(c.device_model == "xiaomi 2201117ti" && c.os == "android") ||
-		  ((c.browser == "firefox" || c.browser == "firefox mobile") && (c.os == "linux" || c.os == "android"))`},
+		Match: must.Get(NewScriptMatch(`(c.device_model == "xiaomi 2201117ti" && c.os == "android") ||
+		  ((c.browser == "firefox" || c.browser == "firefox mobile") && (c.os == "linux" || c.os == "android"))`)),
 		Configuration: &livekit.ClientConfiguration{
 			DisabledCodecs: &livekit.DisabledCodecs{
 				Publish: []*livekit.Codec{

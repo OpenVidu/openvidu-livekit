@@ -25,17 +25,18 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/twitchtv/twirp"
 
+	"github.com/livekit/mediatransportutil/pkg/rtcconfig"
+	"github.com/livekit/protocol/auth"
+	"github.com/livekit/protocol/livekit"
+	"github.com/livekit/protocol/logger"
+	"github.com/livekit/protocol/utils/guid"
+
 	"github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/livekit-server/pkg/routing"
 	"github.com/livekit/livekit-server/pkg/service"
 	"github.com/livekit/livekit-server/pkg/telemetry/prometheus"
 	"github.com/livekit/livekit-server/pkg/testutils"
 	testclient "github.com/livekit/livekit-server/test/client"
-	"github.com/livekit/mediatransportutil/pkg/rtcconfig"
-	"github.com/livekit/protocol/auth"
-	"github.com/livekit/protocol/livekit"
-	"github.com/livekit/protocol/logger"
-	"github.com/livekit/protocol/utils/guid"
 )
 
 const (
@@ -201,35 +202,32 @@ func createMultiNodeServer(nodeID string, port uint32) *service.LivekitServer {
 }
 
 // creates a client and runs against server
-func createRTCClient(name string, port int, opts *testclient.Options) *testclient.RTCClient {
+func createRTCClient(name string, port int, useSinglePeerConnection bool, opts *testclient.Options) *testclient.RTCClient {
 	var customizer func(token *auth.AccessToken, grants *auth.VideoGrant)
 	if opts != nil {
 		customizer = opts.TokenCustomizer
 	}
 	token := joinToken(testRoom, name, customizer)
-	ws, err := testclient.NewWebSocketConn(fmt.Sprintf("ws://localhost:%d", port), token, opts)
-	if err != nil {
-		panic(err)
-	}
 
-	c, err := testclient.NewRTCClient(ws, opts)
-	if err != nil {
-		panic(err)
-	}
-
-	go c.Run()
-
-	return c
+	return createRTCClientWithToken(token, port, useSinglePeerConnection, opts)
 }
 
 // creates a client and runs against server
-func createRTCClientWithToken(token string, port int, opts *testclient.Options) *testclient.RTCClient {
+func createRTCClientWithToken(token string, port int, useSinglePeerConnection bool, opts *testclient.Options) *testclient.RTCClient {
+	if opts == nil {
+		opts = &testclient.Options{
+			AutoSubscribe: true,
+		}
+	}
+	if useSinglePeerConnection {
+		opts.UseJoinRequestQueryParam = true
+	}
 	ws, err := testclient.NewWebSocketConn(fmt.Sprintf("ws://localhost:%d", port), token, opts)
 	if err != nil {
 		panic(err)
 	}
 
-	c, err := testclient.NewRTCClient(ws, opts)
+	c, err := testclient.NewRTCClient(ws, useSinglePeerConnection, opts)
 	if err != nil {
 		panic(err)
 	}

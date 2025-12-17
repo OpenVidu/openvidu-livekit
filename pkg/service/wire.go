@@ -28,7 +28,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/livekit/livekit-server/pkg/agent"
-	"github.com/livekit/livekit-server/pkg/clientconfiguration"
 	"github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/livekit-server/pkg/routing"
 	"github.com/livekit/livekit-server/pkg/sfu"
@@ -51,7 +50,6 @@ func InitializeServer(conf *config.Config, currentNode routing.LocalNode) (*Live
 		wire.Bind(new(ServiceStore), new(ObjectStore)),
 		createKeyProvider,
 		createWebhookNotifier,
-		createClientConfiguration,
 		createForwardStats,
 		getNodeStatsConfig,
 		routing.CreateRouter,
@@ -79,7 +77,7 @@ func InitializeServer(conf *config.Config, currentNode routing.LocalNode) (*Live
 		NewRoomAllocator,
 		NewRoomService,
 		NewRTCService,
-		NewRTCRestService,
+		NewWHIPService,
 		NewAgentService,
 		NewAgentDispatchService,
 		agent.NewAgentClient,
@@ -95,7 +93,7 @@ func InitializeServer(conf *config.Config, currentNode routing.LocalNode) (*Live
 		rpc.NewTopicFormatter,
 		rpc.NewTypedRoomClient,
 		rpc.NewTypedParticipantClient,
-		rpc.NewTypedRTCRestParticipantClient,
+		rpc.NewTypedWHIPParticipantClient,
 		rpc.NewTypedAgentDispatchInternalClient,
 		NewLocalRoomManager,
 		NewTURNAuthHandler,
@@ -235,10 +233,6 @@ func getSIPStore(s ObjectStore) SIPStore {
 
 func getSIPConfig(conf *config.Config) *config.SIPConfig {
 	return &conf.SIP
-}
-
-func createClientConfiguration() clientconfiguration.ClientConfigurationManager {
-	return clientconfiguration.NewStaticClientConfigurationManager(clientconfiguration.StaticConfigurations)
 }
 
 func getLimitConf(config *config.Config) config.LimitConfig {

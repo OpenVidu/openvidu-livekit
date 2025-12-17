@@ -19,7 +19,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/livekit/livekit-server/pkg/sfu/mime"
 	"github.com/livekit/protocol/livekit"
+	"github.com/livekit/protocol/logger"
 )
 
 func TestTrackInfo(t *testing.T) {
@@ -47,128 +49,149 @@ func TestTrackInfo(t *testing.T) {
 	require.Equal(t, ti.Width, outInfo.Width)
 	require.Equal(t, ti.Height, outInfo.Height)
 	require.Equal(t, ti.Simulcast, outInfo.Simulcast)
-
-	// make it simulcasted
-	mt.SetSimulcast(true)
-	require.True(t, mt.ToProto().Simulcast)
 }
 
 func TestGetQualityForDimension(t *testing.T) {
 	t.Run("landscape source", func(t *testing.T) {
-		mt := NewMediaTrack(MediaTrackParams{}, &livekit.TrackInfo{
+		mt := NewMediaTrack(MediaTrackParams{
+			Logger: logger.GetLogger(),
+		}, &livekit.TrackInfo{
 			Type:   livekit.TrackType_VIDEO,
 			Width:  1080,
 			Height: 720,
 		})
 
-		require.Equal(t, livekit.VideoQuality_LOW, mt.GetQualityForDimension(120, 120))
-		require.Equal(t, livekit.VideoQuality_LOW, mt.GetQualityForDimension(300, 200))
-		require.Equal(t, livekit.VideoQuality_MEDIUM, mt.GetQualityForDimension(200, 250))
-		require.Equal(t, livekit.VideoQuality_HIGH, mt.GetQualityForDimension(700, 480))
-		require.Equal(t, livekit.VideoQuality_HIGH, mt.GetQualityForDimension(500, 1000))
+		require.Equal(t, livekit.VideoQuality_LOW, mt.GetQualityForDimension(mime.MimeTypeVP8, 120, 120))
+		require.Equal(t, livekit.VideoQuality_LOW, mt.GetQualityForDimension(mime.MimeTypeVP8, 300, 200))
+		require.Equal(t, livekit.VideoQuality_MEDIUM, mt.GetQualityForDimension(mime.MimeTypeVP8, 200, 250))
+		require.Equal(t, livekit.VideoQuality_HIGH, mt.GetQualityForDimension(mime.MimeTypeVP8, 700, 480))
+		require.Equal(t, livekit.VideoQuality_HIGH, mt.GetQualityForDimension(mime.MimeTypeVP8, 500, 1000))
 	})
 
 	t.Run("portrait source", func(t *testing.T) {
-		mt := NewMediaTrack(MediaTrackParams{}, &livekit.TrackInfo{
+		mt := NewMediaTrack(MediaTrackParams{
+			Logger: logger.GetLogger(),
+		}, &livekit.TrackInfo{
 			Type:   livekit.TrackType_VIDEO,
 			Width:  540,
 			Height: 960,
 		})
 
-		require.Equal(t, livekit.VideoQuality_LOW, mt.GetQualityForDimension(200, 400))
-		require.Equal(t, livekit.VideoQuality_MEDIUM, mt.GetQualityForDimension(400, 400))
-		require.Equal(t, livekit.VideoQuality_MEDIUM, mt.GetQualityForDimension(400, 700))
-		require.Equal(t, livekit.VideoQuality_HIGH, mt.GetQualityForDimension(600, 900))
+		require.Equal(t, livekit.VideoQuality_LOW, mt.GetQualityForDimension(mime.MimeTypeVP8, 200, 400))
+		require.Equal(t, livekit.VideoQuality_MEDIUM, mt.GetQualityForDimension(mime.MimeTypeVP8, 400, 400))
+		require.Equal(t, livekit.VideoQuality_MEDIUM, mt.GetQualityForDimension(mime.MimeTypeVP8, 400, 700))
+		require.Equal(t, livekit.VideoQuality_HIGH, mt.GetQualityForDimension(mime.MimeTypeVP8, 600, 900))
 	})
 
 	t.Run("layers provided", func(t *testing.T) {
-		mt := NewMediaTrack(MediaTrackParams{}, &livekit.TrackInfo{
+		mt := NewMediaTrack(MediaTrackParams{
+			Logger: logger.GetLogger(),
+		}, &livekit.TrackInfo{
 			Type:   livekit.TrackType_VIDEO,
 			Width:  1080,
 			Height: 720,
-			Layers: []*livekit.VideoLayer{
+			Codecs: []*livekit.SimulcastCodecInfo{
 				{
-					Quality: livekit.VideoQuality_LOW,
-					Width:   480,
-					Height:  270,
-				},
-				{
-					Quality: livekit.VideoQuality_MEDIUM,
-					Width:   960,
-					Height:  540,
-				},
-				{
-					Quality: livekit.VideoQuality_HIGH,
-					Width:   1080,
-					Height:  720,
+					MimeType: mime.MimeTypeH264.String(),
+					Layers: []*livekit.VideoLayer{
+						{
+							Quality: livekit.VideoQuality_LOW,
+							Width:   480,
+							Height:  270,
+						},
+						{
+							Quality: livekit.VideoQuality_MEDIUM,
+							Width:   960,
+							Height:  540,
+						},
+						{
+							Quality: livekit.VideoQuality_HIGH,
+							Width:   1080,
+							Height:  720,
+						},
+					},
 				},
 			},
 		})
 
-		require.Equal(t, livekit.VideoQuality_LOW, mt.GetQualityForDimension(120, 120))
-		require.Equal(t, livekit.VideoQuality_LOW, mt.GetQualityForDimension(300, 300))
-		require.Equal(t, livekit.VideoQuality_MEDIUM, mt.GetQualityForDimension(800, 500))
-		require.Equal(t, livekit.VideoQuality_HIGH, mt.GetQualityForDimension(1000, 700))
+		require.Equal(t, livekit.VideoQuality_LOW, mt.GetQualityForDimension(mime.MimeTypeH264, 120, 120))
+		require.Equal(t, livekit.VideoQuality_LOW, mt.GetQualityForDimension(mime.MimeTypeH264, 300, 300))
+		require.Equal(t, livekit.VideoQuality_MEDIUM, mt.GetQualityForDimension(mime.MimeTypeH264, 800, 500))
+		require.Equal(t, livekit.VideoQuality_HIGH, mt.GetQualityForDimension(mime.MimeTypeH264, 1000, 700))
 	})
 
 	t.Run("highest layer with smallest dimensions", func(t *testing.T) {
-		mt := NewMediaTrack(MediaTrackParams{}, &livekit.TrackInfo{
+		mt := NewMediaTrack(MediaTrackParams{
+			Logger: logger.GetLogger(),
+		}, &livekit.TrackInfo{
 			Type:   livekit.TrackType_VIDEO,
 			Width:  1080,
 			Height: 720,
-			Layers: []*livekit.VideoLayer{
+			Codecs: []*livekit.SimulcastCodecInfo{
 				{
-					Quality: livekit.VideoQuality_LOW,
-					Width:   480,
-					Height:  270,
-				},
-				{
-					Quality: livekit.VideoQuality_MEDIUM,
-					Width:   1080,
-					Height:  720,
-				},
-				{
-					Quality: livekit.VideoQuality_HIGH,
-					Width:   1080,
-					Height:  720,
+					MimeType: mime.MimeTypeH264.String(),
+					Layers: []*livekit.VideoLayer{
+						{
+							Quality: livekit.VideoQuality_LOW,
+							Width:   480,
+							Height:  270,
+						},
+						{
+							Quality: livekit.VideoQuality_MEDIUM,
+							Width:   1080,
+							Height:  720,
+						},
+						{
+							Quality: livekit.VideoQuality_HIGH,
+							Width:   1080,
+							Height:  720,
+						},
+					},
 				},
 			},
 		})
 
-		require.Equal(t, livekit.VideoQuality_LOW, mt.GetQualityForDimension(120, 120))
-		require.Equal(t, livekit.VideoQuality_LOW, mt.GetQualityForDimension(300, 300))
-		require.Equal(t, livekit.VideoQuality_HIGH, mt.GetQualityForDimension(800, 500))
-		require.Equal(t, livekit.VideoQuality_HIGH, mt.GetQualityForDimension(1000, 700))
-		require.Equal(t, livekit.VideoQuality_HIGH, mt.GetQualityForDimension(1200, 800))
+		require.Equal(t, livekit.VideoQuality_LOW, mt.GetQualityForDimension(mime.MimeTypeH264, 120, 120))
+		require.Equal(t, livekit.VideoQuality_LOW, mt.GetQualityForDimension(mime.MimeTypeH264, 300, 300))
+		require.Equal(t, livekit.VideoQuality_HIGH, mt.GetQualityForDimension(mime.MimeTypeH264, 800, 500))
+		require.Equal(t, livekit.VideoQuality_HIGH, mt.GetQualityForDimension(mime.MimeTypeH264, 1000, 700))
+		require.Equal(t, livekit.VideoQuality_HIGH, mt.GetQualityForDimension(mime.MimeTypeH264, 1200, 800))
 
-		mt = NewMediaTrack(MediaTrackParams{}, &livekit.TrackInfo{
+		mt = NewMediaTrack(MediaTrackParams{
+			Logger: logger.GetLogger(),
+		}, &livekit.TrackInfo{
 			Type:   livekit.TrackType_VIDEO,
 			Width:  1080,
 			Height: 720,
-			Layers: []*livekit.VideoLayer{
+			Codecs: []*livekit.SimulcastCodecInfo{
 				{
-					Quality: livekit.VideoQuality_LOW,
-					Width:   480,
-					Height:  270,
-				},
-				{
-					Quality: livekit.VideoQuality_MEDIUM,
-					Width:   480,
-					Height:  270,
-				},
-				{
-					Quality: livekit.VideoQuality_HIGH,
-					Width:   1080,
-					Height:  720,
+					MimeType: mime.MimeTypeH264.String(),
+					Layers: []*livekit.VideoLayer{
+						{
+							Quality: livekit.VideoQuality_LOW,
+							Width:   480,
+							Height:  270,
+						},
+						{
+							Quality: livekit.VideoQuality_MEDIUM,
+							Width:   480,
+							Height:  270,
+						},
+						{
+							Quality: livekit.VideoQuality_HIGH,
+							Width:   1080,
+							Height:  720,
+						},
+					},
 				},
 			},
 		})
 
-		require.Equal(t, livekit.VideoQuality_MEDIUM, mt.GetQualityForDimension(120, 120))
-		require.Equal(t, livekit.VideoQuality_MEDIUM, mt.GetQualityForDimension(300, 300))
-		require.Equal(t, livekit.VideoQuality_HIGH, mt.GetQualityForDimension(800, 500))
-		require.Equal(t, livekit.VideoQuality_HIGH, mt.GetQualityForDimension(1000, 700))
-		require.Equal(t, livekit.VideoQuality_HIGH, mt.GetQualityForDimension(1200, 800))
+		require.Equal(t, livekit.VideoQuality_MEDIUM, mt.GetQualityForDimension(mime.MimeTypeH264, 120, 120))
+		require.Equal(t, livekit.VideoQuality_MEDIUM, mt.GetQualityForDimension(mime.MimeTypeH264, 300, 300))
+		require.Equal(t, livekit.VideoQuality_HIGH, mt.GetQualityForDimension(mime.MimeTypeH264, 800, 500))
+		require.Equal(t, livekit.VideoQuality_HIGH, mt.GetQualityForDimension(mime.MimeTypeH264, 1000, 700))
+		require.Equal(t, livekit.VideoQuality_HIGH, mt.GetQualityForDimension(mime.MimeTypeH264, 1200, 800))
 	})
 
 }
