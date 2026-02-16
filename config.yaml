@@ -245,6 +245,9 @@ keys:
 #   # set UDP port range for TURN relay to connect to LiveKit SFU, by default it uses a any available port
 #   relay_range_start: 1024
 #   relay_range_end: 30000
+#   # IP address used for TURN relay. If not set and the node is not publicly reachable,
+#   # the first local IP is used. Otherwise, falls back to the RTC node IP.
+#   # relay_address: 10.0.0.1
 #   # set external_tls to true if using a L4 load balancer to terminate TLS. when enabled,
 #   # LiveKit expects unencrypted traffic on tls_port, and still advertise tls_port as a TURN/TLS candidate.
 #   external_tls: true

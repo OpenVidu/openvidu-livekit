@@ -34,6 +34,10 @@ import (
 	"github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/livekit-server/pkg/telemetry"
 	"github.com/livekit/livekit-server/pkg/telemetry/prometheus"
+
+	// BEGIN OPENVIDU BLOCK
+	"github.com/livekit/mediatransportutil/pkg/rtcconfig"
+	// END OPENVIDU BLOCK
 )
 
 const (
@@ -59,12 +63,21 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 		AuthHandler:   authHandler,
 		LoggerFactory: pionlogger.NewLoggerFactory(logger.GetLogger()),
 	}
+	// BEGIN OPENVIDU BLOCK
+	relayAddress, err := resolveTURNRelayAddress(conf)
+	if err != nil {
+		return nil, err
+	}
+	// END OPENVIDU BLOCK
+
 	var relayAddrGen turn.RelayAddressGenerator = &turn.RelayAddressGeneratorPortRange{
-		RelayAddress: net.ParseIP(conf.RTC.NodeIP),
-		Address:      "0.0.0.0",
-		MinPort:      turnConf.RelayPortRangeStart,
-		MaxPort:      turnConf.RelayPortRangeEnd,
-		MaxRetries:   allocateRetries,
+		// BEGIN OPENVIDU BLOCK
+		RelayAddress: net.ParseIP(relayAddress),
+		// END OPENVIDU BLOCK
+		Address:    "0.0.0.0",
+		MinPort:    turnConf.RelayPortRangeStart,
+		MaxPort:    turnConf.RelayPortRangeEnd,
+		MaxRetries: allocateRetries,
 	}
 	if standalone {
 		relayAddrGen = telemetry.NewRelayAddressGenerator(relayAddrGen)
@@ -145,6 +158,26 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 	logger.Infow("Starting TURN server", logValues...)
 	return turn.NewServer(serverConfig)
 }
+
+// BEGIN OPENVIDU BLOCK
+func resolveTURNRelayAddress(conf *config.Config) (string, error) {
+	if conf.TURN.RelayAddress != "" {
+		return conf.TURN.RelayAddress, nil
+	}
+	if !conf.PubliclyReachable {
+		localIPs, err := rtcconfig.GetLocalIPAddresses(false, nil)
+		if err != nil {
+			return "", errors.Wrap(err, "could not get local IP addresses for TURN relay")
+		}
+		if len(localIPs) > 0 {
+			logger.Infow("Using first local IP as TURN relay address", "relayAddress", localIPs[0])
+			return localIPs[0], nil
+		}
+	}
+	return conf.RTC.NodeIP, nil
+}
+
+// END OPENVIDU BLOCK
 
 func getTURNAuthHandlerFunc(handler *TURNAuthHandler) turn.AuthHandler {
 	return handler.HandleAuth

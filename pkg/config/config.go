@@ -57,7 +57,8 @@ var (
 
 type Config struct {
 	// BEGIN OPENVIDU BLOCK
-	OpenVidu openviduconfig.OpenViduConfig `yaml:"openvidu,omitempty"`
+	OpenVidu          openviduconfig.OpenViduConfig `yaml:"openvidu,omitempty"`
+	PubliclyReachable bool                          `yaml:"-"`
 	// END OPENVIDU BLOCK
 
 	Port          uint32   `yaml:"port,omitempty"`
@@ -220,6 +221,9 @@ type TURNConfig struct {
 	RelayPortRangeStart uint16 `yaml:"relay_range_start,omitempty"`
 	RelayPortRangeEnd   uint16 `yaml:"relay_range_end,omitempty"`
 	ExternalTLS         bool   `yaml:"external_tls,omitempty"`
+	// BEGIN OPENVIDU BLOCK
+	RelayAddress string `yaml:"relay_address,omitempty"`
+	// END OPENVIDU BLOCK
 }
 
 type NodeSelectorConfig struct {

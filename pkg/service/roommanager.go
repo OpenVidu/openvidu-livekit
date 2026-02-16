@@ -21,6 +21,9 @@ import (
 	"sync"
 	"time"
 
+	// BEGIN OPENVIDU BLOCK
+	"github.com/pion/webrtc/v4"
+	// END OPENVIDU BLOCK
 	"github.com/pkg/errors"
 	"golang.org/x/exp/maps"
 
@@ -118,6 +121,35 @@ func NewLocalRoomManager(
 	if err != nil {
 		return nil, err
 	}
+
+	// BEGIN OPENVIDU BLOCK
+	publicReachable, err := rtc.IsPubliclyReachable(&conf.RTC.RTCConfig, &rtcConf.WebRTCConfig)
+	if err != nil {
+		return nil, err
+	}
+	conf.PubliclyReachable = publicReachable
+
+	// Add as host candidates local IPs for internal services like Egress,
+	// Which need to reach the server on local IP when node IP is not local
+	// and not reachable from inside the cluster.
+	// Use "extIP/localIP" mapping format required by Pion when multiple IPs are present.
+	if !conf.PubliclyReachable {
+		localIPs, err := rtcconfig.GetLocalIPAddresses(conf.RTC.EnableLoopbackCandidate, conf.RTC.Interfaces.Includes)
+		if err != nil {
+			return nil, err
+		}
+		if len(localIPs) == 0 {
+			return nil, errors.New("no local IP addresses found")
+		}
+		hostCandidateIPs := make([]string, 0, len(localIPs))
+		for _, lip := range localIPs {
+			hostCandidateIPs = append(hostCandidateIPs, lip+"/"+lip)
+		}
+		rtcConf.SettingEngine.SetNAT1To1IPs(hostCandidateIPs, webrtc.ICECandidateTypeHost)
+		rtcConf.NAT1To1IPs = hostCandidateIPs
+		logger.Infow("Added local IPs as host candidates for ICE", "hostCandidateIPs", hostCandidateIPs)
+	}
+	// END OPENVIDU BLOCK
 
 	r := &RoomManager{
 		config:            conf,
