@@ -42,9 +42,31 @@ import (
 	"github.com/livekit/protocol/webhook"
 
 	// BEGIN OPENVIDU BLOCK
+	"sync"
+
 	"github.com/openvidu/openvidu-livekit/openvidu/openviduconfig"
 	// END OPENVIDU BLOCK
 )
+
+// BEGIN OPENVIDU BLOCK
+var (
+	globalConfig   *Config
+	globalConfigMu sync.RWMutex
+)
+
+func GetGlobalConfig() *Config {
+	globalConfigMu.RLock()
+	defer globalConfigMu.RUnlock()
+	return globalConfig
+}
+
+func setGlobalConfig(conf *Config) {
+	globalConfigMu.Lock()
+	defer globalConfigMu.Unlock()
+	globalConfig = conf
+}
+
+// END OPENVIDU BLOCK
 
 const (
 	generatedCLIFlagUsage = "generated"
@@ -57,8 +79,9 @@ var (
 
 type Config struct {
 	// BEGIN OPENVIDU BLOCK
-	OpenVidu          openviduconfig.OpenViduConfig `yaml:"openvidu,omitempty"`
-	PubliclyReachable bool                          `yaml:"-"`
+	OpenVidu             openviduconfig.OpenViduConfig `yaml:"openvidu,omitempty"`
+	PubliclyReachable    bool                          `yaml:"-"`
+	ResolvedRelayAddress string                        `yaml:"-"`
 	// END OPENVIDU BLOCK
 
 	Port          uint32   `yaml:"port,omitempty"`
@@ -503,6 +526,10 @@ func NewConfig(confString string, strictMode bool, c *cli.Command, baseFlags []c
 	if conf.Room.MaxRoomNameLength != 0 {
 		conf.Limit.MaxRoomNameLength = conf.Room.MaxRoomNameLength
 	}
+
+	// BEGIN OPENVIDU BLOCK
+	setGlobalConfig(&conf)
+	// END OPENVIDU BLOCK
 
 	return &conf, nil
 }

@@ -150,7 +150,9 @@ func InitializeServer(conf *config.Config, currentNode routing.LocalNode) (*Live
 		return nil, err
 	}
 	authHandler := getTURNAuthHandlerFunc(turnAuthHandler)
-	server, err := newInProcessTurnServer(conf, authHandler)
+	// BEGIN OPENVIDU BLOCK — pass Redis client for TURNSecurity
+	server, err := newInProcessTurnServer(conf, authHandler, universalClient)
+	// END OPENVIDU BLOCK
 	if err != nil {
 		return nil, err
 	}
@@ -329,9 +331,12 @@ func createForwardStats(conf *config.Config) *sfu.ForwardStats {
 	return sfu.NewForwardStats(conf.RTC.ForwardStats.SummaryInterval, conf.RTC.ForwardStats.ReportInterval, conf.RTC.ForwardStats.ReportWindow)
 }
 
-func newInProcessTurnServer(conf *config.Config, authHandler turn.AuthHandler) (*turn.Server, error) {
-	return NewTurnServer(conf, authHandler, false)
+// BEGIN OPENVIDU BLOCK — added rc parameter for TURNSecurity
+func newInProcessTurnServer(conf *config.Config, authHandler turn.AuthHandler, rc redis.UniversalClient) (*turn.Server, error) {
+	return NewTurnServer(conf, authHandler, false, rc)
 }
+
+// END OPENVIDU BLOCK
 
 func getNodeStatsConfig(config2 *config.Config) config.NodeStatsConfig {
 	return config2.NodeStats

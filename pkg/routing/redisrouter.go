@@ -78,10 +78,20 @@ func (r *RedisRouter) RegisterNode() error {
 	if err := r.rc.HSet(r.ctx, NodesKey, string(r.currentNode.NodeID()), data).Err(); err != nil {
 		return errors.Wrap(err, "could not register node")
 	}
+	// BEGIN OPENVIDU BLOCK
+	if err := customrouting.RegisterNodeCustom(r.ctx, r.rc, string(r.currentNode.NodeID())); err != nil {
+		return errors.Wrap(err, "could not register openvidu node")
+	}
+	// END OPENVIDU BLOCK
 	return nil
 }
 
 func (r *RedisRouter) UnregisterNode() error {
+	// BEGIN OPENVIDU BLOCK
+	if err := customrouting.UnregisterNodeCustom(context.Background(), r.rc, string(r.currentNode.NodeID())); err != nil {
+		return errors.Wrap(err, "could not unregister openvidu node")
+	}
+	// END OPENVIDU BLOCK
 	// could be called after Stop(), so we'd want to use an unrelated context
 	return r.rc.HDel(context.Background(), NodesKey, string(r.currentNode.NodeID())).Err()
 }
@@ -156,7 +166,16 @@ func (r *RedisRouter) RemoveDeadNodes(customCleanup CustomCleanup) error {
 				}
 			}
 
-			// 7. Finally clean the node from the livekit original collection
+			// 7. Unregister the node from OpenVidu map
+			// BEGIN OPENVIDU BLOCK
+			if err := customrouting.UnregisterNodeCustom(context.Background(), r.rc, n.Id); err != nil {
+				logger.Errorw("redis cleanup: failed to unregister openvidu node", err, "node", n.Id)
+			} else {
+				logger.Infow("redis cleanup: openvidu node unregistered", "node", n.Id)
+			}
+			// END OPENVIDU BLOCK
+
+			// 8. Finally clean the node from the livekit original collection
 			if err := r.rc.HDel(context.Background(), NodesKey, n.Id).Err(); err != nil {
 				logger.Errorw("redis cleanup: failed to delete node", err, "node", n.Id)
 				continue

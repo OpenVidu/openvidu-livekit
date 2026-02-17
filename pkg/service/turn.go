@@ -31,6 +31,10 @@ import (
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/protocol/logger/pionlogger"
 
+	// BEGIN OPENVIDU BLOCK
+	"github.com/redis/go-redis/v9"
+	// END OPENVIDU BLOCK
+
 	"github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/livekit-server/pkg/telemetry"
 	"github.com/livekit/livekit-server/pkg/telemetry/prometheus"
@@ -48,8 +52,19 @@ const (
 	turnMaxPort     = 30000
 )
 
-func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone bool) (*turn.Server, error) {
+// BEGIN OPENVIDU BLOCK — added rc parameter for TURNSecurity
+func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone bool, rc redis.UniversalClient) (*turn.Server, error) {
+	// END OPENVIDU BLOCK
 	turnConf := conf.TURN
+
+	// BEGIN OPENVIDU BLOCK
+	relayAddress, err := resolveTURNRelayAddress(conf)
+	if err != nil {
+		return nil, err
+	}
+	conf.ResolvedRelayAddress = relayAddress
+	// END OPENVIDU BLOCK
+
 	if !turnConf.Enabled {
 		return nil, nil
 	}
@@ -63,12 +78,6 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 		AuthHandler:   authHandler,
 		LoggerFactory: pionlogger.NewLoggerFactory(logger.GetLogger()),
 	}
-	// BEGIN OPENVIDU BLOCK
-	relayAddress, err := resolveTURNRelayAddress(conf)
-	if err != nil {
-		return nil, err
-	}
-	// END OPENVIDU BLOCK
 
 	var relayAddrGen turn.RelayAddressGenerator = &turn.RelayAddressGeneratorPortRange{
 		// BEGIN OPENVIDU BLOCK
@@ -79,9 +88,24 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 		MaxPort:    turnConf.RelayPortRangeEnd,
 		MaxRetries: allocateRetries,
 	}
-	if standalone {
-		relayAddrGen = telemetry.NewRelayAddressGenerator(relayAddrGen)
+	// BEGIN OPENVIDU BLOCK
+	relayAddrGen = newOpenViduRelayAddrGen(
+		relayAddrGen,
+		uint16(conf.RTC.ICEPortRangeStart),
+		uint16(conf.RTC.ICEPortRangeEnd),
+		standalone,
+	)
+	if conf.RTC.ICEPortRangeStart != 0 && conf.RTC.ICEPortRangeEnd != 0 {
+		logger.Infow("TURN relay peer port restriction enabled",
+			"minPort", conf.RTC.ICEPortRangeStart,
+			"maxPort", conf.RTC.ICEPortRangeEnd,
+		)
+	} else {
+		logger.Warnw("TURN relay peer port restriction: no ICE port range configured, all peer relay ports will be denied", nil)
 	}
+	permissionHandler := NewTURNSecurity(conf, rc).PermissionHandler()
+	// END OPENVIDU BLOCK
+
 	var logValues []interface{}
 
 	logValues = append(logValues, "turn.relay_range_start", turnConf.RelayPortRangeStart)
@@ -117,6 +141,7 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 			listenerConfig := turn.ListenerConfig{
 				Listener:              tlsListener,
 				RelayAddressGenerator: relayAddrGen,
+				PermissionHandler:     permissionHandler, // OPENVIDU
 			}
 			serverConfig.ListenerConfigs = append(serverConfig.ListenerConfigs, listenerConfig)
 		} else {
@@ -131,6 +156,7 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 			listenerConfig := turn.ListenerConfig{
 				Listener:              tcpListener,
 				RelayAddressGenerator: relayAddrGen,
+				PermissionHandler:     permissionHandler, // OPENVIDU
 			}
 			serverConfig.ListenerConfigs = append(serverConfig.ListenerConfigs, listenerConfig)
 		}
@@ -150,6 +176,7 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 		packetConfig := turn.PacketConnConfig{
 			PacketConn:            udpListener,
 			RelayAddressGenerator: relayAddrGen,
+			PermissionHandler:     permissionHandler, // OPENVIDU
 		}
 		serverConfig.PacketConnConfigs = append(serverConfig.PacketConnConfigs, packetConfig)
 		logValues = append(logValues, "turn.portUDP", turnConf.UDPPort)
