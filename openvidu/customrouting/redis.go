@@ -27,7 +27,7 @@ import (
 // NodeOpenVidu represents a node registration message.
 type NodeOpenVidu struct {
 	NodeId       string `json:"nodeId"`
-	NodeIP       string `json:"nodeIP"`
+	NodeIp       string `json:"nodeIp"`
 	RelayAddress string `json:"relayAddress"`
 }
 
@@ -82,7 +82,7 @@ func RegisterNodeCustom(ctx context.Context, rc redis.UniversalClient, nodeId st
 		if err != nil {
 			return fmt.Errorf("failed to unmarshal node: %w", err)
 		}
-		if ovNode.NodeIP == nodeIP && ovNode.NodeId != nodeId {
+		if ovNode.NodeIp == nodeIP && ovNode.NodeId != nodeId {
 			nodeIDsToRemove = append(nodeIDsToRemove, ovNode.NodeId)
 		}
 	}
@@ -96,7 +96,7 @@ func RegisterNodeCustom(ctx context.Context, rc redis.UniversalClient, nodeId st
 
 	ovNode := NodeOpenVidu{
 		NodeId:       nodeId,
-		NodeIP:       nodeIP,
+		NodeIp:       nodeIP,
 		RelayAddress: globalConfig.ResolvedRelayAddress,
 	}
 

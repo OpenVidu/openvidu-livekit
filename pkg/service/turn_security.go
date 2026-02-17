@@ -197,8 +197,8 @@ func (s *TURNSecurity) fetchAllowedIPs() (map[string]struct{}, error) {
 			logger.Warnw("failed to unmarshal NodeOpenVidu during TURN permission check", err, "raw", v)
 			continue
 		}
-		if node.NodeIP != "" {
-			allowed[node.NodeIP] = struct{}{}
+		if node.NodeIp != "" {
+			allowed[node.NodeIp] = struct{}{}
 		}
 		if node.RelayAddress != "" {
 			allowed[node.RelayAddress] = struct{}{}

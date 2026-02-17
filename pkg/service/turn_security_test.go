@@ -35,7 +35,7 @@ func setNode(t *testing.T, mr *miniredis.Miniredis, nodeID, nodeIP, relayAddr st
 	t.Helper()
 	node := customrouting.NodeOpenVidu{
 		NodeId:       nodeID,
-		NodeIP:       nodeIP,
+		NodeIp:       nodeIP,
 		RelayAddress: relayAddr,
 	}
 	b, err := json.Marshal(node)
