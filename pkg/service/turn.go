@@ -192,12 +192,19 @@ func resolveTURNRelayAddress(conf *config.Config) (string, error) {
 		return conf.TURN.RelayAddress, nil
 	}
 	if !conf.PubliclyReachable {
-		localIPs, err := rtcconfig.GetLocalIPAddresses(false, nil)
+		var preferredInterfaces []string
+		if conf.TURN.RelayPreferredInterface != "" {
+			preferredInterfaces = []string{conf.TURN.RelayPreferredInterface}
+		}
+		localIPs, err := rtcconfig.GetLocalIPAddresses(false, preferredInterfaces)
 		if err != nil {
 			return "", errors.Wrap(err, "could not get local IP addresses for TURN relay")
 		}
 		if len(localIPs) > 0 {
-			logger.Infow("Using first local IP as TURN relay address", "relayAddress", localIPs[0])
+			logger.Infow("Using first local IP as TURN relay address",
+				"relayAddress", localIPs[0],
+				"preferredInterface", conf.TURN.RelayPreferredInterface,
+			)
 			return localIPs[0], nil
 		}
 	}

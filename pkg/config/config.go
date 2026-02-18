@@ -245,7 +245,13 @@ type TURNConfig struct {
 	RelayPortRangeEnd   uint16 `yaml:"relay_range_end,omitempty"`
 	ExternalTLS         bool   `yaml:"external_tls,omitempty"`
 	// BEGIN OPENVIDU BLOCK
+	// RelayAddress explicitly sets the TURN relay IP address.
+	// When set, skips auto-discovery regardless of node reachability.
 	RelayAddress string `yaml:"relay_address,omitempty"`
+	// RelayPreferredInterface selects which network interface to take the relay address from
+	// when auto-discovering on nodes that are not publicly reachable.
+	// Ignored when RelayAddress is explicitly set or the node is publicly reachable.
+	RelayPreferredInterface string `yaml:"relay_preferred_interface,omitempty"`
 	// END OPENVIDU BLOCK
 }
 
