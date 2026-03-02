@@ -1,6 +1,6 @@
 services:
   redis:
-    image: redis/redis-stack:7.4.0-v7
+    image: redis/redis-stack:7.4.0-v8
     container_name: redis
     ports:
       - 6379:6379
@@ -39,7 +39,7 @@ services:
         condition: service_started
 
   minio:
-    image: docker.io/openvidu/minio:2025.10.15-debian-12-r9
+    image: docker.io/openvidu/minio:2025.10.15-debian-12-r10
     container_name: minio
     ports:
       - 9000:9000
@@ -51,7 +51,7 @@ services:
       - minio_browser=on
 
   mongo:
-    image: docker.io/openvidu/mongodb:8.0.19-r1
+    image: docker.io/openvidu/mongodb:8.0.19-r2
     container_name: mongo
     ports:
       - 27017:27017
