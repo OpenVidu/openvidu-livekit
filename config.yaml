@@ -248,6 +248,9 @@ keys:
 #   # IP address used for TURN relay. If not set and the node is not publicly reachable,
 #   # the first local IP is used. Otherwise, falls back to the RTC node IP.
 #   # relay_address: 10.0.0.1
+#   # network interface to use for TURN relay address auto-discovery on nodes that are not
+#   # publicly reachable. Ignored when relay_address is explicitly set or the node is publicly reachable.
+#   # relay_preferred_interface: eth0
 #   # set external_tls to true if using a L4 load balancer to terminate TLS. when enabled,
 #   # LiveKit expects unencrypted traffic on tls_port, and still advertise tls_port as a TURN/TLS candidate.
 #   external_tls: true
