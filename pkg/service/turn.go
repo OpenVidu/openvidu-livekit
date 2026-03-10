@@ -106,7 +106,7 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 	permissionHandler := NewTURNSecurity(conf, rc).PermissionHandler()
 	// END OPENVIDU BLOCK
 
-	var logValues []interface{}
+	var logValues []any
 
 	logValues = append(logValues, "turn.relay_range_start", turnConf.RelayPortRangeStart)
 	logValues = append(logValues, "turn.relay_range_end", turnConf.RelayPortRangeEnd)

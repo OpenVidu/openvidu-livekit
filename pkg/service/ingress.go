@@ -85,7 +85,7 @@ func NewIngressService(
 }
 
 func (s *IngressService) CreateIngress(ctx context.Context, req *livekit.CreateIngressRequest) (*livekit.IngressInfo, error) {
-	fields := []interface{}{
+	fields := []any{
 		"inputType", req.InputType,
 		"name", req.Name,
 	}
@@ -223,7 +223,7 @@ func (s *IngressService) LaunchPullIngress(ctx context.Context, info *livekit.In
 }
 
 func updateEnableTranscoding(info *livekit.IngressInfo) {
-	// Set BypassTranscoding as well for backward compatiblity
+	// Set BypassTranscoding as well for backward compatibility
 	if info.EnableTranscoding != nil {
 		info.BypassTranscoding = !*info.EnableTranscoding
 		return
@@ -281,7 +281,7 @@ func updateInfoUsingRequest(req *livekit.UpdateIngressRequest, info *livekit.Ing
 }
 
 func (s *IngressService) UpdateIngress(ctx context.Context, req *livekit.UpdateIngressRequest) (*livekit.IngressInfo, error) {
-	fields := []interface{}{
+	fields := []any{
 		"ingress", req.IngressId,
 		"name", req.Name,
 	}

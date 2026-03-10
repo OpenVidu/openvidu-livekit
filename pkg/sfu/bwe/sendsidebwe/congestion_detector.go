@@ -609,10 +609,7 @@ func (c *congestionDetector) getBWEListener() bwe.BWEListener {
 
 func (c *congestionDetector) HandleTWCCFeedback(report *rtcp.TransportLayerCC) {
 	c.lock.Lock()
-	recvRefTime, isOutOfOrder := c.twccFeedback.ProcessReport(report, mono.Now())
-	if isOutOfOrder {
-		c.params.Logger.Infow("send side bwe: received out-of-order feedback report")
-	}
+	recvRefTime, _ := c.twccFeedback.ProcessReport(report, mono.Now())
 
 	if len(c.packetGroups) == 0 {
 		c.packetGroups = append(
@@ -674,7 +671,7 @@ func (c *congestionDetector) HandleTWCCFeedback(report *rtcp.TransportLayerCC) {
 		}
 	}
 
-	// 1. go through the TWCC feedback report and record recive time as reported by remote
+	// 1. go through the TWCC feedback report and record receive time as reported by remote
 	// 2. process acknowledged packet and group them
 	//
 	// losses are not recorded if a feedback report is completely lost.
@@ -1149,7 +1146,7 @@ func (c *congestionDetector) updateCongestionState(state bwe.CongestionState) (b
 	// when in congested state, monitor changes in captured traffic ratio (CTR)
 	// to ensure allocations are in line with latest estimates, it is possible that
 	// the estimate is incorrect when congestion starts and the allocation may be
-	// sub-optimal and not enough to reduce/relieve congestion, by monitoing CTR
+	// sub-optimal and not enough to reduce/relieve congestion, by monitoring CTR
 	// on a continuous basis allocations can be adjusted in the direction of
 	// reducing/relieving congestion
 	if state == bwe.CongestionStateCongested && fromState != bwe.CongestionStateCongested {

@@ -16,6 +16,9 @@ package service
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha1"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"sync"
@@ -27,9 +30,6 @@ import (
 	"github.com/pkg/errors"
 	"golang.org/x/exp/maps"
 
-	"github.com/livekit/livekit-server/pkg/agent"
-	"github.com/livekit/livekit-server/pkg/sfu"
-	sutils "github.com/livekit/livekit-server/pkg/utils"
 	"github.com/livekit/mediatransportutil/pkg/rtcconfig"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
@@ -41,6 +41,10 @@ import (
 	"github.com/livekit/protocol/utils/must"
 	"github.com/livekit/psrpc"
 	"github.com/livekit/psrpc/pkg/middleware"
+
+	"github.com/livekit/livekit-server/pkg/agent"
+	"github.com/livekit/livekit-server/pkg/sfu"
+	sutils "github.com/livekit/livekit-server/pkg/utils"
 
 	"github.com/livekit/livekit-server/pkg/clientconfiguration"
 	"github.com/livekit/livekit-server/pkg/config"
@@ -514,7 +518,7 @@ func (r *RoomManager) StartSession(
 		LimitConfig:             r.config.Limit,
 		ProtocolVersion:         pv,
 		SessionStartTime:        sessionStartTime,
-		Telemetry:               r.telemetry,
+		TelemetryListener:       room.ParticipantTelemetryListener(),
 		Trailer:                 room.Trailer(),
 		PLIThrottleConfig:       r.config.RTC.PLIThrottle,
 		CongestionControlConfig: r.config.RTC.CongestionControl,
@@ -535,24 +539,25 @@ func (r *RoomManager) StartSession(
 			room:                     room,
 			codecRegressionThreshold: r.config.Video.CodecRegressionThreshold,
 		},
-		ReconnectOnPublicationError:   reconnectOnPublicationError,
-		ReconnectOnSubscriptionError:  reconnectOnSubscriptionError,
-		ReconnectOnDataChannelError:   reconnectOnDataChannelError,
-		VersionGenerator:              r.versionGenerator,
-		SubscriberAllowPause:          subscriberAllowPause,
-		SubscriptionLimitAudio:        r.config.Limit.SubscriptionLimitAudio,
-		SubscriptionLimitVideo:        r.config.Limit.SubscriptionLimitVideo,
-		PlayoutDelay:                  roomInternal.GetPlayoutDelay(),
-		SyncStreams:                   roomInternal.GetSyncStreams(),
-		ForwardStats:                  r.forwardStats,
-		MetricConfig:                  r.config.Metric,
-		UseOneShotSignallingMode:      useOneShotSignallingMode,
-		DataChannelMaxBufferedAmount:  r.config.RTC.DataChannelMaxBufferedAmount,
-		DatachannelSlowThreshold:      r.config.RTC.DatachannelSlowThreshold,
-		DatachannelLossyTargetLatency: r.config.RTC.DatachannelLossyTargetLatency,
-		FireOnTrackBySdp:              true,
-		UseSinglePeerConnection:       pi.UseSinglePeerConnection,
-		EnableDataTracks:              r.config.EnableDataTracks,
+		ReconnectOnPublicationError:     reconnectOnPublicationError,
+		ReconnectOnSubscriptionError:    reconnectOnSubscriptionError,
+		ReconnectOnDataChannelError:     reconnectOnDataChannelError,
+		VersionGenerator:                r.versionGenerator,
+		SubscriberAllowPause:            subscriberAllowPause,
+		SubscriptionLimitAudio:          r.config.Limit.SubscriptionLimitAudio,
+		SubscriptionLimitVideo:          r.config.Limit.SubscriptionLimitVideo,
+		PlayoutDelay:                    roomInternal.GetPlayoutDelay(),
+		SyncStreams:                     roomInternal.GetSyncStreams(),
+		ForwardStats:                    r.forwardStats,
+		MetricConfig:                    r.config.Metric,
+		UseOneShotSignallingMode:        useOneShotSignallingMode,
+		DataChannelMaxBufferedAmount:    r.config.RTC.DataChannelMaxBufferedAmount,
+		DatachannelSlowThreshold:        r.config.RTC.DatachannelSlowThreshold,
+		DatachannelLossyTargetLatency:   r.config.RTC.DatachannelLossyTargetLatency,
+		FireOnTrackBySdp:                true,
+		UseSinglePeerConnection:         pi.UseSinglePeerConnection,
+		EnableDataTracks:                r.config.EnableDataTracks,
+		EnableRTPStreamRestartDetection: r.config.RTC.EnableRTPStreamRestartDetection,
 	})
 	if err != nil {
 		return err
@@ -562,6 +567,9 @@ func (r *RoomManager) StartSession(
 	// join room
 	opts := rtc.ParticipantOptions{
 		AutoSubscribe: pi.AutoSubscribe,
+	}
+	if pi.AutoSubscribeDataTrack != nil {
+		opts.AutoSubscribeDataTrack = *pi.AutoSubscribeDataTrack
 	}
 	iceServers := r.iceServersForParticipant(apiKey, participant, iceConfig.PreferenceSubscriber == livekit.ICECandidateType_ICT_TLS)
 	if err = room.Join(participant, requestSource, &opts, iceServers); err != nil {
@@ -1045,7 +1053,6 @@ func (r *RoomManager) iceServersForParticipant(apiKey string, participant types.
 				participant.GetLogger().Warnw("could not create turn password", err)
 				hasSTUN = false
 			} else {
-				logger.Infow("created TURN password", "username", username, "password", password)
 				iceServers = append(iceServers, &livekit.ICEServer{
 					Urls:       urls,
 					Username:   username,
@@ -1066,12 +1073,35 @@ func (r *RoomManager) iceServersForParticipant(apiKey string, participant types.
 			case "udp":
 				transport = "udp"
 			}
+
+			var username, credential string
+			if s.Secret != "" {
+				// Generate dynamic credentials using TURN static auth secrets
+				ttl := s.TTL
+				if ttl == 0 {
+					ttl = 14400 // Default 4 hours
+				}
+
+				expiry := time.Now().Add(time.Duration(ttl) * time.Second).Unix()
+				participantID := string(participant.ID())
+				username = fmt.Sprintf("%d:%s", expiry, participantID)
+
+				// HMAC-SHA1 signature
+				h := hmac.New(sha1.New, []byte(s.Secret))
+				h.Write([]byte(username))
+				credential = base64.StdEncoding.EncodeToString(h.Sum(nil))
+			} else {
+				// Use static credentials
+				username = s.Username
+				credential = s.Credential
+			}
+
 			is := &livekit.ICEServer{
 				Urls: []string{
 					fmt.Sprintf("%s:%s:%d?transport=%s", scheme, s.Host, s.Port, transport),
 				},
-				Username:   s.Username,
-				Credential: s.Credential,
+				Username:   username,
+				Credential: credential,
 			}
 			iceServers = append(iceServers, is)
 		}

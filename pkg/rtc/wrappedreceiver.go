@@ -23,12 +23,13 @@ import (
 	"golang.org/x/exp/maps"
 	"golang.org/x/exp/slices"
 
+	protoCodecs "github.com/livekit/protocol/codecs"
+	"github.com/livekit/protocol/codecs/mime"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
 
 	"github.com/livekit/livekit-server/pkg/sfu"
 	"github.com/livekit/livekit-server/pkg/sfu/buffer"
-	"github.com/livekit/livekit-server/pkg/sfu/mime"
 )
 
 // wrapper around WebRTC receiver, overriding its ID
@@ -64,10 +65,10 @@ func NewWrappedReceiver(params WrappedReceiverParams) *WrappedReceiver {
 		normalizedMimeType := mime.NormalizeMimeType(codecs[0].MimeType)
 		if normalizedMimeType == mime.MimeTypeRED {
 			// if upstream is opus/red, then add opus to match clients that don't support red
-			codecs = append(codecs, OpusCodecParameters)
+			codecs = append(codecs, protoCodecs.OpusCodecParameters)
 		} else if !params.DisableRed && normalizedMimeType == mime.MimeTypeOpus {
 			// if upstream is opus only and red enabled, add red to match clients that support red
-			codecs = append(codecs, RedCodecParameters)
+			codecs = append(codecs, protoCodecs.RedCodecParameters)
 			// prefer red codec
 			codecs[0], codecs[1] = codecs[1], codecs[0]
 		}
@@ -93,7 +94,7 @@ func (r *WrappedReceiver) StreamID() string {
 // isAvailable: returns true if given codec is a potential codec from publisher or if an existing published codec can be translated
 // needsPublish: indicates if the codec is needed from publisher, some combinations can be achieved via codec translation internally,
 //
-//	example: unecrypted opus -> RED translation and vice-versa can be done without the need for publisher to send the other codec.
+//	example: unencrypted opus -> RED translation and vice-versa can be done without the need for publisher to send the other codec.
 func (r *WrappedReceiver) DetermineReceiver(codec webrtc.RTPCodecCapability) (isAvailable bool, needsPublish bool) {
 	r.lock.Lock()
 
@@ -396,7 +397,7 @@ func (d *DummyReceiver) GetDownTracks() []sfu.TrackSender {
 	return maps.Values(d.downTracks)
 }
 
-func (d *DummyReceiver) DebugInfo() map[string]interface{} {
+func (d *DummyReceiver) DebugInfo() map[string]any {
 	if receiver := d.getReceiver(); receiver != nil {
 		return receiver.DebugInfo()
 	}
@@ -499,6 +500,12 @@ func (d *DummyReceiver) VideoSizes() []buffer.VideoSize {
 	}
 
 	return nil
+}
+
+func (d *DummyReceiver) Restart(reason string) {
+	if receiver := d.getReceiver(); receiver != nil {
+		receiver.Restart(reason)
+	}
 }
 
 func (d *DummyReceiver) getReceiver() sfu.TrackReceiver {
