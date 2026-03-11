@@ -32,16 +32,14 @@ import (
 	"github.com/livekit/protocol/logger/pionlogger"
 
 	// BEGIN OPENVIDU BLOCK
+	"github.com/livekit/mediatransportutil/pkg/rtcconfig"
 	"github.com/redis/go-redis/v9"
+
 	// END OPENVIDU BLOCK
 
 	"github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/livekit-server/pkg/telemetry"
 	"github.com/livekit/livekit-server/pkg/telemetry/prometheus"
-
-	// BEGIN OPENVIDU BLOCK
-	"github.com/livekit/mediatransportutil/pkg/rtcconfig"
-	// END OPENVIDU BLOCK
 )
 
 const (
