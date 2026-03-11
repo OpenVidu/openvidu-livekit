@@ -39,7 +39,7 @@ services:
         condition: service_started
 
   minio:
-    image: docker.io/openvidu/minio:2025.10.15-debian-12-r9
+    image: docker.io/openvidu/minio:RELEASE.2026-03-04T16-04-53Z
     container_name: minio
     ports:
       - 9000:9000
