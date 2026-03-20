@@ -19,7 +19,8 @@ import (
 )
 
 type OpenViduConfig struct {
-	Analytics AnalyticsConfig `yaml:"analytics,omitempty"`
+	Analytics              AnalyticsConfig `yaml:"analytics,omitempty"`
+	UseGlobalCpuMonitoring bool            `yaml:"use_global_cpu_monitoring,omitempty"`
 }
 
 type AnalyticsConfig struct {

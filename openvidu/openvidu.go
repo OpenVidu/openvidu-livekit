@@ -15,15 +15,23 @@
 package openvidu
 
 import (
+	"runtime"
+
 	"github.com/livekit/livekit-server/pkg/config"
+	"github.com/livekit/livekit-server/pkg/service"
+	"github.com/livekit/livekit-server/pkg/telemetry/prometheus"
 	"github.com/livekit/protocol/logger"
 
-	"github.com/livekit/livekit-server/pkg/service"
+	"github.com/OpenVidu/openvidu-golang-utils/monitor"
 	"github.com/openvidu/openvidu-livekit/openvidu/analytics"
 	"github.com/openvidu/openvidu-livekit/openvidu/livekithelper"
 )
 
 func Start(conf *config.Config, server *service.LivekitServer) {
+	if conf.OpenVidu.UseGlobalCpuMonitoring {
+		startGlobalCPUMonitor()
+	}
+
 	if conf.OpenVidu.Analytics.Enabled {
 		// Start livekit helper
 		livekithelper.Init(server)
@@ -35,4 +43,14 @@ func Start(conf *config.Config, server *service.LivekitServer) {
 		}
 		go analytics.Start()
 	}
+}
+
+func startGlobalCPUMonitor() {
+	m := monitor.NewMonitor(monitor.WithLogger(logger.GetLogger()))
+	m.Start()
+	numCPU := float64(runtime.NumCPU())
+	prometheus.SetHostCPULoadFunc(func() float32 {
+		return float32(1 - m.GetHostCpuIdle()/numCPU)
+	})
+	logger.Infow("global CPU monitoring enabled. Using host-wide CPU load")
 }

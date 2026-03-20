@@ -22,6 +22,7 @@ import (
 	"go.uber.org/atomic"
 
 	"github.com/livekit/protocol/livekit"
+	"github.com/livekit/protocol/logger"
 	"github.com/livekit/protocol/rpc"
 	"github.com/livekit/protocol/utils/hwstats"
 	"github.com/livekit/protocol/webhook"
@@ -44,6 +45,10 @@ var (
 
 	cpuStats    *hwstats.CPUStats
 	memoryStats *hwstats.MemoryStats
+
+	// BEGIN OPENVIDU BLOCK
+	hostCPULoadFunc func() float32
+	// END OPENVIDU BLOCK
 )
 
 func Init(nodeID string, nodeType livekit.NodeType) error {
@@ -121,6 +126,16 @@ func Init(nodeID string, nodeType livekit.NodeType) error {
 	return nil
 }
 
+// BEGIN OPENVIDU BLOCK
+// SetHostCPULoadFunc sets a function that returns the host-wide CPU load as a value
+// in [0, 1]. When set, GetNodeStats will use this instead of the cgroup-aware hwstats
+// measurement, allowing node selection to account for the actual host CPU load.
+func SetHostCPULoadFunc(fn func() float32) {
+	hostCPULoadFunc = fn
+}
+
+// END OPENVIDU BLOCK
+
 func GetNodeStats(nodeStartedAt int64, prevStats []*livekit.NodeStats, rateIntervals []time.Duration) (*livekit.NodeStats, error) {
 	loadAvg, err := getLoadAvg()
 	if err != nil {
@@ -171,6 +186,13 @@ func GetNodeStats(nodeStartedAt int64, prevStats []*livekit.NodeStats, rateInter
 		SysPacketsOut:              sysPackets,
 		SysPacketsDropped:          sysDroppedPackets,
 	}
+
+	// BEGIN OPENVIDU BLOCK
+	if hostCPULoadFunc != nil {
+		stats.CpuLoad = hostCPULoadFunc()
+		logger.Debugw("using global host CPU load", "cpu_load", stats.CpuLoad)
+	}
+	// END OPENVIDU BLOCK
 
 	for _, rateInterval := range rateIntervals {
 		for idx := len(prevStats) - 1; idx >= 0; idx-- {

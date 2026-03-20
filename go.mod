@@ -1,14 +1,13 @@
 module github.com/openvidu/openvidu-livekit
 
-go 1.24.0
-
-toolchain go1.24.6
+go 1.25.0
 
 require github.com/livekit/livekit-server v0.0.0-00010101000000-000000000000
 
 replace github.com/livekit/livekit-server => ./
 
 require (
+	github.com/OpenVidu/openvidu-golang-utils v1.0.0
 	github.com/alicebob/miniredis/v2 v2.37.0
 	github.com/bep/debounce v1.2.1
 	github.com/bsm/redislock v0.9.4
@@ -31,7 +30,7 @@ require (
 	github.com/livekit/mediatransportutil v0.0.0-20260113174415-2e8ba344fca3
 	github.com/livekit/protocol v1.44.1-0.20260211042324-3688e156dc7e
 	github.com/livekit/psrpc v0.7.1
-	github.com/mackerelio/go-osstat v0.2.6
+	github.com/mackerelio/go-osstat v0.2.7
 	github.com/magefile/mage v1.15.0
 	github.com/maxbrunsfeld/counterfeiter/v6 v6.12.0
 	github.com/mitchellh/go-homedir v1.1.0
@@ -162,7 +161,7 @@ require (
 	go.uber.org/zap/exp v0.3.0 // indirect
 	golang.org/x/crypto v0.48.0 // indirect
 	golang.org/x/net v0.50.0 // indirect
-	golang.org/x/sys v0.41.0 // indirect
+	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
 	golang.org/x/tools v0.41.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260203192932-546029d2fa20 // indirect
