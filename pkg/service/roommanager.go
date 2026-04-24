@@ -1047,7 +1047,9 @@ func (r *RoomManager) iceServersForParticipant(apiKey string, participant types.
 			urls = append(urls, fmt.Sprintf("turns:%s:443?transport=tcp", r.config.TURN.Domain))
 		}
 		if len(urls) > 0 {
-			username := r.turnAuthHandler.CreateUsername(apiKey, participant.ID())
+			// BEGIN OPENVIDU BLOCK
+			username := r.turnAuthHandler.CreateUsername(apiKey, participant.ID(), r.config.TURN.CredentialTTL)
+			// END OPENVIDU BLOCK
 			password, err := r.turnAuthHandler.CreatePassword(apiKey, participant.ID())
 			if err != nil {
 				participant.GetLogger().Warnw("could not create turn password", err)

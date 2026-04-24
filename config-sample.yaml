@@ -277,6 +277,12 @@ keys:
 #   # optional (set only if not using external TLS termination)
 #   # cert_file: /path/to/cert.pem
 #   # key_file: /path/to/key.pem
+#   # lifetime of issued TURN credentials. Expiry is embedded in the username so
+#   # credentials stop authenticating after this window. Default 24h.
+#   # Set to 0 to disable expiry (legacy behavior: credentials never expire).
+#   # Sessions longer than credential_ttl cannot perform new TURN allocations
+#   # until the client rejoins.
+#   credential_ttl: 24h
 
 # ingress server
 # ingress:

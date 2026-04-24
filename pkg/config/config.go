@@ -265,6 +265,12 @@ type TURNConfig struct {
 	// when auto-discovering on nodes that are not publicly reachable.
 	// Ignored when RelayAddress is explicitly set or the node is publicly reachable.
 	RelayPreferredInterface string `yaml:"relay_preferred_interface,omitempty"`
+	// CredentialTTL bounds the lifetime of issued TURN credentials. Expiry is embedded
+	// in the username so leaked creds stop authenticating after this window.
+	// Zero or negative disables expiry (legacy behavior: credentials never expire).
+	// Defaults to 24h. Sessions longer than the TTL cannot perform new TURN allocations
+	// until the client rejoins — ResumeParticipant naturally re-issues fresh credentials.
+	CredentialTTL time.Duration `yaml:"credential_ttl,omitempty"`
 	// END OPENVIDU BLOCK
 }
 
@@ -456,6 +462,9 @@ var DefaultConfig = Config{
 	},
 	TURN: TURNConfig{
 		Enabled: false,
+		// BEGIN OPENVIDU BLOCK
+		CredentialTTL: 24 * time.Hour,
+		// END OPENVIDU BLOCK
 	},
 	NodeSelector: NodeSelectorConfig{
 		Kind:         "any",

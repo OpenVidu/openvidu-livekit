@@ -21,6 +21,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jxskiss/base62"
 	"github.com/pion/turn/v4"
@@ -48,6 +49,16 @@ const (
 	allocateRetries = 50
 	turnMinPort     = 1024
 	turnMaxPort     = 30000
+
+	// BEGIN OPENVIDU BLOCK
+	// turnExpirySkew absorbs clock drift between the node that issued the credential
+	// (during JoinResponse) and the node that authenticates the TURN allocation.
+	// Also covers brief NTP outages and VM pause/resume gaps.
+	// 5 minutes sits inside the "usually no more than a few minutes" guidance from
+	// RFC 7519 / OpenID Connect Core, and matches the long-standing MIT Kerberos
+	// clockskew default (300s). Negligible fraction of the 24h default TTL.
+	turnExpirySkew = 5 * time.Minute
+	// END OPENVIDU BLOCK
 )
 
 // BEGIN OPENVIDU BLOCK — added rc parameter for TURNSecurity
@@ -217,30 +228,61 @@ func getTURNAuthHandlerFunc(handler *TURNAuthHandler) turn.AuthHandler {
 
 type TURNAuthHandler struct {
 	keyProvider auth.KeyProvider
+	// BEGIN OPENVIDU BLOCK
+	// now is injectable so tests can drive the expiry clock without time.Sleep.
+	now func() time.Time
+	// END OPENVIDU BLOCK
 }
 
 func NewTURNAuthHandler(keyProvider auth.KeyProvider) *TURNAuthHandler {
 	return &TURNAuthHandler{
 		keyProvider: keyProvider,
+		// BEGIN OPENVIDU BLOCK
+		now: time.Now,
+		// END OPENVIDU BLOCK
 	}
 }
 
-func (h *TURNAuthHandler) CreateUsername(apiKey string, pID livekit.ParticipantID) string {
-	return base62.EncodeToString([]byte(fmt.Sprintf("%s|%s", apiKey, pID)))
+// BEGIN OPENVIDU BLOCK — CreateUsername/ParseUsername gained an optional expiry.
+// Username plaintext format (before base62 encoding):
+//
+//	apiKey|pID            (legacy, ttl <= 0 → no expiry)
+//	apiKey|pID|<unixSec>  (with expiry)
+//
+// Expiry is carried in the username so HandleAuth can reject expired creds before
+// doing any HMAC work, and because the username is covered by the TURN long-term
+// auth key — an attacker cannot strip it without invalidating the key.
+func (h *TURNAuthHandler) CreateUsername(apiKey string, pID livekit.ParticipantID, ttl time.Duration) string {
+	if ttl <= 0 {
+		return base62.EncodeToString([]byte(fmt.Sprintf("%s|%s", apiKey, pID)))
+	}
+	expiry := h.now().Add(ttl).Unix()
+	return base62.EncodeToString([]byte(fmt.Sprintf("%s|%s|%d", apiKey, pID, expiry)))
 }
 
-func (h *TURNAuthHandler) ParseUsername(username string) (apiKey string, pID livekit.ParticipantID, err error) {
+// ParseUsername decodes the username and returns the embedded fields.
+// A zero-value expiry means the credential has no expiry (legacy 2-part form).
+func (h *TURNAuthHandler) ParseUsername(username string) (apiKey string, pID livekit.ParticipantID, expiry time.Time, err error) {
 	decoded, err := base62.DecodeString(username)
 	if err != nil {
-		return "", "", err
+		return "", "", time.Time{}, err
 	}
 	parts := strings.Split(string(decoded), "|")
-	if len(parts) != 2 {
-		return "", "", errors.New("invalid username")
+	switch len(parts) {
+	case 2:
+		return parts[0], livekit.ParticipantID(parts[1]), time.Time{}, nil
+	case 3:
+		sec, err := strconv.ParseInt(parts[2], 10, 64)
+		if err != nil {
+			return "", "", time.Time{}, errors.Wrap(err, "invalid username expiry")
+		}
+		return parts[0], livekit.ParticipantID(parts[1]), time.Unix(sec, 0), nil
+	default:
+		return "", "", time.Time{}, errors.New("invalid username")
 	}
-
-	return parts[0], livekit.ParticipantID(parts[1]), nil
 }
+
+// END OPENVIDU BLOCK
 
 func (h *TURNAuthHandler) CreatePassword(apiKey string, pID livekit.ParticipantID) (string, error) {
 	secret := h.keyProvider.GetSecret(apiKey)
@@ -253,18 +295,23 @@ func (h *TURNAuthHandler) CreatePassword(apiKey string, pID livekit.ParticipantI
 }
 
 func (h *TURNAuthHandler) HandleAuth(username, realm string, srcAddr net.Addr) (key []byte, ok bool) {
-	decoded, err := base62.DecodeString(username)
+	// BEGIN OPENVIDU BLOCK — parse once via ParseUsername and validate expiry.
+	apiKey, pID, expiry, err := h.ParseUsername(username)
 	if err != nil {
 		return nil, false
 	}
-	parts := strings.Split(string(decoded), "|")
-	if len(parts) != 2 {
-		return nil, false
+	if !expiry.IsZero() {
+		now := h.now()
+		if now.After(expiry.Add(turnExpirySkew)) {
+			logger.Debugw("turn credential expired", "pID", pID, "expiredAgo", now.Sub(expiry))
+			return nil, false
+		}
 	}
-	password, err := h.CreatePassword(parts[0], livekit.ParticipantID(parts[1]))
+	password, err := h.CreatePassword(apiKey, pID)
 	if err != nil {
 		logger.Warnw("could not create TURN password", err, "username", username)
 		return nil, false
 	}
 	return turn.GenerateAuthKey(username, LivekitRealm, password), true
+	// END OPENVIDU BLOCK
 }
