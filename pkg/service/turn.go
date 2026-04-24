@@ -270,12 +270,30 @@ func NewTURNAuthHandler(keyProvider auth.KeyProvider) *TURNAuthHandler {
 // re-encoded into a different username form without invalidating the password.
 // ttl<=0 emits the legacy no-expiry forms (opt-out via config).
 func (h *TURNAuthHandler) CreateCredentials(apiKey string, pID livekit.ParticipantID, ttl time.Duration) (username string, password string, err error) {
+	if err := validateCredentialInputs(apiKey, pID); err != nil {
+		return "", "", err
+	}
 	expiry := h.expiryFor(ttl)
 	password, err = h.CreatePassword(apiKey, pID, expiry)
 	if err != nil {
 		return "", "", err
 	}
 	return h.CreateUsername(apiKey, pID, expiry), password, nil
+}
+
+// validateCredentialInputs rejects apiKey/pID values containing the '|' field
+// separator or NUL bytes. Both would produce a username that ParseUsername
+// cannot round-trip, causing every allocation to fail authentication silently.
+// apiKey is operator-configured and pID is server-generated, so a non-empty
+// result here indicates misconfiguration or a bug — fail loud, not silent.
+func validateCredentialInputs(apiKey string, pID livekit.ParticipantID) error {
+	if strings.ContainsAny(apiKey, "|\x00") {
+		return errors.Wrap(ErrInvalidCredentialInput, "apiKey")
+	}
+	if strings.ContainsAny(string(pID), "|\x00") {
+		return errors.Wrap(ErrInvalidCredentialInput, "pID")
+	}
+	return nil
 }
 
 func (h *TURNAuthHandler) expiryFor(ttl time.Duration) time.Time {
