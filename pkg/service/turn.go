@@ -243,21 +243,55 @@ func NewTURNAuthHandler(keyProvider auth.KeyProvider) *TURNAuthHandler {
 	}
 }
 
-// BEGIN OPENVIDU BLOCK — CreateUsername/ParseUsername gained an optional expiry.
-// Username plaintext format (before base62 encoding):
+// BEGIN OPENVIDU BLOCK — Credential format with expiry binding.
 //
-//	apiKey|pID            (legacy, ttl <= 0 → no expiry)
-//	apiKey|pID|<unixSec>  (with expiry)
+// Username plaintext (before base62 encoding):
 //
-// Expiry is carried in the username so HandleAuth can reject expired creds before
-// doing any HMAC work, and because the username is covered by the TURN long-term
-// auth key — an attacker cannot strip it without invalidating the key.
-func (h *TURNAuthHandler) CreateUsername(apiKey string, pID livekit.ParticipantID, ttl time.Duration) string {
+//	apiKey|pID               (legacy, no expiry)
+//	apiKey|pID|<unixSeconds> (with expiry)
+//
+// Password plaintext (before SHA256+base62):
+//
+//	secret|pID               (legacy, no expiry)
+//	secret|pID|<unixSeconds> (with expiry)
+//
+// The expiry is bound into BOTH the username and the password hash. This
+// matters for the TTL to be enforceable: the TURN long-term-credential auth
+// key is MD5(username:realm:password), so without expiry binding, an attacker
+// who leaked a 3-part credential could simply re-encode a 2-part username
+// (stripping the expiry) and the server-side password would be unchanged —
+// the auth key would match and MESSAGE-INTEGRITY would pass. Binding the
+// expiry into the password makes the stripped-username form compute a
+// different password server-side, so the attacker's captured password no
+// longer produces a matching key.
+
+// CreateCredentials generates a matched (username, password) pair. The expiry
+// is computed once from ttl and bound into both sides, so the pair cannot be
+// re-encoded into a different username form without invalidating the password.
+// ttl<=0 emits the legacy no-expiry forms (opt-out via config).
+func (h *TURNAuthHandler) CreateCredentials(apiKey string, pID livekit.ParticipantID, ttl time.Duration) (username string, password string, err error) {
+	expiry := h.expiryFor(ttl)
+	password, err = h.CreatePassword(apiKey, pID, expiry)
+	if err != nil {
+		return "", "", err
+	}
+	return h.CreateUsername(apiKey, pID, expiry), password, nil
+}
+
+func (h *TURNAuthHandler) expiryFor(ttl time.Duration) time.Time {
 	if ttl <= 0 {
+		return time.Time{}
+	}
+	return h.now().Add(ttl)
+}
+
+// CreateUsername encodes an apiKey/pID pair into an opaque TURN username.
+// Zero-value expiry emits the legacy 2-part form.
+func (h *TURNAuthHandler) CreateUsername(apiKey string, pID livekit.ParticipantID, expiry time.Time) string {
+	if expiry.IsZero() {
 		return base62.EncodeToString([]byte(fmt.Sprintf("%s|%s", apiKey, pID)))
 	}
-	expiry := h.now().Add(ttl).Unix()
-	return base62.EncodeToString([]byte(fmt.Sprintf("%s|%s|%d", apiKey, pID, expiry)))
+	return base62.EncodeToString([]byte(fmt.Sprintf("%s|%s|%d", apiKey, pID, expiry.Unix())))
 }
 
 // ParseUsername decodes the username and returns the embedded fields.
@@ -284,18 +318,28 @@ func (h *TURNAuthHandler) ParseUsername(username string) (apiKey string, pID liv
 
 // END OPENVIDU BLOCK
 
-func (h *TURNAuthHandler) CreatePassword(apiKey string, pID livekit.ParticipantID) (string, error) {
+// CreatePassword derives the TURN long-term credential password.
+// Zero-value expiry emits the legacy hash for backward compatibility; a non-zero
+// expiry binds into the hash so a stripped-username attack (3-part → 2-part)
+// produces a mismatched password server-side. See the BLOCK comment above.
+func (h *TURNAuthHandler) CreatePassword(apiKey string, pID livekit.ParticipantID, expiry time.Time) (string, error) {
 	secret := h.keyProvider.GetSecret(apiKey)
 	if secret == "" {
 		return "", ErrInvalidAPIKey
 	}
-	keyInput := fmt.Sprintf("%s|%s", secret, pID)
-	sum := sha256.Sum256([]byte(keyInput))
+	var input string
+	if expiry.IsZero() {
+		input = fmt.Sprintf("%s|%s", secret, pID)
+	} else {
+		input = fmt.Sprintf("%s|%s|%d", secret, pID, expiry.Unix())
+	}
+	sum := sha256.Sum256([]byte(input))
 	return base62.EncodeToString(sum[:]), nil
 }
 
 func (h *TURNAuthHandler) HandleAuth(username, realm string, srcAddr net.Addr) (key []byte, ok bool) {
-	// BEGIN OPENVIDU BLOCK — parse once via ParseUsername and validate expiry.
+	// BEGIN OPENVIDU BLOCK — parse once via ParseUsername, validate expiry,
+	// and derive the password with the SAME expiry that's in the username.
 	apiKey, pID, expiry, err := h.ParseUsername(username)
 	if err != nil {
 		return nil, false
@@ -307,7 +351,7 @@ func (h *TURNAuthHandler) HandleAuth(username, realm string, srcAddr net.Addr) (
 			return nil, false
 		}
 	}
-	password, err := h.CreatePassword(apiKey, pID)
+	password, err := h.CreatePassword(apiKey, pID, expiry)
 	if err != nil {
 		logger.Warnw("could not create TURN password", err, "username", username)
 		return nil, false
