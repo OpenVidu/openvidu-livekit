@@ -1290,26 +1290,25 @@ func TestTURNAuthHandler_CreateCredentials_UnknownAPIKey(t *testing.T) {
 // ===========================================================================
 // TURNAuthHandler — security tests.
 //
-// Each test models a concrete attacker capability (captured credential,
+// Each test exercises a concrete threat scenario (captured credential,
 // wire-layer tampering, parser edge cases) against the long-term credential
 // scheme, and asserts that authentication fails end-to-end. Failures here
-// indicate an exploitable bypass.
+// indicate an authentication bypass.
 // ===========================================================================
 
-// tamperedAuthRejected returns true when an attacker holding a captured
-// (username, password) pair cannot authenticate by replaying the password
-// with a tampered username. Either:
+// tamperedAuthRejected returns true when a captured (username, password)
+// pair cannot be replayed against the server with a tampered username.
+// Either:
 //   - HandleAuth rejects the tampered username outright, OR
 //   - HandleAuth accepts it at the parse layer but the server-derived key
-//     differs from the attacker's replayed key (MESSAGE-INTEGRITY fails in
-//     pion/turn).
+//     differs from the replayed key (MESSAGE-INTEGRITY fails in pion/turn).
 func tamperedAuthRejected(h *TURNAuthHandler, tamperedUsername string, capturedPassword string) bool {
 	serverKey, ok := h.HandleAuth(tamperedUsername, LivekitRealm, nil)
 	if !ok {
 		return true // rejected at parse / expiry / key-lookup layer
 	}
-	attackerKey := turn.GenerateAuthKey(tamperedUsername, LivekitRealm, capturedPassword)
-	return string(attackerKey) != string(serverKey)
+	replayedKey := turn.GenerateAuthKey(tamperedUsername, LivekitRealm, capturedPassword)
+	return string(replayedKey) != string(serverKey)
 }
 
 func encodeUsername(parts ...string) string {
@@ -1328,9 +1327,9 @@ func encodeUsername(parts ...string) string {
 // ---------------------------------------------------------------------------
 
 // Verifies that the expiry is bound into the password hash. Two passwords for
-// the same (apiKey, pID) pair but different expiries must differ so an
-// attacker who strips the expiry from a leaked 3-part username cannot reuse
-// the captured password against the server's legacy code path.
+// the same (apiKey, pID) pair but different expiries must differ, so that
+// stripping the expiry from a leaked 3-part username cannot yield a captured
+// password matching the server's legacy code path.
 func TestTURNAuthHandler_CreatePassword_ExpiryBoundIntoHash(t *testing.T) {
 	h := newTestAuthHandler()
 
@@ -1341,7 +1340,7 @@ func TestTURNAuthHandler_CreatePassword_ExpiryBoundIntoHash(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, legacy, withExpiry,
 		"legacy-vs-expiry password must differ so stripping the expiry from a username "+
-			"cannot yield the attacker's captured password")
+			"cannot yield a captured password")
 
 	differentExpiry, err := h.CreatePassword("testkey", "PA_p1", time.Unix(1_700_003_600, 0))
 	require.NoError(t, err)
@@ -1349,17 +1348,18 @@ func TestTURNAuthHandler_CreatePassword_ExpiryBoundIntoHash(t *testing.T) {
 		"different expiries must produce different passwords; otherwise rotation by re-expiry would not change the credential")
 }
 
-// An attacker captures a legitimate (username, password) pair issued with a
-// TTL (3-part username `apiKey|pID|expiry`), base62-decodes the username, and
-// re-encodes it as the 2-part legacy form `apiKey|pID` while presenting the
-// captured password on the wire. pion/turn verifies MESSAGE-INTEGRITY as
-// MD5(wire_username:realm:password), so if the server's recomputed password
-// were unchanged by stripping the expiry the auth key would match and the
-// leaked credential would authenticate indefinitely, defeating the TTL.
+// Models a captured legitimate (username, password) pair issued with a TTL
+// (3-part username `apiKey|pID|expiry`): the username is base62-decoded and
+// re-encoded as the 2-part legacy form `apiKey|pID`, while the captured
+// password is presented unchanged on the wire. pion/turn verifies
+// MESSAGE-INTEGRITY as MD5(wire_username:realm:password), so if the server's
+// recomputed password were unchanged by stripping the expiry the auth key
+// would match and the leaked credential would authenticate indefinitely,
+// defeating the TTL.
 //
 // CreatePassword binds the expiry into the hash. On the stripped-username
 // path the server recomputes the LEGACY password (expiry zero) while the
-// attacker holds the WITH-EXPIRY password. The keys differ and
+// captured WITH-EXPIRY password no longer matches. The keys differ and
 // MESSAGE-INTEGRITY fails.
 func TestTURNAuthHandler_HandleAuth_ExpiryStrippingRejected(t *testing.T) {
 	issuedAt := time.Unix(1_700_000_000, 0)
@@ -1375,26 +1375,26 @@ func TestTURNAuthHandler_HandleAuth_ExpiryStrippingRejected(t *testing.T) {
 	clientKey := turn.GenerateAuthKey(legitUsername, LivekitRealm, legitPassword)
 	require.Equal(t, clientKey, serverKey, "legitimate creds must authenticate end-to-end")
 
-	// Attacker strips the expiry, re-encoding as the legacy 2-part form.
-	// The attacker still has the captured password (bound to the original expiry).
+	// Strip the expiry, re-encoding as the legacy 2-part form. The captured
+	// password (bound to the original expiry) is presented unchanged.
 	strippedUsername := h.CreateUsername("testkey", "PA_p1", time.Time{})
 
 	// The server still accepts the 2-part format at the parse layer...
-	serverKeyAttack, attackOk := h.HandleAuth(strippedUsername, LivekitRealm, nil)
-	require.True(t, attackOk, "parse layer accepts the 2-part form (this is by design; the real gate is the password hash)")
+	serverKeyAfterStrip, parseOk := h.HandleAuth(strippedUsername, LivekitRealm, nil)
+	require.True(t, parseOk, "parse layer accepts the 2-part form (this is by design; the real gate is the password hash)")
 
 	// ...but the server's recomputed key uses the LEGACY password (no expiry
-	// in hash), while the attacker's key uses the WITH-EXPIRY password.
-	// They must differ — otherwise the stripping attack would succeed.
-	attackerKey := turn.GenerateAuthKey(strippedUsername, LivekitRealm, legitPassword)
-	require.NotEqual(t, attackerKey, serverKeyAttack,
+	// in hash), while the replayed key uses the WITH-EXPIRY password.
+	// They must differ — otherwise the stripping bypass would succeed.
+	replayedKey := turn.GenerateAuthKey(strippedUsername, LivekitRealm, legitPassword)
+	require.NotEqual(t, replayedKey, serverKeyAfterStrip,
 		"SECURITY: stripping the expiry from a leaked 3-part username must produce a password mismatch; "+
 			"if these keys are equal, the TTL is bypassable and any leaked credential lasts forever")
 }
 
-// Variant of the expiry-stripping scenario: even if the attacker strips
+// Variant of the expiry-stripping scenario: even when stripping happens
 // pre-emptively while the original expiry is still valid (within skew),
-// stripping must still produce a mismatched server-side password.
+// it must still produce a mismatched server-side password.
 func TestTURNAuthHandler_StripExpiry_WithinSkew(t *testing.T) {
 	issuedAt := time.Unix(1_700_000_000, 0)
 	h := newTestAuthHandlerAt(issuedAt)
@@ -1405,7 +1405,7 @@ func TestTURNAuthHandler_StripExpiry_WithinSkew(t *testing.T) {
 	stripped := encodeUsername("testkey", "PA_alice")
 
 	// Move clock to just inside the original expiry — stripping isn't needed for validity,
-	// but attacker might try it preemptively before expiry arrives.
+	// but it might be attempted preemptively before the original expiry arrives.
 	h.now = func() time.Time { return issuedAt.Add(30 * time.Minute) }
 	require.True(t, tamperedAuthRejected(h, stripped, legitPassword),
 		"SECURITY: stripped username + captured with-expiry password authenticated even pre-expiry (hash not expiry-bound?)")
@@ -1415,9 +1415,9 @@ func TestTURNAuthHandler_StripExpiry_WithinSkew(t *testing.T) {
 // Expiry tampering
 // ---------------------------------------------------------------------------
 
-// An attacker who captures a 3-part credential cannot extend its lifetime by
-// rewriting the expiry in the username, because the expiry is bound into the
-// password hash.
+// A captured 3-part credential cannot have its lifetime extended by rewriting
+// the expiry in the username, because the expiry is bound into the password
+// hash.
 func TestTURNAuthHandler_ExpiryExtensionRejected(t *testing.T) {
 	issuedAt := time.Unix(1_700_000_000, 0)
 	h := newTestAuthHandlerAt(issuedAt)
@@ -1425,7 +1425,7 @@ func TestTURNAuthHandler_ExpiryExtensionRejected(t *testing.T) {
 	legitUsername, legitPassword, err := h.CreateCredentials("testkey", "PA_alice", time.Hour)
 	require.NoError(t, err)
 
-	// Original expiry was issuedAt + 1h. Attacker tries to rewrite it.
+	// Original expiry was issuedAt + 1h. Try rewriting it.
 	for _, newExpiry := range []int64{
 		issuedAt.Add(100 * time.Hour).Unix(),      // far future
 		issuedAt.Add(365 * 24 * time.Hour).Unix(), // a year
@@ -1435,7 +1435,7 @@ func TestTURNAuthHandler_ExpiryExtensionRejected(t *testing.T) {
 		// Move clock past the original expiry so only tampered expiry could save it.
 		h.now = func() time.Time { return issuedAt.Add(2 * time.Hour) }
 		require.True(t, tamperedAuthRejected(h, tampered, legitPassword),
-			"SECURITY: attacker extended expiry to %d and authenticated — TTL bypassed", newExpiry)
+			"SECURITY: rewritten expiry %d authenticated — TTL bypassed", newExpiry)
 	}
 
 	// sanity: the legitimate creds still authenticate within skew
@@ -1444,17 +1444,17 @@ func TestTURNAuthHandler_ExpiryExtensionRejected(t *testing.T) {
 	require.True(t, ok)
 }
 
-// Attacker rewrites the expiry to values that make Go's `time.Time.IsZero()`
-// return true (namely, Unix seconds = -62135596800, which corresponds to
-// Go's zero time: Jan 1, year 1 UTC). If the server's parse+hash paths were
-// inconsistent here, the expiry check would be bypassed AND the server
-// would compute a legacy-shaped password — which matches the legacy
-// password an attacker might separately hold.
+// Tests expiry values that make Go's `time.Time.IsZero()` return true
+// (namely, Unix seconds = -62135596800, which corresponds to Go's zero time:
+// Jan 1, year 1 UTC). If the server's parse+hash paths were inconsistent
+// here, the expiry check would be bypassed AND the server would compute a
+// legacy-shaped password — which would match a legacy password that may
+// have separately leaked.
 func TestTURNAuthHandler_ZeroTimeExpiry_NotBypassable(t *testing.T) {
 	issuedAt := time.Unix(1_700_000_000, 0)
 	h := newTestAuthHandlerAt(issuedAt)
 
-	// Attacker holds the WITH-EXPIRY password.
+	// Hold the WITH-EXPIRY password as if previously captured.
 	_, legitPassword, err := h.CreateCredentials("testkey", "PA_alice", time.Hour)
 	require.NoError(t, err)
 
@@ -1551,8 +1551,8 @@ func TestTURNAuthHandler_CrossAPIKey_Rejected(t *testing.T) {
 // Numeric edge cases on expiry
 // ---------------------------------------------------------------------------
 
-// Attacker passes max int64 expiry; time arithmetic inside HandleAuth must not
-// panic and must not authenticate without the correct password.
+// Tampered username carries max int64 expiry; time arithmetic inside HandleAuth
+// must not panic and must not authenticate without the correct password.
 func TestTURNAuthHandler_MaxInt64Expiry_NoPanicNoBypass(t *testing.T) {
 	issuedAt := time.Unix(1_700_000_000, 0)
 	h := newTestAuthHandlerAt(issuedAt)
@@ -1568,8 +1568,8 @@ func TestTURNAuthHandler_MaxInt64Expiry_NoPanicNoBypass(t *testing.T) {
 	}, "MaxInt64 expiry must not panic on clock arithmetic")
 }
 
-// Attacker passes a negative expiry. Server must reject (now.After == true)
-// AND captured password must not match.
+// Tampered username carries a negative expiry. Server must reject
+// (now.After == true) AND captured password must not match.
 func TestTURNAuthHandler_NegativeExpiry_Rejected(t *testing.T) {
 	issuedAt := time.Unix(1_700_000_000, 0)
 	h := newTestAuthHandlerAt(issuedAt)
@@ -1590,7 +1590,7 @@ func TestTURNAuthHandler_NegativeExpiry_Rejected(t *testing.T) {
 // Username byte-layer tampering
 // ---------------------------------------------------------------------------
 
-// Attacker injects a null byte into the pID. Must not match any legitimate pID.
+// A null byte injected into the pID must not match any legitimate pID.
 func TestTURNAuthHandler_NullByteInPID_Rejected(t *testing.T) {
 	issuedAt := time.Unix(1_700_000_000, 0)
 	h := newTestAuthHandlerAt(issuedAt)
@@ -1603,8 +1603,8 @@ func TestTURNAuthHandler_NullByteInPID_Rejected(t *testing.T) {
 		"SECURITY: null-byte injection in pID allowed captured password to authenticate")
 }
 
-// Attacker attempts to craft a username whose decoded plaintext contains a
-// `|` within the pID, producing an ambiguous 4-part split. Server must reject.
+// A username whose decoded plaintext contains a `|` within the pID produces
+// an ambiguous 4-part split. Server must reject.
 func TestTURNAuthHandler_PipeInjectionInPID_Rejected(t *testing.T) {
 	h := newTestAuthHandler()
 
@@ -1615,7 +1615,7 @@ func TestTURNAuthHandler_PipeInjectionInPID_Rejected(t *testing.T) {
 	require.False(t, ok, "SECURITY: ambiguous 4-part username was accepted")
 }
 
-// Attacker attempts 1-part and 5+ part forms.
+// 1-part and 5+ part username forms must be rejected.
 func TestTURNAuthHandler_WrongNumberOfParts_Rejected(t *testing.T) {
 	h := newTestAuthHandler()
 

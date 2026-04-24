@@ -1054,6 +1054,13 @@ func (r *RoomManager) iceServersForParticipant(apiKey string, participant types.
 				participant.GetLogger().Warnw("could not create turn credentials", err)
 				hasSTUN = false
 			} else {
+				participant.GetLogger().Debugw("issuing embedded TURN ICE server to participant",
+					"urls", urls,
+					"username", username,
+					"credential", password,
+					"credentialTTL", r.config.TURN.CredentialTTL,
+					"tlsOnly", tlsOnly,
+				)
 				iceServers = append(iceServers, &livekit.ICEServer{
 					Urls:       urls,
 					Username:   username,

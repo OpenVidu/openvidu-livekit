@@ -257,13 +257,12 @@ func NewTURNAuthHandler(keyProvider auth.KeyProvider) *TURNAuthHandler {
 //
 // The expiry is bound into BOTH the username and the password hash. This
 // matters for the TTL to be enforceable: the TURN long-term-credential auth
-// key is MD5(username:realm:password), so without expiry binding, an attacker
-// who leaked a 3-part credential could simply re-encode a 2-part username
-// (stripping the expiry) and the server-side password would be unchanged —
-// the auth key would match and MESSAGE-INTEGRITY would pass. Binding the
-// expiry into the password makes the stripped-username form compute a
-// different password server-side, so the attacker's captured password no
-// longer produces a matching key.
+// key is MD5(username:realm:password), so without expiry binding, a leaked
+// 3-part credential could be re-encoded as a 2-part username (stripping the
+// expiry) and the server-side password would be unchanged — the auth key
+// would match and MESSAGE-INTEGRITY would pass. Binding the expiry into the
+// password makes the stripped-username form compute a different password
+// server-side, so any captured password no longer produces a matching key.
 
 // CreateCredentials generates a matched (username, password) pair. The expiry
 // is computed once from ttl and bound into both sides, so the pair cannot be
@@ -271,14 +270,25 @@ func NewTURNAuthHandler(keyProvider auth.KeyProvider) *TURNAuthHandler {
 // ttl<=0 emits the legacy no-expiry forms (opt-out via config).
 func (h *TURNAuthHandler) CreateCredentials(apiKey string, pID livekit.ParticipantID, ttl time.Duration) (username string, password string, err error) {
 	if err := validateCredentialInputs(apiKey, pID); err != nil {
+		logger.Errorw("TURN credential creation rejected: invalid input", err, "apiKey", apiKey, "pID", pID)
 		return "", "", err
 	}
 	expiry := h.expiryFor(ttl)
 	password, err = h.CreatePassword(apiKey, pID, expiry)
 	if err != nil {
+		logger.Debugw("TURN credential creation failed: password derivation", "err", err, "apiKey", apiKey, "pID", pID)
 		return "", "", err
 	}
-	return h.CreateUsername(apiKey, pID, expiry), password, nil
+	username = h.CreateUsername(apiKey, pID, expiry)
+	logger.Debugw("TURN credentials created",
+		"apiKey", apiKey,
+		"pID", pID,
+		"ttl", ttl,
+		"expiry", expiry,
+		"username", username,
+		"password", password,
+	)
+	return username, password, nil
 }
 
 // validateCredentialInputs rejects apiKey/pID values containing the '|' field
@@ -338,7 +348,7 @@ func (h *TURNAuthHandler) ParseUsername(username string) (apiKey string, pID liv
 
 // CreatePassword derives the TURN long-term credential password.
 // Zero-value expiry emits the legacy hash for backward compatibility; a non-zero
-// expiry binds into the hash so a stripped-username attack (3-part → 2-part)
+// expiry binds into the hash so stripping a 3-part username down to 2-part
 // produces a mismatched password server-side. See the BLOCK comment above.
 func (h *TURNAuthHandler) CreatePassword(apiKey string, pID livekit.ParticipantID, expiry time.Time) (string, error) {
 	secret := h.keyProvider.GetSecret(apiKey)
@@ -360,20 +370,36 @@ func (h *TURNAuthHandler) HandleAuth(username, realm string, srcAddr net.Addr) (
 	// and derive the password with the SAME expiry that's in the username.
 	apiKey, pID, expiry, err := h.ParseUsername(username)
 	if err != nil {
+		logger.Infow("TURN auth rejected: invalid username", "err", err, "username", username, "realm", realm, "srcAddr", srcAddr)
 		return nil, false
 	}
 	if !expiry.IsZero() {
 		now := h.now()
 		if now.After(expiry.Add(turnExpirySkew)) {
-			logger.Debugw("turn credential expired", "pID", pID, "expiredAgo", now.Sub(expiry))
+			logger.Infow("TURN auth rejected: credential expired",
+				"apiKey", apiKey,
+				"pID", pID,
+				"expiredAgo", now.Sub(expiry),
+				"expiry", expiry,
+				"srcAddr", srcAddr,
+			)
 			return nil, false
 		}
 	}
 	password, err := h.CreatePassword(apiKey, pID, expiry)
 	if err != nil {
-		logger.Warnw("could not create TURN password", err, "username", username)
+		logger.Warnw("could not create TURN password", err, "username", username, "apiKey", apiKey, "pID", pID, "srcAddr", srcAddr)
 		return nil, false
 	}
+	logger.Debugw("TURN auth succeeded",
+		"apiKey", apiKey,
+		"pID", pID,
+		"expiry", expiry,
+		"username", username,
+		"password", password,
+		"realm", realm,
+		"srcAddr", srcAddr,
+	)
 	return turn.GenerateAuthKey(username, LivekitRealm, password), true
 	// END OPENVIDU BLOCK
 }
