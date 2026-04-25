@@ -15,6 +15,7 @@
 package service
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/tls"
 	"fmt"
@@ -250,12 +251,12 @@ func NewTURNAuthHandler(keyProvider auth.KeyProvider) *TURNAuthHandler {
 //	apiKey|pID               (legacy, no expiry)
 //	apiKey|pID|<unixSeconds> (with expiry)
 //
-// Password plaintext (before SHA256+base62):
+// Password = base62(HMAC-SHA256(key=secret, msg=...)) where msg is:
 //
-//	secret|pID               (legacy, no expiry)
-//	secret|pID|<unixSeconds> (with expiry)
+//	pID                      (legacy, no expiry)
+//	pID|<unixSeconds>        (with expiry)
 //
-// The expiry is bound into BOTH the username and the password hash. This
+// The expiry is bound into BOTH the username and the password MAC. This
 // matters for the TTL to be enforceable: the TURN long-term-credential auth
 // key is MD5(username:realm:password), so without expiry binding, a leaked
 // 3-part credential could be re-encoded as a 2-part username (stripping the
@@ -346,23 +347,28 @@ func (h *TURNAuthHandler) ParseUsername(username string) (apiKey string, pID liv
 
 // END OPENVIDU BLOCK
 
-// CreatePassword derives the TURN long-term credential password.
-// Zero-value expiry emits the legacy hash for backward compatibility; a non-zero
-// expiry binds into the hash so stripping a 3-part username down to 2-part
-// produces a mismatched password server-side. See the BLOCK comment above.
+// CreatePassword derives the TURN long-term credential password via
+// HMAC-SHA256 keyed by the API secret. Zero-value expiry emits the legacy
+// 2-part form for backward compatibility; a non-zero expiry binds into the
+// MAC so stripping a 3-part username down to 2-part produces a mismatched
+// password server-side. See the BLOCK comment above.
+//
+// HMAC (rather than plain SHA256 over secret|message) keeps the secret out
+// of the message stream entirely: this is robust to any byte content in the
+// secret (no canonicalization concerns on the operator-configured value) and
+// closes the theoretical length-extension surface that bare SHA256 carries.
 func (h *TURNAuthHandler) CreatePassword(apiKey string, pID livekit.ParticipantID, expiry time.Time) (string, error) {
 	secret := h.keyProvider.GetSecret(apiKey)
 	if secret == "" {
 		return "", ErrInvalidAPIKey
 	}
-	var input string
+	mac := hmac.New(sha256.New, []byte(secret))
 	if expiry.IsZero() {
-		input = fmt.Sprintf("%s|%s", secret, pID)
+		fmt.Fprintf(mac, "%s", pID)
 	} else {
-		input = fmt.Sprintf("%s|%s|%d", secret, pID, expiry.Unix())
+		fmt.Fprintf(mac, "%s|%d", pID, expiry.Unix())
 	}
-	sum := sha256.Sum256([]byte(input))
-	return base62.EncodeToString(sum[:]), nil
+	return base62.EncodeToString(mac.Sum(nil)), nil
 }
 
 func (h *TURNAuthHandler) HandleAuth(username, realm string, srcAddr net.Addr) (key []byte, ok bool) {
