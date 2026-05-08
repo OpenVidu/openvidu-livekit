@@ -25,7 +25,7 @@ import (
 )
 
 type LivekitHelper struct {
-	roomStore    *service.ServiceStore
+	roomStore    *service.ObjectStore
 	egressStore  *service.EgressStore
 	ingressStore *service.IngressStore
 }
@@ -46,7 +46,7 @@ func Init(server *service.LivekitServer) {
 	if livekitHelperInstance == nil {
 		once.Do(
 			func() {
-				roomStore, err := goutil.GetPrivateStructField[service.ServiceStore](server.RoomManager(), "roomStore")
+				roomStore, err := goutil.GetPrivateStructField[service.ObjectStore](server.RoomManager(), "roomStore")
 				if err != nil {
 					logger.Errorw("failed to retrieve ServiceStore", err)
 					panic(err)
