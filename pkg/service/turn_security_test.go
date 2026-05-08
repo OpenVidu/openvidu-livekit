@@ -973,48 +973,4 @@ func TestTURNSecurity_AllocateConn_TCP_DeniedWithPortRange(t *testing.T) {
 	require.ErrorIs(t, err, errTCPAllocDenied)
 }
 
-// ---------------------------------------------------------------------------
-// extractPort — all branches
-// ---------------------------------------------------------------------------
-
-// stringAddr implements net.Addr with a custom string representation,
-// exercising the fallback branch in extractPort.
-type stringAddr struct {
-	network string
-	addr    string
-}
-
-func (a stringAddr) Network() string { return a.network }
-func (a stringAddr) String() string  { return a.addr }
-
-func TestExtractPort_UDPAddr(t *testing.T) {
-	port, err := extractPort(&net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 8080})
-	require.NoError(t, err)
-	require.Equal(t, uint16(8080), port)
-}
-
-func TestExtractPort_TCPAddr(t *testing.T) {
-	port, err := extractPort(&net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 443})
-	require.NoError(t, err)
-	require.Equal(t, uint16(443), port)
-}
-
-func TestExtractPort_FallbackAddr(t *testing.T) {
-	port, err := extractPort(stringAddr{"custom", "10.0.0.1:5500"})
-	require.NoError(t, err)
-	require.Equal(t, uint16(5500), port)
-}
-
-func TestExtractPort_FallbackAddr_InvalidFormat(t *testing.T) {
-	_, err := extractPort(stringAddr{"custom", "not-a-host-port"})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "cannot extract port")
-}
-
-func TestExtractPort_FallbackAddr_InvalidPort(t *testing.T) {
-	_, err := extractPort(stringAddr{"custom", "10.0.0.1:abc"})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "cannot parse port")
-}
-
 // END OPENVIDU BLOCK

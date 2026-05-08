@@ -44,13 +44,6 @@ var (
 	ErrMissingAuthorization      = errors.New("invalid authorization header. Must start with " + bearerPrefix)
 	ErrInvalidAuthorizationToken = errors.New("invalid authorization token")
 	ErrInvalidAPIKey             = errors.New("invalid API key")
-	// BEGIN OPENVIDU BLOCK
-	// ErrInvalidCredentialInput indicates an apiKey or pID contains a reserved
-	// byte ('|' or NUL) that would produce an unparseable TURN credential and
-	// be silently broken. Surfacing at creation time prevents minting a cred
-	// that would fail authentication later with no clear signal to operators.
-	ErrInvalidCredentialInput = errors.New("apiKey or pID contains reserved byte")
-	// END OPENVIDU BLOCK
 )
 
 // authentication middleware

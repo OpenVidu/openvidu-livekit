@@ -1047,20 +1047,12 @@ func (r *RoomManager) iceServersForParticipant(apiKey string, participant types.
 			urls = append(urls, fmt.Sprintf("turns:%s:443?transport=tcp", r.config.TURN.Domain))
 		}
 		if len(urls) > 0 {
-			// BEGIN OPENVIDU BLOCK — atomic so username and password share the same expiry.
-			username, password, err := r.turnAuthHandler.CreateCredentials(apiKey, participant.ID(), r.config.TURN.CredentialTTL)
-			// END OPENVIDU BLOCK
+			username := r.turnAuthHandler.CreateUsername(apiKey, participant.ID())
+			password, err := r.turnAuthHandler.CreatePassword(apiKey, participant.ID())
 			if err != nil {
-				participant.GetLogger().Warnw("could not create turn credentials", err)
+				participant.GetLogger().Warnw("could not create turn password", err)
 				hasSTUN = false
 			} else {
-				participant.GetLogger().Debugw("issuing embedded TURN ICE server to participant",
-					"urls", urls,
-					"username", username,
-					"credential", password,
-					"credentialTTL", r.config.TURN.CredentialTTL,
-					"tlsOnly", tlsOnly,
-				)
 				iceServers = append(iceServers, &livekit.ICEServer{
 					Urls:       urls,
 					Username:   username,

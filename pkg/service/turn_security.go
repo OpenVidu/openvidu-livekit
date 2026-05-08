@@ -104,22 +104,19 @@ func (s *TURNSecurity) PermissionHandler() turn.PermissionHandler {
 	return s.handlePermission
 }
 
-func (s *TURNSecurity) handlePermission(srcAddr net.Addr, peerIP net.IP) bool {
+func (s *TURNSecurity) handlePermission(_ net.Addr, peerIP net.IP) bool {
 	peerStr := peerIP.String()
 
 	// Fast path: local interface IPs are always allowed (the TURN relay
 	// is embedded and may need to forward to any local interface).
 	if _, ok := s.localIPs[peerStr]; ok {
-		logger.Debugw("TURN permission allowed: local interface IP", "peerIP", peerStr, "srcAddr", srcAddr)
 		return true
 	}
 
 	if s.rc == nil {
 		_, ok := s.allowed[peerStr]
 		if !ok {
-			logger.Infow("TURN permission denied: peer IP not in local node", "peerIP", peerStr, "srcAddr", srcAddr, "allowed", s.allowed)
-		} else {
-			logger.Debugw("TURN permission allowed: static allow-list", "peerIP", peerStr, "srcAddr", srcAddr)
+			logger.Infow("TURN permission denied: peer IP not in local node", "peerIP", peerStr)
 		}
 		return ok
 	}
@@ -136,28 +133,19 @@ func (s *TURNSecurity) handlePermission(srcAddr net.Addr, peerIP net.IP) bool {
 
 	// Cache hit: IP found in a fresh cache.
 	if fresh && inCache {
-		logger.Debugw("TURN permission allowed: cluster cache hit", "peerIP", peerStr, "srcAddr", srcAddr, "cacheAge", time.Since(cacheTime))
 		return true
 	}
-	logger.Debugw("TURN permission cache miss, refreshing from Redis",
-		"peerIP", peerStr,
-		"srcAddr", srcAddr,
-		"cacheFresh", fresh,
-		"cacheAge", time.Since(cacheTime),
-	)
 
 	// Cache miss or expired: refresh from Redis.
 	allowed, err := s.refreshCache(cacheTime)
 	if err != nil {
-		logger.Warnw("TURN permission denied: failed to query cluster nodes from Redis", err, "peerIP", peerStr, "srcAddr", srcAddr)
+		logger.Warnw("TURN permission denied: failed to query cluster nodes from Redis", err, "peerIP", peerStr)
 		return false
 	}
 
 	_, ok := allowed[peerStr]
 	if !ok {
-		logger.Infow("TURN permission denied: peer IP not in cluster nodes", "peerIP", peerStr, "srcAddr", srcAddr, "allowedCount", len(allowed))
-	} else {
-		logger.Debugw("TURN permission allowed: cluster cache refreshed", "peerIP", peerStr, "srcAddr", srcAddr)
+		logger.Infow("TURN permission denied: peer IP not in cluster nodes", "peerIP", peerStr)
 	}
 	return ok
 }
@@ -188,7 +176,6 @@ func (s *TURNSecurity) refreshCache(prevCacheTime time.Time) (map[string]struct{
 	}
 	s.cachedIPs = allowed
 	s.cacheTime = time.Now()
-	logger.Debugw("TURN cluster cache refreshed from Redis", "allowedCount", len(allowed), "allowed", allowed)
 	return allowed, nil
 }
 
@@ -324,12 +311,6 @@ func (g *openviduRelayAddrGen) AllocatePacketConn(network string, requestedPort 
 		)
 		return nil, nil, err
 	}
-	logger.Debugw("TURN AllocatePacketConn succeeded",
-		"network", network,
-		"requestedPort", requestedPort,
-		"relayAddr", addr,
-		"peerPortRange", fmt.Sprintf("[%d,%d]", g.minPort, g.maxPort),
-	)
 
 	if g.standalone {
 		prometheus.AddConnection(prometheus.Outgoing)
