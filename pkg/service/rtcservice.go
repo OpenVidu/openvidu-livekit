@@ -15,14 +15,12 @@
 package service
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"maps"
 	"math/rand"
 	"net/http"
 	"os"
@@ -32,7 +30,6 @@ import (
 
 	"github.com/gorilla/websocket"
 	"go.uber.org/atomic"
-	"golang.org/x/exp/maps"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/livekit/protocol/livekit"
@@ -128,9 +125,7 @@ func decodeAttributes(str string) (map[string]string, error) {
 	return attrs, nil
 }
 
-var gzipReaderPool = sync.Pool{
-	New: func() any { return &gzip.Reader{} },
-}
+var errJoinRequestTooLarge = errors.New("join request too large")
 
 func (s *RTCService) validateInternal(
 	lgr logger.Logger,
@@ -138,6 +133,10 @@ func (s *RTCService) validateInternal(
 	needsJoinRequest bool,
 	strict bool,
 ) (livekit.RoomName, routing.ParticipantInit, int, error) {
+	if claims := GetGrants(r.Context()); claims == nil || claims.Video == nil {
+		return "", routing.ParticipantInit{}, http.StatusUnauthorized, rtc.ErrPermissionDenied
+	}
+
 	var params ValidateConnectRequestParams
 	useSinglePeerConnection := false
 	joinRequest := &livekit.JoinRequest{}
@@ -174,17 +173,23 @@ func (s *RTCService) validateInternal(
 
 			switch wrappedJoinRequest.Compression {
 			case livekit.WrappedJoinRequest_NONE:
+				if len(wrappedJoinRequest.JoinRequest) > http.DefaultMaxHeaderBytes {
+					return "", routing.ParticipantInit{}, http.StatusBadRequest, errJoinRequestTooLarge
+				}
 				if err := proto.Unmarshal(wrappedJoinRequest.JoinRequest, joinRequest); err != nil {
 					return "", routing.ParticipantInit{}, http.StatusBadRequest, errors.New("cannot unmarshal join request")
 				}
 
 			case livekit.WrappedJoinRequest_GZIP:
-				reader := gzipReaderPool.Get().(*gzip.Reader)
-				defer gzipReaderPool.Put(reader)
-				reader.Reset(bytes.NewReader(wrappedJoinRequest.JoinRequest))
-				protoBytes, err := io.ReadAll(reader)
+				protoBytes, err := DecompressGzip(wrappedJoinRequest.JoinRequest)
 				if err != nil {
-					return "", routing.ParticipantInit{}, http.StatusBadRequest, errors.New("cannot read decompressed join request")
+					switch {
+					case errors.Is(err, ErrGzipTooLarge):
+						err = errJoinRequestTooLarge
+					case errors.Is(err, ErrGzipReadFailed):
+						err = errors.New("cannot read decompressed join request")
+					}
+					return "", routing.ParticipantInit{}, http.StatusBadRequest, err
 				}
 
 				if err := proto.Unmarshal(protoBytes, joinRequest); err != nil {
@@ -289,11 +294,13 @@ func (s *RTCService) serve(w http.ResponseWriter, r *http.Request, needsJoinRequ
 		return
 	}
 
+	startedAt := time.Now()
 	var (
 		roomName            livekit.RoomName
 		roomID              livekit.RoomID
 		participantIdentity livekit.ParticipantIdentity
 		pID                 livekit.ParticipantID
+		joinDuration        time.Duration
 		loggerResolved      bool
 
 		pi   routing.ParticipantInit
@@ -308,7 +315,8 @@ func (s *RTCService) serve(w http.ResponseWriter, r *http.Request, needsJoinRequ
 			"room", roomName,
 			"roomID", roomID,
 			"participant", participantIdentity,
-			"pID", pID,
+			"participantID", pID,
+			"joinDuration", joinDuration,
 		}
 	}
 
@@ -317,7 +325,25 @@ func (s *RTCService) serve(w http.ResponseWriter, r *http.Request, needsJoinRequ
 			return
 		}
 
-		if force || (roomName != "" && roomID != "" && participantIdentity != "" && pID != "") {
+		if force {
+			if roomName == "" {
+				roomName = "unresolved"
+			}
+			if roomID == "" {
+				roomID = "unresolved"
+			}
+			if participantIdentity == "" {
+				participantIdentity = "unresolved"
+			}
+			if pID == "" {
+				pID = "unresolved"
+			}
+			if joinDuration == 0 {
+				joinDuration = time.Since(startedAt)
+			}
+		}
+
+		if roomName != "" && roomID != "" && participantIdentity != "" && pID != "" {
 			loggerResolved = true
 			loggerResolver.Resolve(getLoggerFields()...)
 		}
@@ -335,7 +361,8 @@ func (s *RTCService) serve(w http.ResponseWriter, r *http.Request, needsJoinRequ
 
 	roomName, pi, code, err = s.validateInternal(pLogger, r, needsJoinRequest, false)
 	if err != nil {
-		HandleError(w, r, code, err)
+		resolveLogger(true)
+		HandleError(w, r, code, err, getLoggerFields()...)
 		return
 	}
 
@@ -343,6 +370,7 @@ func (s *RTCService) serve(w http.ResponseWriter, r *http.Request, needsJoinRequ
 	if pi.ID != "" {
 		pID = pi.ID
 	}
+	pLogger.Debugw("join request validated", append(getLoggerFields(), "participantInit", &pi)...)
 
 	// give it a few attempts to start session
 	var cr connectionResult
@@ -363,11 +391,13 @@ func (s *RTCService) serve(w http.ResponseWriter, r *http.Request, needsJoinRequ
 		if errors.As(err, &psrpcErr) {
 			status = psrpcErr.ToHttp()
 		}
+		resolveLogger(true)
 		HandleError(w, r, status, err, getLoggerFields()...)
 		return
 	}
 
 	prometheus.IncrementParticipantJoin(1)
+	joinDuration = time.Since(startedAt)
 
 	pLogger = pLogger.WithValues("connID", cr.ConnectionID)
 	if !pi.Reconnect && initialResponse.GetJoin() != nil {
@@ -398,6 +428,7 @@ func (s *RTCService) serve(w http.ResponseWriter, r *http.Request, needsJoinRequ
 	done := make(chan struct{})
 	// function exits when websocket terminates, it'll close the event reading off of request sink and response source as well
 	defer func() {
+		resolveLogger(true)
 		pLogger.Debugw("finishing WS connection", "closedByClient", closedByClient.Load())
 		cr.ResponseSource.Close()
 		cr.RequestSink.Close()
@@ -409,6 +440,7 @@ func (s *RTCService) serve(w http.ResponseWriter, r *http.Request, needsJoinRequ
 	// upgrade only once the basics are good to go
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
+		resolveLogger(true)
 		HandleError(w, r, http.StatusInternalServerError, err, getLoggerFields()...)
 		return
 	}

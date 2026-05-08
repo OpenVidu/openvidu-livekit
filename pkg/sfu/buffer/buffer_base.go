@@ -460,6 +460,10 @@ func (b *BufferBase) setupRTPStats(clockRate uint32) {
 		b.deltaStatsSnapshotId = b.rtpStats.NewSnapshotId()
 	}
 
+	b.setupRTPStatsLite(clockRate)
+}
+
+func (b *BufferBase) setupRTPStatsLite(clockRate uint32) {
 	if b.params.IsOOBSequenceNumber {
 		b.rtpStatsLite = rtpstats.NewRTPStatsReceiverLite(rtpstats.RTPStatsParams{})
 		b.rtpStatsLite.SetLogger(b.logger)
@@ -473,20 +477,44 @@ func (b *BufferBase) stopRTPStats(reason string) (stats *livekit.RTPStats, stats
 	if b.rtpStats != nil {
 		b.rtpStats.Stop()
 		stats = b.rtpStats.ToProto()
+
+		b.logger.Debugw(
+			"rtp stats",
+			"direction", "upstream",
+			"stats", b.rtpStats,
+			"reason", reason,
+		)
 	}
+
+	statsLite = b.stopRTPStatsLite(reason)
+	return
+}
+
+func (b *BufferBase) stopRTPStatsLite(reason string) (statsLite *livekit.RTPStats) {
 	if b.rtpStatsLite != nil {
 		b.rtpStatsLite.Stop()
 		statsLite = b.rtpStatsLite.ToProto()
-	}
 
-	b.logger.Debugw(
-		"rtp stats",
-		"direction", "upstream",
-		"stats", b.rtpStats,
-		"statsLite", b.rtpStatsLite,
-		"reason", reason,
-	)
+		b.logger.Debugw(
+			"rtp stats lite",
+			"direction", "upstream",
+			"statsLite", b.rtpStatsLite,
+			"reason", reason,
+		)
+	}
 	return
+}
+
+func (b *BufferBase) RestartOOBSequenceNumber(reason string) {
+	b.Lock()
+	defer b.Unlock()
+
+	b.stopRTPStatsLite(reason)
+	b.setupRTPStatsLite(b.clockRate)
+
+	if b.nacker != nil {
+		b.nacker = nack.NewNACKQueue(nack.NackQueueParamsDefault)
+	}
 }
 
 func (b *BufferBase) MarkForRestartStream(reason string) {
@@ -1209,12 +1237,12 @@ func (b *BufferBase) maybeGrowBucket(now int64) {
 		return
 	}
 
+	b.lastBucketCapCheckAt = now
+
 	// check and allocate in a go routine, away from the forwarding path
 	go func() {
 		b.Lock()
 		defer b.Unlock()
-
-		b.lastBucketCapCheckAt = now
 
 		cap := b.bucket.Capacity()
 		maxPkts := b.params.MaxVideoPkts

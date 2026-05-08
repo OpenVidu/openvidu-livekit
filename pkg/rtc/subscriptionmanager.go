@@ -19,12 +19,13 @@ package rtc
 import (
 	"context"
 	"errors"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/pion/webrtc/v4/pkg/rtcerr"
 	"go.uber.org/atomic"
-	"golang.org/x/exp/maps"
 
 	"github.com/livekit/livekit-server/pkg/rtc/types"
 	"github.com/livekit/livekit-server/pkg/sfu"
@@ -114,6 +115,21 @@ func (m *SubscriptionManager) Close(isExpectedToResume bool) {
 
 	prometheus.RecordTrackSubscribeCancels(int32(m.getNumCancellations()))
 
+	// Remove observer closures from track change/remove notifiers to allow
+	// this participant and its transports to be garbage collected.
+	m.lock.Lock()
+	subs := maps.Clone(m.subscriptions)
+	dataTrackSubs := maps.Clone(m.dataTrackSubscriptions)
+	m.lock.Unlock()
+	for _, sub := range subs {
+		sub.setChangedNotifier(nil)
+		sub.setRemovedNotifier(nil)
+	}
+	for _, dataTrackSub := range dataTrackSubs {
+		dataTrackSub.setChangedNotifier(nil)
+		dataTrackSub.setRemovedNotifier(nil)
+	}
+
 	subTracks := m.GetSubscribedTracks()
 	downTracksToClose := make([]*sfu.DownTrack, 0, len(subTracks))
 	for _, st := range subTracks {
@@ -136,8 +152,9 @@ func (m *SubscriptionManager) Close(isExpectedToResume bool) {
 		}
 	}
 
-	m.lock.Lock()
-	for _, sub := range m.dataTrackSubscriptions {
+	for trackID, sub := range dataTrackSubs {
+		m.setDataTrackDesired(trackID, false)
+
 		dataDownTrack := sub.getDataDownTrack()
 		if dataDownTrack == nil {
 			// already unsubscribed
@@ -151,7 +168,6 @@ func (m *SubscriptionManager) Close(isExpectedToResume bool) {
 
 		dataTrack.RemoveSubscriber(sub.subscriberID)
 	}
-	m.lock.Unlock()
 	m.notifyDataTrackSubscriberHandles()
 }
 
@@ -165,6 +181,10 @@ func (m *SubscriptionManager) isClosed() bool {
 }
 
 func (m *SubscriptionManager) SubscribeToTrack(trackID livekit.TrackID, isSync bool) {
+	if m.isClosed() {
+		return
+	}
+
 	if m.params.UseOneShotSignallingMode || isSync {
 		m.subscribeSynchronous(trackID)
 		return
@@ -211,6 +231,10 @@ func (m *SubscriptionManager) UnsubscribeFromTrack(trackID livekit.TrackID) {
 }
 
 func (m *SubscriptionManager) SubscribeToDataTrack(trackID livekit.TrackID) {
+	if m.isClosed() {
+		return
+	}
+
 	sub, desireChanged := m.setDataTrackDesired(trackID, true)
 	if sub == nil {
 		sLogger := m.params.Logger.WithValues(
@@ -332,7 +356,7 @@ func (m *SubscriptionManager) GetSubscribedParticipants() []livekit.ParticipantI
 	m.lock.RLock()
 	defer m.lock.RUnlock()
 
-	return maps.Keys(m.subscribedTo)
+	return slices.Collect(maps.Keys(m.subscribedTo))
 }
 
 func (m *SubscriptionManager) IsSubscribedTo(participantID livekit.ParticipantID) bool {
@@ -945,6 +969,8 @@ func (m *SubscriptionManager) handleSubscribedTrackClose(s *mediaTrackSubscripti
 		return
 	}
 	s.setSubscribedTrack(nil)
+	s.setChangedNotifier(nil)
+	s.setRemovedNotifier(nil)
 
 	var relieveFromLimits bool
 	switch subTrack.MediaTrack().Kind() {
@@ -1084,6 +1110,9 @@ func (m *SubscriptionManager) unsubscribeDataTrack(s *dataTrackSubscription) err
 
 	dataTrack := dataDownTrack.PublishDataTrack()
 	dataTrack.RemoveSubscriber(s.subscriberID)
+
+	s.setChangedNotifier(nil)
+	s.setRemovedNotifier(nil)
 
 	m.unmarkSubscribedTo(s.getPublisherID(), s.trackID)
 	return nil

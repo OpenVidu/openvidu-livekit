@@ -129,18 +129,21 @@ func NewSubscribedTrack(params SubscribedTrackParams) (*SubscribedTrack, error) 
 	if isEncrypted {
 		trailer = params.Subscriber.GetTrailer()
 	}
+	stripPacketTrailer := params.MediaTrack.HasPacketTrailer() &&
+		!params.Subscriber.ProtocolVersion().SupportsPacketTrailer()
 	downTrack, err := sfu.NewDownTrack(sfu.DownTrackParams{
-		Codecs:            codecs,
-		IsEncrypted:       isEncrypted,
-		Source:            params.MediaTrack.Source(),
-		Receiver:          params.WrappedReceiver,
-		BufferFactory:     params.Subscriber.GetBufferFactory(),
-		SubID:             params.Subscriber.ID(),
-		StreamID:          streamID,
-		MaxTrack:          maxTrack,
-		PlayoutDelayLimit: params.Subscriber.GetPlayoutDelayConfig(),
-		Pacer:             params.Subscriber.GetPacer(),
-		Trailer:           trailer,
+		Codecs:             codecs,
+		IsEncrypted:        isEncrypted,
+		Source:             params.MediaTrack.Source(),
+		Receiver:           params.WrappedReceiver,
+		BufferFactory:      params.Subscriber.GetBufferFactory(),
+		SubID:              params.Subscriber.ID(),
+		StreamID:           streamID,
+		MaxTrack:           maxTrack,
+		PlayoutDelayLimit:  params.Subscriber.GetPlayoutDelayConfig(),
+		Pacer:              params.Subscriber.GetPacer(),
+		Trailer:            trailer,
+		StripPacketTrailer: stripPacketTrailer,
 		Logger: LoggerWithTrack(
 			params.Subscriber.GetLogger().WithComponent(sutils.ComponentSub),
 			params.MediaTrack.ID(),
@@ -226,7 +229,7 @@ func (t *SubscribedTrack) Bound(err error) {
 // for DownTrack callback to notify us that it's closed
 func (t *SubscribedTrack) Close(isExpectedToResume bool) {
 	if onClose := t.onClose.Load(); onClose != nil {
-		go onClose.(func(bool))(isExpectedToResume)
+		onClose.(func(bool))(isExpectedToResume)
 	}
 }
 
@@ -472,10 +475,12 @@ func (t *SubscribedTrack) OnDownTrackClose(isExpectedToResume bool) {
 		}
 	}
 
-	go func() {
-		if t.params.OnDownTrackClosed != nil {
-			t.params.OnDownTrackClosed(t.params.Subscriber.ID())
-		}
-		t.Close(isExpectedToResume)
-	}()
+	if t.params.OnDownTrackClosed != nil {
+		t.params.OnDownTrackClosed(t.params.Subscriber.ID())
+	}
+	t.Close(isExpectedToResume)
+}
+
+func (t *SubscribedTrack) OnStreamStarted() {
+	t.params.TelemetryListener.OnTrackSubscribeStreamStarted(t.params.Subscriber.ID(), t.params.MediaTrack.ToProto())
 }

@@ -18,7 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -119,7 +119,7 @@ type createRequest struct {
 	FromIngress                     bool
 }
 
-func (s *WHIPService) validateCreate(r *http.Request) (*createRequest, int, error) {
+func (s *WHIPService) validateCreate(w http.ResponseWriter, r *http.Request) (*createRequest, int, error) {
 	claims := GetGrants(r.Context())
 	if claims == nil || claims.Video == nil {
 		return nil, http.StatusUnauthorized, rtc.ErrPermissionDenied
@@ -156,8 +156,12 @@ func (s *WHIPService) validateCreate(r *http.Request) (*createRequest, int, erro
 
 	fromIngress := r.Header.Get("X-Livekit-Ingress")
 
-	offerSDPBytes, err := ioutil.ReadAll(r.Body)
+	offerSDPBytes, err := io.ReadAll(http.MaxBytesReader(w, r.Body, http.DefaultMaxHeaderBytes))
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			return nil, http.StatusRequestEntityTooLarge, fmt.Errorf("request body exceeds %d bytes", maxErr.Limit)
+		}
 		return nil, http.StatusBadRequest, fmt.Errorf("body does not have SDP offer: %s", err)
 	}
 	if len(offerSDPBytes) == 0 {
@@ -212,7 +216,7 @@ func (s *WHIPService) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Add("Content-type", "application/sdp")
 
-	req, status, err := s.validateCreate(r)
+	req, status, err := s.validateCreate(w, r)
 	if err != nil {
 		s.handleError("Create", w, r, status, err)
 		return
@@ -358,7 +362,7 @@ func (s *WHIPService) iceTrickle(
 		"method", "ice-trickle",
 		"room", roomName,
 		"participant", participantIdentity,
-		"pID", pID,
+		"participantID", pID,
 		"sdpFragment", sdpFragment,
 		"status", http.StatusNoContent,
 	)
@@ -410,7 +414,7 @@ func (s *WHIPService) iceRestart(
 		"method", "ice-restart",
 		"room", roomName,
 		"participant", participantIdentity,
-		"pID", pID,
+		"participantID", pID,
 		"sdpFragment", sdpFragment,
 		"status", http.StatusNoContent,
 		"res", logger.Proto(res),
@@ -462,8 +466,13 @@ func (s *WHIPService) handleParticipantPatch(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	sdpFragmentBytes, err := ioutil.ReadAll(r.Body)
+	sdpFragmentBytes, err := io.ReadAll(http.MaxBytesReader(w, r.Body, http.DefaultMaxHeaderBytes))
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			s.handleError("Patch", w, r, http.StatusRequestEntityTooLarge, fmt.Errorf("request body exceeds %d bytes", maxErr.Limit))
+			return
+		}
 		s.handleError("Patch", w, r, http.StatusBadRequest, fmt.Errorf("body does not have SDP fragment: %s", err))
 		return
 	}
@@ -514,7 +523,7 @@ func (s *WHIPService) handleParticipantDelete(w http.ResponseWriter, r *http.Req
 	sutils.GetLogger(r.Context()).Infow(
 		"API WHIP.Delete",
 		"participant", claims.Identity,
-		"pID", r.PathValue("participant_id"),
+		"participantID", r.PathValue("participant_id"),
 		"room", roomName,
 		"status", http.StatusOK,
 	)

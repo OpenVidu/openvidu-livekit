@@ -17,6 +17,7 @@ package rtc
 import (
 	"fmt"
 	"io"
+	"maps"
 	"math/rand"
 	"os"
 	"slices"
@@ -33,7 +34,6 @@ import (
 	"github.com/pkg/errors"
 	"go.uber.org/atomic"
 	"go.uber.org/zap/zapcore"
-	"golang.org/x/exp/maps"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/livekit/mediatransportutil/pkg/twcc"
@@ -80,6 +80,9 @@ const (
 
 	PingIntervalSeconds = 5
 	PingTimeoutSeconds  = 15
+
+	audioSectionsCountWithJoinResponse = 3
+	videoSectionsCountWithJoinResponse = 3
 )
 
 var (
@@ -173,55 +176,57 @@ type ParticipantParams struct {
 	PLIThrottleConfig       sfu.PLIThrottleConfig
 	CongestionControlConfig config.CongestionControlConfig
 	// codecs that are enabled for this room
-	PublishEnabledCodecs            []*livekit.Codec
-	SubscribeEnabledCodecs          []*livekit.Codec
-	Logger                          logger.Logger
-	LoggerResolver                  logger.DeferredFieldResolver
-	Reporter                        roomobs.ParticipantSessionReporter
-	ReporterResolver                roomobs.ParticipantReporterResolver
-	SimTracks                       map[uint32]interceptor.SimulcastTrackInfo
-	Grants                          *auth.ClaimGrants
-	InitialVersion                  uint32
-	ClientConf                      *livekit.ClientConfiguration
-	ClientInfo                      ClientInfo
-	Region                          string
-	Migration                       bool
-	Reconnect                       bool
-	AdaptiveStream                  bool
-	AllowTCPFallback                bool
-	TCPFallbackRTTThreshold         int
-	AllowUDPUnstableFallback        bool
-	TURNSEnabled                    bool
-	ParticipantListener             types.LocalParticipantListener
-	ParticipantHelper               types.LocalParticipantHelper
-	DisableSupervisor               bool
-	ReconnectOnPublicationError     bool
-	ReconnectOnSubscriptionError    bool
-	ReconnectOnDataChannelError     bool
-	VersionGenerator                utils.TimedVersionGenerator
-	DisableDynacast                 bool
-	SubscriberAllowPause            bool
-	SubscriptionLimitAudio          int32
-	SubscriptionLimitVideo          int32
-	PlayoutDelay                    *livekit.PlayoutDelay
-	SyncStreams                     bool
-	ForwardStats                    *sfu.ForwardStats
-	DisableSenderReportPassThrough  bool
-	MetricConfig                    metric.MetricConfig
-	UseOneShotSignallingMode        bool
-	EnableMetrics                   bool
-	DataChannelMaxBufferedAmount    uint64
-	DatachannelSlowThreshold        int
-	DatachannelLossyTargetLatency   time.Duration
-	FireOnTrackBySdp                bool
-	DisableCodecRegression          bool
-	LastPubReliableSeq              uint32
-	Country                         string
-	PreferVideoSizeFromMedia        bool
-	UseSinglePeerConnection         bool
-	EnableDataTracks                bool
-	EnableRTPStreamRestartDetection bool
-	ForceBackupCodecPolicySimulcast bool
+	PublishEnabledCodecs                []*livekit.Codec
+	SubscribeEnabledCodecs              []*livekit.Codec
+	Logger                              logger.Logger
+	LoggerResolver                      logger.DeferredFieldResolver
+	Reporter                            roomobs.ParticipantSessionReporter
+	ReporterResolver                    roomobs.ParticipantReporterResolver
+	SimTracks                           map[uint32]interceptor.SimulcastTrackInfo
+	Grants                              *auth.ClaimGrants
+	InitialVersion                      uint32
+	ClientConf                          *livekit.ClientConfiguration
+	ClientInfo                          ClientInfo
+	Region                              string
+	Migration                           bool
+	Reconnect                           bool
+	AdaptiveStream                      bool
+	AllowTCPFallback                    bool
+	TCPFallbackRTTThreshold             int
+	AllowUDPUnstableFallback            bool
+	TURNSEnabled                        bool
+	ParticipantListener                 types.LocalParticipantListener
+	ParticipantHelper                   types.LocalParticipantHelper
+	DisableSupervisor                   bool
+	ReconnectOnPublicationError         bool
+	ReconnectOnSubscriptionError        bool
+	ReconnectOnDataChannelError         bool
+	VersionGenerator                    utils.TimedVersionGenerator
+	DisableDynacast                     bool
+	SubscriberAllowPause                bool
+	SubscriptionLimitAudio              int32
+	SubscriptionLimitVideo              int32
+	PlayoutDelay                        *livekit.PlayoutDelay
+	SyncStreams                         bool
+	ForwardStats                        *sfu.ForwardStats
+	DisableSenderReportPassThrough      bool
+	MetricConfig                        metric.MetricConfig
+	UseOneShotSignallingMode            bool
+	EnableMetrics                       bool
+	DataChannelMaxBufferedAmount        uint64
+	DatachannelSlowThreshold            int
+	DatachannelLossyTargetLatency       time.Duration
+	FireOnTrackBySdp                    bool
+	DisableCodecRegression              bool
+	LastPubReliableSeq                  uint32
+	Country                             string
+	PreferVideoSizeFromMedia            bool
+	UseSinglePeerConnection             bool
+	EnableDataTracks                    bool
+	EnableRTPStreamRestartDetection     bool
+	ForceBackupCodecPolicySimulcast     bool
+	RequireMediaSectionWithJoinResponse bool
+	DisableTransceiverReuseForE2EE      bool
 }
 
 type ParticipantImpl struct {
@@ -1422,6 +1427,7 @@ func (p *ParticipantImpl) Close(sendLeave bool, reason types.ParticipantCloseRea
 	p.pendingTracksLock.Unlock()
 
 	p.UpTrackManager.Close(isExpectedToResume)
+	p.UpDataTrackManager.Close()
 
 	p.rpcLock.Lock()
 	clear(p.rpcPendingAcks)
@@ -1437,7 +1443,7 @@ func (p *ParticipantImpl) Close(sendLeave bool, reason types.ParticipantCloseRea
 	// ensure this is synchronized
 	p.CloseSignalConnection(types.SignallingCloseReasonParticipantClose)
 	p.lock.RLock()
-	onClose := maps.Values(p.onClose)
+	onClose := slices.Collect(maps.Values(p.onClose))
 	p.lock.RUnlock()
 	for _, cb := range onClose {
 		cb(p)
@@ -1523,7 +1529,7 @@ func (p *ParticipantImpl) setupMigrationTimerLocked() {
 }
 
 func (p *ParticipantImpl) MaybeStartMigration(force bool, onStart func()) bool {
-	if p.params.UseOneShotSignallingMode {
+	if p.IsClosed() || p.params.UseOneShotSignallingMode {
 		return false
 	}
 
@@ -1615,7 +1621,7 @@ func (p *ParticipantImpl) SetMigrateState(s types.MigrateState) {
 			// callback could close the remote participant/tracks before the local track
 			// is fully active.
 			//
-			// that could lead subscribers to unsubscribe due to source
+			// that could lead to subscribers unsubscribing due to source
 			// track going away, i. e. in this case, the remote track close would have
 			// notified the subscription manager, the subscription manager would
 			// re-resolve to check if the track is still active and unsubscribe if none
@@ -2827,20 +2833,21 @@ func (p *ParticipantImpl) addPendingTrackLocked(req *livekit.AddTrackRequest) *l
 	}
 
 	ti := &livekit.TrackInfo{
-		Type:              req.Type,
-		Name:              req.Name,
-		Width:             req.Width,
-		Height:            req.Height,
-		Muted:             req.Muted,
-		DisableDtx:        req.DisableDtx,
-		Source:            req.Source,
-		Layers:            cloneLayers(req.Layers),
-		DisableRed:        req.DisableRed,
-		Stereo:            req.Stereo,
-		Encryption:        req.Encryption,
-		Stream:            req.Stream,
-		BackupCodecPolicy: backupCodecPolicy,
-		AudioFeatures:     sutils.DedupeSlice(req.AudioFeatures),
+		Type:                  req.Type,
+		Name:                  req.Name,
+		Width:                 req.Width,
+		Height:                req.Height,
+		Muted:                 req.Muted,
+		DisableDtx:            req.DisableDtx,
+		Source:                req.Source,
+		Layers:                cloneLayers(req.Layers),
+		DisableRed:            req.DisableRed,
+		Stereo:                req.Stereo,
+		Encryption:            req.Encryption,
+		Stream:                req.Stream,
+		BackupCodecPolicy:     backupCodecPolicy,
+		AudioFeatures:         sutils.DedupeSlice(req.AudioFeatures),
+		PacketTrailerFeatures: sutils.DedupeSlice(req.PacketTrailerFeatures),
 	}
 	if req.Stereo && !slices.Contains(ti.AudioFeatures, livekit.AudioTrackFeature_TF_STEREO) {
 		ti.AudioFeatures = append(ti.AudioFeatures, livekit.AudioTrackFeature_TF_STEREO)
@@ -3748,12 +3755,12 @@ func (p *ParticipantImpl) SupportsSyncStreamID() bool {
 	return p.ProtocolVersion().SupportsSyncStreamID() && !p.params.ClientInfo.isFirefox() && p.params.SyncStreams
 }
 
-func (p *ParticipantImpl) SupportsTransceiverReuse() bool {
+func (p *ParticipantImpl) SupportsTransceiverReuse(mt types.MediaTrack) bool {
 	if p.params.UseOneShotSignallingMode {
 		return p.ProtocolVersion().SupportsTransceiverReuse()
 	}
 
-	return p.ProtocolVersion().SupportsTransceiverReuse() && !p.SupportsSyncStreamID()
+	return p.ProtocolVersion().SupportsTransceiverReuse() && !p.SupportsSyncStreamID() && (!mt.IsEncrypted() || !p.params.DisableTransceiverReuseForE2EE)
 }
 
 func (p *ParticipantImpl) SendDataMessage(kind livekit.DataPacket_Kind, data []byte, sender livekit.ParticipantID, seq uint32) error {

@@ -1316,6 +1316,7 @@ func TestForwarderGetTranslationParamsAudio(t *testing.T) {
 
 	// should lock onto the first in-order packet
 	expectedTP = TranslationParams{
+		isStarting: true,
 		rtp: TranslationParamsRTP{
 			snOrdering:        SequenceNumberOrderingContiguous,
 			extSequenceNumber: 23333,
@@ -1581,8 +1582,9 @@ func TestForwarderGetTranslationParamsVideo(t *testing.T) {
 		HeaderSize: 6,
 		IsKeyFrame: true,
 	}
-	marshalledVP8, err := expectedVP8.Marshal()
+	marshalledVP8, _ := expectedVP8.Marshal()
 	expectedTP = TranslationParams{
+		isStarting:  true,
 		isSwitching: true,
 		isResuming:  true,
 		rtp: TranslationParamsRTP{

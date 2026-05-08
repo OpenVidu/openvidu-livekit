@@ -4,14 +4,15 @@ import (
 	"context"
 	"errors"
 	"io"
+	"maps"
 	"math"
 	"math/rand/v2"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/frostbyte73/core"
 	"github.com/gammazero/deque"
-	"golang.org/x/exp/maps"
 
 	"github.com/livekit/livekit-server/pkg/agent"
 	"github.com/livekit/livekit-server/pkg/config"
@@ -40,7 +41,12 @@ type TestServer struct {
 func NewTestServer(bus psrpc.MessageBus) *TestServer {
 	localNode, _ := routing.NewLocalNode(nil)
 	return NewTestServerWithService(must.Get(service.NewAgentService(
-		&config.Config{Region: "test"},
+		&config.Config{
+			Region: "test",
+			Agents: agent.Config{
+				TargetLoad: agent.DefaultTargetLoad,
+			},
+		},
 		localNode,
 		bus,
 		auth.NewSimpleKeyProvider("test", "verysecretsecret"),
@@ -418,7 +424,7 @@ func (w *AgentWorker) SimulateRoomJob(roomName string) {
 func (w *AgentWorker) Jobs() []*AgentJob {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return maps.Values(w.jobs)
+	return slices.Collect(maps.Values(w.jobs))
 }
 
 type stableJobLoad struct {

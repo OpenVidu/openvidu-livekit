@@ -15,6 +15,7 @@
 package rtc
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"maps"
@@ -74,6 +75,7 @@ const (
 	negotiationFrequency       = 150 * time.Millisecond
 	negotiationFailedTimeout   = 15 * time.Second
 	dtlsRetransmissionInterval = 100 * time.Millisecond
+	dtlsHandshakeTimeout       = time.Minute
 
 	iceDisconnectedTimeout = 10 * time.Second                          // compatible for ice-lite with firefox client
 	iceFailedTimeout       = 5 * time.Second                           // time between disconnected and failed
@@ -188,6 +190,19 @@ type trackDescription struct {
 	mid    string
 	sender *webrtc.RTPSender
 }
+
+func (t trackDescription) MarshalLogObject(e zapcore.ObjectEncoder) error {
+	e.AddString("mid", t.mid)
+	if t.sender != nil {
+		track := t.sender.Track()
+		if track != nil {
+			e.AddString("trackID", track.ID())
+		}
+	}
+	return nil
+}
+
+// -------------------------------------------------------------------
 
 // PCTransport is a wrapper around PeerConnection, with some helper methods
 type PCTransport struct {
@@ -387,6 +402,9 @@ func newPeerConnection(
 		se.SetLite(false)
 	}
 	se.SetDTLSRetransmissionInterval(dtlsRetransmissionInterval)
+	se.SetDTLSConnectContextMaker(func() (context.Context, func()) {
+		return context.WithTimeout(context.Background(), dtlsHandshakeTimeout)
+	})
 	se.SetICETimeouts(iceDisconnectedTimeout, iceFailedTimeout, iceKeepaliveInterval)
 
 	// if client don't support prflx over relay, we should not expose private address to it, use single external ip as host candidate
@@ -2154,6 +2172,7 @@ func (t *PCTransport) initPCWithPreviousAnswer(previousAnswer webrtc.SessionDesc
 		}
 		mid := lksdp.GetMidValue(m)
 		if mid == "" {
+			t.params.Logger.Warnw("cannot set up peer connection with previous answer, mid not found", nil, "senders", slices.Collect(maps.Keys(senders)))
 			return senders, ErrMidNotFound
 		}
 		tr.SetMid(mid)
@@ -2165,6 +2184,7 @@ func (t *PCTransport) initPCWithPreviousAnswer(previousAnswer webrtc.SessionDesc
 		// set transceiver to inactive
 		tr.SetSender(sender, nil)
 	}
+	t.params.Logger.Debugw("set up peer connection with previous answer", "senders", slices.Collect(maps.Keys(senders)))
 	return senders, nil
 }
 
@@ -2200,7 +2220,7 @@ func (t *PCTransport) SetPreviousSdp(localDescription, remoteDescription *webrtc
 	}
 
 	if localDescription != nil && parseMids {
-		// in migration case, can't reuse transceiver before negotiating excepted tracks
+		// in migration case, can't reuse transceiver before negotiating expected tracks
 		// that were subscribed at previous node
 		t.canReuseTransceiver = false
 		if err := t.parseTrackMid(*localDescription, senders); err != nil {
@@ -2243,6 +2263,9 @@ func (t *PCTransport) parseTrackMid(sd webrtc.SessionDescription, senders map[st
 				t.previousTrackDescription[trackID] = &trackDescription{mid, sender}
 			}
 		}
+	}
+	if len(t.previousTrackDescription) != 0 {
+		t.params.Logger.Debugw("previous track description", t.previousTrackDescription)
 	}
 	return nil
 }
@@ -2524,11 +2547,12 @@ func (t *PCTransport) createAndSendOffer(options *webrtc.OfferOptions) error {
 	}
 
 	// when there's an ongoing negotiation, let it finish and not disrupt its state
-	if t.negotiationState == transport.NegotiationStateRemote {
+	switch t.negotiationState {
+	case transport.NegotiationStateRemote:
 		t.params.Logger.Debugw("skipping negotiation, trying again later")
 		t.setNegotiationState(transport.NegotiationStateRetry)
 		return nil
-	} else if t.negotiationState == transport.NegotiationStateRetry {
+	case transport.NegotiationStateRetry:
 		// already set to retry, we can safely skip this attempt
 		return nil
 	}
@@ -2684,6 +2708,7 @@ func (t *PCTransport) setRemoteDescription(sd webrtc.SessionDescription) error {
 		if !t.canReuseTransceiver {
 			t.canReuseTransceiver = true
 			t.previousTrackDescription = make(map[string]*trackDescription)
+			t.params.Logger.Debugw("enabling transceiver reuse")
 		}
 		t.lock.Unlock()
 	}
@@ -2766,6 +2791,7 @@ func (t *PCTransport) createAndSendAnswer() error {
 	if !t.canReuseTransceiver {
 		t.canReuseTransceiver = true
 		t.previousTrackDescription = make(map[string]*trackDescription)
+		t.params.Logger.Debugw("enabling transceiver reuse")
 	}
 	t.lock.Unlock()
 

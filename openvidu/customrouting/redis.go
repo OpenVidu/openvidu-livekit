@@ -56,7 +56,7 @@ func RegisterNodeCustom(ctx context.Context, rc redis.UniversalClient, nodeId st
 		return nil
 	}
 
-	nodeIP := globalConfig.RTC.NodeIP
+	nodeIP := globalConfig.RTC.NodeIP.PrimaryIP()
 	if nodeIP == "" {
 		return nil
 	}

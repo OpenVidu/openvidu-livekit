@@ -278,9 +278,10 @@ func IsH264KeyFrame(payload []byte) bool {
 				return false
 			}
 			offset := 0
-			if nalu == 26 {
+			switch nalu {
+			case 26:
 				offset = 3
-			} else if nalu == 27 {
+			case 27:
 				offset = 4
 			}
 			if offset >= int(length) {
@@ -367,6 +368,9 @@ func IsAV1KeyFrame(payload []byte) bool {
 			if len(data) <= offset {
 				return nil, offset, offset > 0
 			}
+			if offset >= 4 {
+				return nil, offset, true
+			}
 			l := data[offset]
 			length |= int(l&0x7f) << (offset * 7)
 			offset++
@@ -377,8 +381,7 @@ func IsAV1KeyFrame(payload []byte) bool {
 		if len(data) < offset+length {
 			return data[offset:], len(data), true
 		}
-		return data[offset : offset+length],
-			offset + length, false
+		return data[offset : offset+length], offset + length, false
 	}
 	offset := 1
 	i := 0
@@ -424,10 +427,10 @@ func IsH265KeyFrame(payload []byte) (kf bool) {
 		return false
 	}
 	naluType := (payload[0] & 0x7E) >> 1
-	switch {
-	case naluType == 33 || naluType == 34:
+	switch naluType {
+	case 33, 34:
 		return true
-	case naluType == 48: // AP
+	case 48: // AP
 		idx := 2
 		for idx < len(payload)-2 {
 			// TODO: check the DONL field (controlled by sprop-max-don-diff)
@@ -444,7 +447,7 @@ func IsH265KeyFrame(payload []byte) (kf bool) {
 		}
 		return false
 
-	case naluType == 49: // FU
+	case 49: // FU
 		if len(payload) < 3 {
 			return false
 		}

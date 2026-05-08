@@ -117,6 +117,7 @@ const (
 	ParticipantCloseReasonUserUnavailable
 	ParticipantCloseReasonUserRejected
 	ParticipantCloseReasonMoveFailed
+	ParticipantCloseReasonAgentError
 )
 
 func (p ParticipantCloseReason) String() string {
@@ -177,6 +178,8 @@ func (p ParticipantCloseReason) String() string {
 		return "USER_REJECTED"
 	case ParticipantCloseReasonMoveFailed:
 		return "MOVE_FAILED"
+	case ParticipantCloseReasonAgentError:
+		return "AGENT_ERROR"
 	default:
 		return fmt.Sprintf("%d", int(p))
 	}
@@ -214,6 +217,8 @@ func (p ParticipantCloseReason) ToDisconnectReason() livekit.DisconnectReason {
 		return livekit.DisconnectReason_USER_UNAVAILABLE
 	case ParticipantCloseReasonUserRejected:
 		return livekit.DisconnectReason_USER_REJECTED
+	case ParticipantCloseReasonAgentError:
+		return livekit.DisconnectReason_AGENT_ERROR
 	default:
 		// the other types will map to unknown reason
 		return livekit.DisconnectReason_UNKNOWN_REASON
@@ -382,7 +387,7 @@ type LocalParticipant interface {
 	GetAdaptiveStream() bool
 	ProtocolVersion() ProtocolVersion
 	SupportsSyncStreamID() bool
-	SupportsTransceiverReuse() bool
+	SupportsTransceiverReuse(mt MediaTrack) bool
 	IsUsingSinglePeerConnection() bool
 	IsReady() bool
 	ActiveAt() time.Time
@@ -645,7 +650,8 @@ type ParticipantTelemetryListener interface {
 	OnTrackSubscribeRequested(pID livekit.ParticipantID, ti *livekit.TrackInfo)
 	OnTrackSubscribed(pID livekit.ParticipantID, ti *livekit.TrackInfo, publisherInfo *livekit.ParticipantInfo, shouldSendEvent bool)
 	OnTrackUnsubscribed(pID livekit.ParticipantID, ti *livekit.TrackInfo, shouldSendEvent bool)
-	OnTrackSubscribeFailed(pID livekit.ParticipantID, ti livekit.TrackID, err error, isUserError bool)
+	OnTrackSubscribeFailed(pID livekit.ParticipantID, trackID livekit.TrackID, err error, isUserError bool)
+	OnTrackSubscribeStreamStarted(pID livekit.ParticipantID, ti *livekit.TrackInfo)
 	OnTrackMuted(pID livekit.ParticipantID, ti *livekit.TrackInfo)
 	OnTrackUnmuted(pID livekit.ParticipantID, ti *livekit.TrackInfo)
 	OnTrackPublishedUpdate(pID livekit.ParticipantID, ti *livekit.TrackInfo)
@@ -672,7 +678,9 @@ func (NullParticipantTelemetryListener) OnTrackSubscribed(pID livekit.Participan
 }
 func (NullParticipantTelemetryListener) OnTrackUnsubscribed(pID livekit.ParticipantID, ti *livekit.TrackInfo, shouldSendEvent bool) {
 }
-func (NullParticipantTelemetryListener) OnTrackSubscribeFailed(pID livekit.ParticipantID, ti livekit.TrackID, err error, isUserError bool) {
+func (NullParticipantTelemetryListener) OnTrackSubscribeFailed(pID livekit.ParticipantID, trackID livekit.TrackID, err error, isUserError bool) {
+}
+func (NullParticipantTelemetryListener) OnTrackSubscribeStreamStarted(pID livekit.ParticipantID, ti *livekit.TrackInfo) {
 }
 func (NullParticipantTelemetryListener) OnTrackMuted(pID livekit.ParticipantID, ti *livekit.TrackInfo) {
 }
@@ -761,6 +769,7 @@ type MediaTrack interface {
 	ClearAllReceivers(isExpectedToResume bool)
 
 	IsEncrypted() bool
+	HasPacketTrailer() bool
 }
 
 //counterfeiter:generate . LocalMediaTrack

@@ -375,10 +375,8 @@ type RTPStatsSender struct {
 	nextSenderSnapshotID uint32
 	senderSnapshots      []senderSnapshot
 
-	clockSkewCount         int
-	largeJumpNegativeCount int
-	largeJumpCount         int
-	timeReversedCount      int
+	clockSkewCount    int
+	timeReversedCount int
 }
 
 func NewRTPStatsSender(params RTPStatsParams, cacheSize int) *RTPStatsSender {
@@ -566,58 +564,10 @@ func (r *RTPStatsSender) Update(
 			r.packetsLost--
 			r.setSnInfo(extSequenceNumber, r.extHighestSN, uint16(pktSize), uint8(hdrSize), uint16(payloadSize), marker, true)
 		}
-
-		if !isDuplicate && -gapSN >= cSequenceNumberLargeJumpThreshold {
-			r.largeJumpNegativeCount++
-			if (r.largeJumpNegativeCount-1)%100 == 0 {
-				sulf := &senderUpdateLoggingFields{
-					packetTime:        packetTime,
-					extSequenceNumber: extSequenceNumber,
-					extTimestamp:      extTimestamp,
-					marker:            marker,
-					hdrSize:           hdrSize,
-					payloadSize:       payloadSize,
-					paddingSize:       paddingSize,
-					gapSN:             gapSN,
-					gapTS:             int64(extTimestamp - r.extHighestTS),
-					timeSinceHighest:  packetTime - r.highestTime,
-					rtpStats:          r,
-				}
-				r.logger.Warnw(
-					"large sequence number gap negative", nil,
-					zap.Inline(sulf),
-					"count", r.largeJumpNegativeCount,
-				)
-			}
-		}
 	} else { // in-order
-		if gapSN >= cSequenceNumberLargeJumpThreshold {
-			r.largeJumpCount++
-			if (r.largeJumpCount-1)%100 == 0 {
-				sulf := &senderUpdateLoggingFields{
-					packetTime:        packetTime,
-					extSequenceNumber: extSequenceNumber,
-					extTimestamp:      extTimestamp,
-					marker:            marker,
-					hdrSize:           hdrSize,
-					payloadSize:       payloadSize,
-					paddingSize:       paddingSize,
-					gapSN:             gapSN,
-					gapTS:             int64(extTimestamp - r.extHighestTS),
-					timeSinceHighest:  packetTime - r.highestTime,
-					rtpStats:          r,
-				}
-				r.logger.Warnw(
-					"large sequence number gap", nil,
-					zap.Inline(sulf),
-					"count", r.largeJumpCount,
-				)
-			}
-		}
-
 		if extTimestamp < r.extHighestTS {
 			r.timeReversedCount++
-			if (r.timeReversedCount-1)%100 == 0 {
+			if shouldLog(r.timeReversedCount) {
 				sulf := &senderUpdateLoggingFields{
 					packetTime:        packetTime,
 					extSequenceNumber: extSequenceNumber,
@@ -938,7 +888,7 @@ func (r *RTPStatsSender) MaybeAdjustFirstPacketTime(publisherSRData *livekit.RTC
 		return
 	}
 
-	if _, err, loggingFields := r.maybeAdjustFirstPacketTime(publisherSRData, tsOffset, r.extStartTS); err != nil {
+	if _, loggingFields, err := r.maybeAdjustFirstPacketTime(publisherSRData, tsOffset, r.extStartTS); err != nil {
 		r.logger.Infow(err.Error(), append(loggingFields, "rtpStats", lockedRTPStatsSenderLogEncoder{r})...)
 	}
 }
@@ -1008,7 +958,7 @@ func (r *RTPStatsSender) GetRtcpSenderReport(ssrc uint32, publisherSRData *livek
 		windowClockRate := float64(rtpDiffSinceLastReport) / timeSinceLastReport.Seconds()
 		if timeSinceLastReport.Seconds() > 0.2 && math.Abs(float64(r.clockRate)-windowClockRate) > 0.2*float64(r.clockRate) {
 			r.clockSkewCount++
-			if (r.clockSkewCount-1)%100 == 0 {
+			if shouldLog(r.clockSkewCount) {
 				srlf := &senderReportLoggingFields{
 					srData:             srData,
 					publisherSRData:    publisherSRData,
@@ -1074,7 +1024,7 @@ func (r *RTPStatsSender) DeltaInfo(snapshotID uint32) *RTPDeltaInfo {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
-	deltaInfo, err, loggingFields := r.deltaInfo(
+	deltaInfo, loggingFields, err := r.deltaInfo(
 		snapshotID,
 		r.extStartSN,
 		r.extHighestSN,

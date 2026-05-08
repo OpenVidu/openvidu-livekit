@@ -73,7 +73,7 @@ func NewTURNSecurity(conf *config.Config, rc redis.UniversalClient) *TURNSecurit
 
 	// Always discover this machine's local IPs.
 	localIPs := make(map[string]struct{})
-	ips, _ := rtcconfig.GetLocalIPAddresses(false, nil)
+	ips, _ := rtcconfig.GetLocalIPAddresses(false, false, nil, nil)
 	for _, ip := range ips {
 		if ip != "" {
 			localIPs[ip] = struct{}{}
@@ -83,8 +83,11 @@ func NewTURNSecurity(conf *config.Config, rc redis.UniversalClient) *TURNSecurit
 
 	if rc == nil {
 		allowed := make(map[string]struct{}, 2)
-		if conf.RTC.NodeIP != "" {
-			allowed[conf.RTC.NodeIP] = struct{}{}
+		if conf.RTC.NodeIP.V4 != "" {
+			allowed[conf.RTC.NodeIP.V4] = struct{}{}
+		}
+		if conf.RTC.NodeIP.V6 != "" {
+			allowed[conf.RTC.NodeIP.V6] = struct{}{}
 		}
 		if conf.ResolvedRelayAddress != "" {
 			allowed[conf.ResolvedRelayAddress] = struct{}{}

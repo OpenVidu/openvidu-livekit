@@ -46,8 +46,6 @@ const (
 	LivekitRealm = "livekit"
 
 	allocateRetries = 50
-	turnMinPort     = 1024
-	turnMaxPort     = 30000
 )
 
 // BEGIN OPENVIDU BLOCK — added rc parameter for TURNSecurity
@@ -69,30 +67,17 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 
 	if turnConf.TLSPort <= 0 && turnConf.UDPPort <= 0 {
 		return nil, errors.New("invalid TURN ports")
+	} else if turnConf.TLSPort > 0 {
+		if turnConf.Domain == "" {
+			return nil, errors.New("TURN domain required")
+		}
+
+		if !IsValidDomain(turnConf.Domain) {
+			return nil, errors.New("TURN domain is not correct")
+		}
 	}
 
-	serverConfig := turn.ServerConfig{
-		Realm:         LivekitRealm,
-		AuthHandler:   authHandler,
-		LoggerFactory: pionlogger.NewLoggerFactory(logger.GetLogger()),
-	}
-
-	var relayAddrGen turn.RelayAddressGenerator = &turn.RelayAddressGeneratorPortRange{
-		// BEGIN OPENVIDU BLOCK
-		RelayAddress: net.ParseIP(relayAddress),
-		// END OPENVIDU BLOCK
-		Address:    "0.0.0.0",
-		MinPort:    turnConf.RelayPortRangeStart,
-		MaxPort:    turnConf.RelayPortRangeEnd,
-		MaxRetries: allocateRetries,
-	}
 	// BEGIN OPENVIDU BLOCK
-	relayAddrGen = newOpenViduRelayAddrGen(
-		relayAddrGen,
-		uint16(conf.RTC.ICEPortRangeStart),
-		uint16(conf.RTC.ICEPortRangeEnd),
-		standalone,
-	)
 	if conf.RTC.ICEPortRangeStart != 0 && conf.RTC.ICEPortRangeEnd != 0 {
 		logger.Infow("TURN relay peer port restriction enabled",
 			"minPort", conf.RTC.ICEPortRangeStart,
@@ -104,80 +89,109 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 	permissionHandler := NewTURNSecurity(conf, rc).PermissionHandler()
 	// END OPENVIDU BLOCK
 
-	var logValues []any
+	serverConfig := turn.ServerConfig{
+		Realm:         LivekitRealm,
+		AuthHandler:   authHandler,
+		LoggerFactory: pionlogger.NewLoggerFactory(logger.GetLogger()),
+	}
 
+	var logValues []any
 	logValues = append(logValues, "turn.relay_range_start", turnConf.RelayPortRangeStart)
 	logValues = append(logValues, "turn.relay_range_end", turnConf.RelayPortRangeEnd)
 
-	if turnConf.TLSPort > 0 {
-		if turnConf.Domain == "" {
-			return nil, errors.New("TURN domain required")
+	for _, addr := range turnConf.BindAddresses {
+		// BEGIN OPENVIDU BLOCK
+		// Use the resolved relay address (which may come from explicit config,
+		// preferred interface, or NodeIP) instead of per-bind nodeIP.
+		effectiveRelayIP := relayAddress
+		if effectiveRelayIP == "" {
+			if net.ParseIP(addr).To4() != nil {
+				effectiveRelayIP = conf.RTC.NodeIP.V4
+			} else {
+				effectiveRelayIP = conf.RTC.NodeIP.V6
+			}
+		}
+		// END OPENVIDU BLOCK
+		if effectiveRelayIP == "" {
+			return nil, errors.New("no matching node IP for relay")
 		}
 
-		if !IsValidDomain(turnConf.Domain) {
-			return nil, errors.New("TURN domain is not correct")
+		var relayAddrGen turn.RelayAddressGenerator = &turn.RelayAddressGeneratorPortRange{
+			// BEGIN OPENVIDU BLOCK
+			RelayAddress: net.ParseIP(effectiveRelayIP),
+			// END OPENVIDU BLOCK
+			Address:    addr,
+			MinPort:    turnConf.RelayPortRangeStart,
+			MaxPort:    turnConf.RelayPortRangeEnd,
+			MaxRetries: allocateRetries,
 		}
+		// BEGIN OPENVIDU BLOCK
+		relayAddrGen = newOpenViduRelayAddrGen(
+			relayAddrGen,
+			uint16(conf.RTC.ICEPortRangeStart),
+			uint16(conf.RTC.ICEPortRangeEnd),
+			standalone,
+		)
+		// END OPENVIDU BLOCK
 
-		if !turnConf.ExternalTLS {
-			cert, err := tls.LoadX509KeyPair(turnConf.CertFile, turnConf.KeyFile)
-			if err != nil {
-				return nil, errors.Wrap(err, "TURN tls cert required")
+		if turnConf.TLSPort > 0 {
+			var listener net.Listener
+			var listenerErr error
+
+			if turnConf.ExternalTLS {
+				listener, listenerErr = net.Listen("tcp", net.JoinHostPort(addr, strconv.Itoa(turnConf.TLSPort)))
+			} else {
+				cert, err := tls.LoadX509KeyPair(turnConf.CertFile, turnConf.KeyFile)
+				if err != nil {
+					return nil, errors.Wrap(err, "TURN tls cert required")
+				}
+
+				listener, listenerErr = tls.Listen("tcp", net.JoinHostPort(addr, strconv.Itoa(turnConf.TLSPort)),
+					&tls.Config{
+						MinVersion:   tls.VersionTLS12,
+						Certificates: []tls.Certificate{cert},
+					})
 			}
 
-			tlsListener, err := tls.Listen("tcp4", "0.0.0.0:"+strconv.Itoa(turnConf.TLSPort),
-				&tls.Config{
-					MinVersion:   tls.VersionTLS12,
-					Certificates: []tls.Certificate{cert},
-				})
-			if err != nil {
-				return nil, errors.Wrap(err, "could not listen on TURN TCP port")
+			if listenerErr != nil {
+				return nil, errors.Wrap(listenerErr, "could not listen on TURN TCP port")
 			}
 			if standalone {
-				tlsListener = telemetry.NewListener(tlsListener)
+				listener = telemetry.NewListener(listener)
 			}
 
 			listenerConfig := turn.ListenerConfig{
-				Listener:              tlsListener,
+				Listener:              listener,
 				RelayAddressGenerator: relayAddrGen,
-				PermissionHandler:     permissionHandler, // OPENVIDU
+				// BEGIN OPENVIDU BLOCK
+				PermissionHandler: permissionHandler,
+				// END OPENVIDU BLOCK
 			}
 			serverConfig.ListenerConfigs = append(serverConfig.ListenerConfigs, listenerConfig)
-		} else {
-			tcpListener, err := net.Listen("tcp4", "0.0.0.0:"+strconv.Itoa(turnConf.TLSPort))
+
+			logValues = append(logValues, "turn.portTLS", turnConf.TLSPort, "turn.externalTLS", turnConf.ExternalTLS)
+		}
+
+		if turnConf.UDPPort > 0 {
+			udpListener, err := net.ListenPacket("udp", net.JoinHostPort(addr, strconv.Itoa(turnConf.UDPPort)))
 			if err != nil {
-				return nil, errors.Wrap(err, "could not listen on TURN TCP port")
+				return nil, errors.Wrap(err, "could not listen on TURN UDP port")
 			}
+
 			if standalone {
-				tcpListener = telemetry.NewListener(tcpListener)
+				udpListener = telemetry.NewPacketConn(udpListener, prometheus.Incoming)
 			}
 
-			listenerConfig := turn.ListenerConfig{
-				Listener:              tcpListener,
+			packetConfig := turn.PacketConnConfig{
+				PacketConn:            udpListener,
 				RelayAddressGenerator: relayAddrGen,
-				PermissionHandler:     permissionHandler, // OPENVIDU
+				// BEGIN OPENVIDU BLOCK
+				PermissionHandler: permissionHandler,
+				// END OPENVIDU BLOCK
 			}
-			serverConfig.ListenerConfigs = append(serverConfig.ListenerConfigs, listenerConfig)
+			serverConfig.PacketConnConfigs = append(serverConfig.PacketConnConfigs, packetConfig)
+			logValues = append(logValues, "turn.portUDP", turnConf.UDPPort)
 		}
-		logValues = append(logValues, "turn.portTLS", turnConf.TLSPort, "turn.externalTLS", turnConf.ExternalTLS)
-	}
-
-	if turnConf.UDPPort > 0 {
-		udpListener, err := net.ListenPacket("udp4", "0.0.0.0:"+strconv.Itoa(turnConf.UDPPort))
-		if err != nil {
-			return nil, errors.Wrap(err, "could not listen on TURN UDP port")
-		}
-
-		if standalone {
-			udpListener = telemetry.NewPacketConn(udpListener, prometheus.Incoming)
-		}
-
-		packetConfig := turn.PacketConnConfig{
-			PacketConn:            udpListener,
-			RelayAddressGenerator: relayAddrGen,
-			PermissionHandler:     permissionHandler, // OPENVIDU
-		}
-		serverConfig.PacketConnConfigs = append(serverConfig.PacketConnConfigs, packetConfig)
-		logValues = append(logValues, "turn.portUDP", turnConf.UDPPort)
 	}
 
 	logger.Infow("Starting TURN server", logValues...)
@@ -194,7 +208,18 @@ func resolveTURNRelayAddress(conf *config.Config) (string, error) {
 		if conf.TURN.RelayPreferredInterface != "" {
 			preferredInterfaces = []string{conf.TURN.RelayPreferredInterface}
 		}
-		localIPs, err := rtcconfig.GetLocalIPAddresses(false, preferredInterfaces)
+		var ifFilter func(string) bool
+		if len(preferredInterfaces) > 0 {
+			ifFilter = func(name string) bool {
+				for _, iface := range preferredInterfaces {
+					if name == iface {
+						return true
+					}
+				}
+				return false
+			}
+		}
+		localIPs, err := rtcconfig.GetLocalIPAddresses(false, false, ifFilter, nil)
 		if err != nil {
 			return "", errors.Wrap(err, "could not get local IP addresses for TURN relay")
 		}
@@ -206,7 +231,7 @@ func resolveTURNRelayAddress(conf *config.Config) (string, error) {
 			return localIPs[0], nil
 		}
 	}
-	return conf.RTC.NodeIP, nil
+	return conf.RTC.NodeIP.PrimaryIP(), nil
 }
 
 // END OPENVIDU BLOCK

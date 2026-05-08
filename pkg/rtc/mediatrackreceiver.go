@@ -503,19 +503,17 @@ func (t *MediaTrackReceiver) SetMuted(muted bool) {
 	trackInfo := t.TrackInfoClone()
 	trackInfo.Muted = muted
 	t.trackInfo.Store(trackInfo)
-
-	receivers := t.receivers
 	t.lock.Unlock()
 
-	for _, receiver := range receivers {
-		receiver.SetUpTrackPaused(muted)
-	}
-
-	t.MediaTrackSubscriptions.SetMuted(muted)
+	t.updateTrackInfoOfReceivers()
 }
 
 func (t *MediaTrackReceiver) IsEncrypted() bool {
 	return t.TrackInfo().Encryption != livekit.Encryption_NONE
+}
+
+func (t *MediaTrackReceiver) HasPacketTrailer() bool {
+	return len(t.TrackInfo().GetPacketTrailerFeatures()) > 0
 }
 
 func (t *MediaTrackReceiver) AddOnClose(f func(isExpectedToResume bool)) {
@@ -648,6 +646,8 @@ func (t *MediaTrackReceiver) updateTrackInfoOfReceivers() {
 	for _, r := range t.loadReceivers() {
 		r.UpdateTrackInfo(ti)
 	}
+
+	t.MediaTrackSubscriptions.SetMuted(ti.GetMuted())
 }
 
 func (t *MediaTrackReceiver) SetLayerSsrcsForRid(mimeType mime.MimeType, rid string, ssrc uint32, repairSSRC uint32) {
@@ -683,7 +683,7 @@ func (t *MediaTrackReceiver) SetLayerSsrcsForRid(mimeType mime.MimeType, rid str
 				matchingLayer.RepairSsrc = repairSSRC
 			}
 		}
-		if ssrcFound {
+		if ssrcFound && (matchingLayer.Ssrc != ssrc || matchingLayer.RepairSsrc != repairSSRC) {
 			t.params.Logger.Warnw(
 				"not overriding ssrc", nil,
 				"rid", rid,
@@ -691,7 +691,7 @@ func (t *MediaTrackReceiver) SetLayerSsrcsForRid(mimeType mime.MimeType, rid str
 				"existingSSRC", matchingLayer.Ssrc,
 				"repairSSRC", repairSSRC,
 				"existingRepairSSRC", matchingLayer.RepairSsrc,
-				"trackInfo", trackInfo,
+				"trackInfo", logger.Proto(trackInfo),
 			)
 		}
 
@@ -848,7 +848,6 @@ func (t *MediaTrackReceiver) UpdateCodecRids(mimeType mime.MimeType, rids buffer
 }
 
 func (t *MediaTrackReceiver) UpdateTrackInfo(ti *livekit.TrackInfo) {
-	updateMute := false
 	clonedInfo := utils.CloneProto(ti)
 
 	t.lock.Lock()
@@ -889,15 +888,8 @@ func (t *MediaTrackReceiver) UpdateTrackInfo(ti *livekit.TrackInfo) {
 			clonedInfo.Layers = ci.Layers
 		}
 	}
-	if trackInfo.Muted != clonedInfo.Muted {
-		updateMute = true
-	}
 	t.trackInfo.Store(clonedInfo)
 	t.lock.Unlock()
-
-	if updateMute {
-		t.SetMuted(clonedInfo.Muted)
-	}
 
 	t.updateTrackInfoOfReceivers()
 }

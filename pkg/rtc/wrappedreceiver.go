@@ -16,12 +16,12 @@ package rtc
 
 import (
 	"errors"
+	"maps"
+	"slices"
 	"sync"
 
 	"github.com/pion/webrtc/v4"
 	"go.uber.org/atomic"
-	"golang.org/x/exp/maps"
-	"golang.org/x/exp/slices"
 
 	protoCodecs "github.com/livekit/protocol/codecs"
 	"github.com/livekit/protocol/codecs/mime"
@@ -196,8 +196,6 @@ type DummyReceiver struct {
 	settingsLock          sync.Mutex
 	maxExpectedLayerValid bool
 	maxExpectedLayer      int32
-	pausedValid           bool
-	paused                bool
 
 	redReceiver, primaryReceiver *DummyRedReceiver
 }
@@ -246,17 +244,10 @@ func (d *DummyReceiver) Upgrade(receiver sfu.TrackReceiver) {
 	d.settingsLock.Lock()
 	maxExpectedLayerValid := d.maxExpectedLayerValid
 	d.maxExpectedLayerValid = false
-
-	pausedValid := d.pausedValid
-	d.pausedValid = false
 	d.settingsLock.Unlock()
 
 	if maxExpectedLayerValid {
 		receiver.SetMaxExpectedSpatialLayer(d.maxExpectedLayer)
-	}
-
-	if pausedValid {
-		receiver.SetUpTrackPaused(d.paused)
 	}
 
 	d.settingsLock.Lock()
@@ -332,22 +323,6 @@ func (d *DummyReceiver) SendPLI(layer int32, force bool) {
 	}
 }
 
-func (d *DummyReceiver) SetUpTrackPaused(paused bool) {
-	d.settingsLock.Lock()
-	receiver := d.getReceiver()
-	if receiver != nil {
-		d.pausedValid = false
-	} else {
-		d.pausedValid = true
-		d.paused = paused
-	}
-	d.settingsLock.Unlock()
-
-	if receiver != nil {
-		receiver.SetUpTrackPaused(paused)
-	}
-}
-
 func (d *DummyReceiver) SetMaxExpectedSpatialLayer(layer int32) {
 	d.settingsLock.Lock()
 	receiver := d.getReceiver()
@@ -394,7 +369,7 @@ func (d *DummyReceiver) GetDownTracks() []sfu.TrackSender {
 	if receiver := d.getReceiver(); receiver != nil {
 		return receiver.GetDownTracks()
 	}
-	return maps.Values(d.downTracks)
+	return slices.Collect(maps.Values(d.downTracks))
 }
 
 func (d *DummyReceiver) DebugInfo() map[string]any {
@@ -567,7 +542,7 @@ func (d *DummyRedReceiver) GetDownTracks() []sfu.TrackSender {
 	if r, ok := d.redReceiver.Load().(sfu.TrackReceiver); ok {
 		return r.GetDownTracks()
 	}
-	return maps.Values(d.downTracks)
+	return slices.Collect(maps.Values(d.downTracks))
 }
 
 func (d *DummyRedReceiver) ReadRTP(buf []byte, layer uint8, esn uint64) (int, error) {

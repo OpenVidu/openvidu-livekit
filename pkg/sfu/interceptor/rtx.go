@@ -92,7 +92,7 @@ func (f *RTXInfoExtractorFactory) SetStreamInfo(ssrc uint32, mid, rid, rsid stri
 			if info.mid == mid && info.rsid == rid {
 				repairSsrc = repair
 				baseSsrc = ssrc
-				repairSid = info.rid
+				repairSid = rid
 				delete(f.streams, repair)
 				break
 			}
@@ -114,6 +114,8 @@ func (f *RTXInfoExtractorFactory) SetStreamInfo(ssrc uint32, mid, rid, rsid stri
 		f.onRTXPairFound(repairSsrc, baseSsrc, repairSid)
 	}
 }
+
+// ------------------------------------------
 
 type RTXInfoExtractor struct {
 	interceptor.NoOp
@@ -142,6 +144,8 @@ func (u *RTXInfoExtractor) BindRemoteStream(info *interceptor.StreamInfo, reader
 		logger:    u.logger,
 	}
 }
+
+// ------------------------------------------
 
 type rtxInfoReader struct {
 	tryTimes  int
@@ -186,7 +190,7 @@ func (r *rtxInfoReader) Read(b []byte, a interceptor.Attributes) (int, intercept
 		go r.factory.SetStreamInfo(header.SSRC, mid, rid, rsid)
 	} else {
 		// ignore padding only packet for probe count
-		if !(header.Padding && n-header.MarshalSize()-int(b[n-1]) == 0) {
+		if !header.Padding || n-header.MarshalSize()-int(b[n-1]) != 0 {
 			r.tryTimes--
 		}
 	}

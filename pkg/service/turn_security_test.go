@@ -53,7 +53,7 @@ func checkPermission(handler func(net.Addr, net.IP) bool, ip string) bool {
 
 func TestTURNSecurity_Static_AllowsNodeIP(t *testing.T) {
 	conf := &config.Config{}
-	conf.RTC.NodeIP = "10.0.0.1"
+	conf.RTC.NodeIP = rtcconfig.NodeIP{V4: "10.0.0.1"}
 	conf.ResolvedRelayAddress = "192.168.1.1"
 
 	s := NewTURNSecurity(conf, nil)
@@ -64,7 +64,7 @@ func TestTURNSecurity_Static_AllowsNodeIP(t *testing.T) {
 
 func TestTURNSecurity_Static_AllowsRelayAddress(t *testing.T) {
 	conf := &config.Config{}
-	conf.RTC.NodeIP = "10.0.0.1"
+	conf.RTC.NodeIP = rtcconfig.NodeIP{V4: "10.0.0.1"}
 	conf.ResolvedRelayAddress = "192.168.1.1"
 
 	s := NewTURNSecurity(conf, nil)
@@ -75,7 +75,7 @@ func TestTURNSecurity_Static_AllowsRelayAddress(t *testing.T) {
 
 func TestTURNSecurity_Static_DeniesUnknownIP(t *testing.T) {
 	conf := &config.Config{}
-	conf.RTC.NodeIP = "10.0.0.1"
+	conf.RTC.NodeIP = rtcconfig.NodeIP{V4: "10.0.0.1"}
 	conf.ResolvedRelayAddress = "192.168.1.1"
 
 	s := NewTURNSecurity(conf, nil)
@@ -96,7 +96,7 @@ func TestTURNSecurity_Static_EmptyConfig(t *testing.T) {
 
 func TestTURNSecurity_Static_SameNodeIPAndRelay(t *testing.T) {
 	conf := &config.Config{}
-	conf.RTC.NodeIP = "10.0.0.1"
+	conf.RTC.NodeIP = rtcconfig.NodeIP{V4: "10.0.0.1"}
 	conf.ResolvedRelayAddress = "10.0.0.1"
 
 	s := NewTURNSecurity(conf, nil)
@@ -108,7 +108,7 @@ func TestTURNSecurity_Static_SameNodeIPAndRelay(t *testing.T) {
 
 func TestTURNSecurity_Static_IPv6(t *testing.T) {
 	conf := &config.Config{}
-	conf.RTC.NodeIP = "::1"
+	conf.RTC.NodeIP = rtcconfig.NodeIP{V6: "::1"}
 	conf.ResolvedRelayAddress = "fd00::1"
 
 	s := NewTURNSecurity(conf, nil)
@@ -121,7 +121,7 @@ func TestTURNSecurity_Static_IPv6(t *testing.T) {
 
 func TestTURNSecurity_Static_IPv4MappedIPv6(t *testing.T) {
 	conf := &config.Config{}
-	conf.RTC.NodeIP = "10.0.0.1"
+	conf.RTC.NodeIP = rtcconfig.NodeIP{V4: "10.0.0.1"}
 
 	s := NewTURNSecurity(conf, nil)
 	handler := s.PermissionHandler()
@@ -227,7 +227,7 @@ func TestTURNSecurity_Redis_AllowsLocalMachineIPs(t *testing.T) {
 	s := NewTURNSecurity(&config.Config{}, rc)
 	handler := s.PermissionHandler()
 
-	localIPs, err := rtcconfig.GetLocalIPAddresses(false, nil)
+	localIPs, err := rtcconfig.GetLocalIPAddresses(false, false, nil, nil)
 	if err != nil {
 		t.Skipf("could not get local IP addresses: %v", err)
 	}
@@ -243,13 +243,13 @@ func TestTURNSecurity_Redis_AllowsLocalMachineIPs(t *testing.T) {
 
 func TestTURNSecurity_Static_AllowsLocalMachineIPs(t *testing.T) {
 	conf := &config.Config{}
-	conf.RTC.NodeIP = "10.0.0.1"
+	conf.RTC.NodeIP = rtcconfig.NodeIP{V4: "10.0.0.1"}
 	conf.ResolvedRelayAddress = "192.168.1.1"
 
 	s := NewTURNSecurity(conf, nil)
 	handler := s.PermissionHandler()
 
-	localIPs, err := rtcconfig.GetLocalIPAddresses(false, nil)
+	localIPs, err := rtcconfig.GetLocalIPAddresses(false, false, nil, nil)
 	if err != nil {
 		t.Skipf("could not get local IP addresses: %v", err)
 	}
@@ -454,7 +454,7 @@ func TestTURNSecurity_Redis_ConcurrentAccess(t *testing.T) {
 
 func TestTURNSecurity_Static_ConcurrentAccess(t *testing.T) {
 	conf := &config.Config{}
-	conf.RTC.NodeIP = "10.0.0.1"
+	conf.RTC.NodeIP = rtcconfig.NodeIP{V4: "10.0.0.1"}
 	conf.ResolvedRelayAddress = "192.168.1.1"
 
 	s := NewTURNSecurity(conf, nil)

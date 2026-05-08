@@ -31,8 +31,6 @@ import (
 const (
 	cFirstPacketTimeAdjustWindow    = 2 * time.Minute
 	cFirstPacketTimeAdjustThreshold = 15 * 1e9
-
-	cSequenceNumberLargeJumpThreshold = 100
 )
 
 // -------------------------------------------------------
@@ -402,7 +400,7 @@ func (r *rtpStatsBase) maybeAdjustFirstPacketTime(
 	srData *livekit.RTCPSenderReportState,
 	tsOffset uint64,
 	extStartTS uint64,
-) (adjustment int64, err error, loggingFields []any) {
+) (adjustment int64, loggingFields []any, err error) {
 	nowNano := mono.UnixNano()
 	if time.Duration(nowNano-r.startTime) > cFirstPacketTimeAdjustWindow {
 		return
@@ -478,7 +476,7 @@ func (r *rtpStatsBase) deltaInfo(
 	snapshotID uint32,
 	extStartSN uint64,
 	extHighestSN uint64,
-) (deltaInfo *RTPDeltaInfo, err error, loggingFields []any) {
+) (deltaInfo *RTPDeltaInfo, loggingFields []any, err error) {
 	if r.clockRate == 0 {
 		return
 	}

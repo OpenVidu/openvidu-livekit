@@ -207,7 +207,7 @@ func (s *StatsWorker) MarshalLogObject(e zapcore.ObjectEncoder) error {
 	e.AddString("room", string(s.roomName))
 	e.AddString("roomID", string(s.roomID))
 	e.AddString("participant", string(s.participantIdentity))
-	e.AddString("pID", string(s.participantID))
+	e.AddString("participantID", string(s.participantID))
 	e.AddBool("isConnected", s.isConnected)
 	e.AddTime("closedAt", s.closedAt)
 	e.AddObject("refCount", s.refCount)
@@ -348,7 +348,9 @@ func CondenseStat(stat *livekit.AnalyticsStat) (ps CondensedStat, ok bool) {
 		ps.Bytes += stream.PrimaryBytes
 		ps.Packets += stream.PrimaryPackets
 		ps.PacketsLost += stream.PacketsLost
-		ps.Frames += stream.Frames
+		if stream.Frames > ps.Frames {
+			ps.Frames = stream.Frames
+		}
 	}
 
 	return

@@ -13,7 +13,7 @@ import (
 
 func TestIsPubliclyReachable(t *testing.T) {
 	t.Run("returns true when NAT1To1IPs is configured", func(t *testing.T) {
-		rtcConf := &rtcconfig.RTCConfig{NodeIP: "10.0.0.1"}
+		rtcConf := &rtcconfig.RTCConfig{NodeIP: rtcconfig.NodeIP{V4: "10.0.0.1"}}
 		webrtcConf := &rtcconfig.WebRTCConfig{NAT1To1IPs: []string{"203.0.113.10"}}
 
 		reachable, err := IsPubliclyReachable(rtcConf, webrtcConf)
@@ -22,7 +22,7 @@ func TestIsPubliclyReachable(t *testing.T) {
 	})
 
 	t.Run("returns false when NodeIP matches a local IP and NAT1To1IPs is empty", func(t *testing.T) {
-		localIPs, err := rtcconfig.GetLocalIPAddresses(false, nil)
+		localIPs, err := rtcconfig.GetLocalIPAddresses(false, false, nil, nil)
 		if err != nil {
 			t.Skipf("could not get local IP addresses: %v", err)
 		}
@@ -30,7 +30,7 @@ func TestIsPubliclyReachable(t *testing.T) {
 			t.Skip("no local IP addresses found")
 		}
 
-		rtcConf := &rtcconfig.RTCConfig{NodeIP: localIPs[0]}
+		rtcConf := &rtcconfig.RTCConfig{NodeIP: rtcconfig.NodeIP{V4: localIPs[0]}}
 		webrtcConf := &rtcconfig.WebRTCConfig{}
 
 		reachable, err := IsPubliclyReachable(rtcConf, webrtcConf)
@@ -39,7 +39,7 @@ func TestIsPubliclyReachable(t *testing.T) {
 	})
 
 	t.Run("returns false when NodeIP is external but fails UDP hairpin validation", func(t *testing.T) {
-		rtcConf := &rtcconfig.RTCConfig{NodeIP: "203.0.113.250"}
+		rtcConf := &rtcconfig.RTCConfig{NodeIP: rtcconfig.NodeIP{V4: "203.0.113.250"}}
 		webrtcConf := &rtcconfig.WebRTCConfig{}
 
 		reachable, err := IsPubliclyReachable(rtcConf, webrtcConf)

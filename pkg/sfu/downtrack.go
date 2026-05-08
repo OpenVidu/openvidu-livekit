@@ -43,6 +43,7 @@ import (
 	"github.com/livekit/livekit-server/pkg/sfu/ccutils"
 	"github.com/livekit/livekit-server/pkg/sfu/connectionquality"
 	"github.com/livekit/livekit-server/pkg/sfu/pacer"
+	"github.com/livekit/livekit-server/pkg/sfu/packettrailer"
 	act "github.com/livekit/livekit-server/pkg/sfu/rtpextension/abscapturetime"
 	dd "github.com/livekit/livekit-server/pkg/sfu/rtpextension/dependencydescriptor"
 	pd "github.com/livekit/livekit-server/pkg/sfu/rtpextension/playoutdelay"
@@ -261,6 +262,7 @@ type DownTrackListener interface {
 	OnRttUpdate(rtt uint32)
 	OnCodecNegotiated(webrtc.RTPCodecCapability)
 	OnDownTrackClose(isExpectedToResume bool)
+	OnStreamStarted()
 }
 
 // -------------------------------------------------------------------
@@ -309,6 +311,7 @@ type DownTrackParams struct {
 	RTCPWriter                     func([]rtcp.Packet) error
 	DisableSenderReportPassThrough bool
 	SupportsCodecChange            bool
+	StripPacketTrailer             bool
 	Listener                       DownTrackListener
 }
 
@@ -864,17 +867,19 @@ func (d *DownTrack) SetReceiver(r TrackReceiver) {
 
 // Sets RTP header extensions for this track
 func (d *DownTrack) setRTPHeaderExtensions() {
+	isBWEEnabled := false
+	bweType := bwe.BWETypeNone
 	sal := d.getStreamAllocatorListener()
-	if sal == nil {
-		return
+	if sal != nil {
+		isBWEEnabled = sal.IsBWEEnabled(d)
+		bweType = sal.BWEType()
 	}
-	isBWEEnabled := sal.IsBWEEnabled(d)
-	bweType := sal.BWEType()
 
 	tr := d.transceiver.Load()
 	if tr == nil {
 		return
 	}
+
 	var extensions []webrtc.RTPHeaderExtensionParameter
 	if sender := tr.Sender(); sender != nil {
 		extensions = sender.GetParameters().HeaderExtensions
@@ -885,22 +890,51 @@ func (d *DownTrack) setRTPHeaderExtensions() {
 	for _, ext := range extensions {
 		switch ext.URI {
 		case sdp.ABSSendTimeURI:
-			if isBWEEnabled && bweType == bwe.BWETypeRemote {
-				d.absSendTimeExtID = ext.ID
-			} else {
-				d.absSendTimeExtID = 0
+			if sal != nil {
+				if isBWEEnabled && bweType == bwe.BWETypeRemote {
+					if d.absSendTimeExtID != 0 && d.absSendTimeExtID != ext.ID {
+						d.params.Logger.Infow("absSendTimeExtID mismatch", "current", d.absSendTimeExtID, "negotiated", ext.ID)
+					}
+					d.absSendTimeExtID = ext.ID
+				} else {
+					if d.absSendTimeExtID != 0 {
+						d.params.Logger.Infow("absSendTimeExtID disabled unexpectedly", "negotiated", ext.ID)
+					}
+					d.absSendTimeExtID = 0
+				}
 			}
+
 		case dd.ExtensionURI:
-			d.dependencyDescriptorExtID = ext.ID
-		case pd.PlayoutDelayURI:
-			d.playoutDelayExtID = ext.ID
-		case sdp.TransportCCURI:
-			if isBWEEnabled && bweType == bwe.BWETypeSendSide {
-				d.transportWideExtID = ext.ID
-			} else {
-				d.transportWideExtID = 0
+			if d.dependencyDescriptorExtID != 0 && d.dependencyDescriptorExtID != ext.ID {
+				d.params.Logger.Infow("dependencyDescriptorExtID mismatch", "current", d.dependencyDescriptorExtID, "negotiated", ext.ID)
 			}
+			d.dependencyDescriptorExtID = ext.ID
+
+		case pd.PlayoutDelayURI:
+			if d.playoutDelayExtID != 0 && d.playoutDelayExtID != ext.ID {
+				d.params.Logger.Infow("playoutDelayExtID mismatch", "current", d.playoutDelayExtID, "negotiated", ext.ID)
+			}
+			d.playoutDelayExtID = ext.ID
+
+		case sdp.TransportCCURI:
+			if sal != nil {
+				if isBWEEnabled && bweType == bwe.BWETypeSendSide {
+					if d.transportWideExtID != 0 && d.transportWideExtID != ext.ID {
+						d.params.Logger.Infow("transportWideExtID mismatch", "current", d.transportWideExtID, "negotiated", ext.ID)
+					}
+					d.transportWideExtID = ext.ID
+				} else {
+					if d.transportWideExtID != 0 {
+						d.params.Logger.Infow("transportWideExtID disabled unexpectedly", "negotiated", ext.ID)
+					}
+					d.transportWideExtID = 0
+				}
+			}
+
 		case act.AbsCaptureTimeURI:
+			if d.absCaptureTimeExtID != 0 && d.absCaptureTimeExtID != ext.ID {
+				d.params.Logger.Infow("absCaptureTimeExtID mismatch", "current", d.absCaptureTimeExtID, "negotiated", ext.ID)
+			}
 			d.absCaptureTimeExtID = ext.ID
 		}
 	}
@@ -1057,6 +1091,12 @@ func (d *DownTrack) WriteRTP(extPkt *buffer.ExtPacket, layer int32) int32 {
 	}
 	payload = payload[:len(tp.codecBytes)+n]
 
+	if d.params.StripPacketTrailer {
+		if strip := packettrailer.StripTrailer(payload, tp.marker); strip > 0 {
+			payload = payload[:len(payload)-strip]
+		}
+	}
+
 	// translate RTP header
 	hdr := RTPHeaderFactory.Get().(*rtp.Header)
 	*hdr = rtp.Header{
@@ -1172,6 +1212,10 @@ func (d *DownTrack) WriteRTP(extPkt *buffer.ExtPacket, layer int32) int32 {
 		if sal := d.getStreamAllocatorListener(); sal != nil {
 			sal.OnResume(d)
 		}
+	}
+
+	if tp.isStarting {
+		d.params.Listener.OnStreamStarted()
 	}
 	return 1
 }
@@ -1367,9 +1411,9 @@ func (d *DownTrack) Close() {
 	d.CloseWithFlush(true, true)
 }
 
-// CloseWithFlush - flush used to indicate whether send blank frame to flush
+// CloseWithFlush - `flush` used to indicate whether send blank frame to flush
 // decoder of client.
-//  1. When transceiver is reused by other participant's video track,
+//  1. When transceiver of this track is reused by some other participant's video track,
 //     set flush=true to avoid previous video shows before new stream is displayed.
 //  2. in case of session migration, participant migrate from other node, video track should
 //     be resumed with same participant, set flush=false since we don't need to flush decoder.
@@ -1381,7 +1425,7 @@ func (d *DownTrack) CloseWithFlush(flush bool, isEnding bool) {
 		return
 	}
 
-	d.params.Logger.Debugw("close downtrack", "flushBlankFrame", flush)
+	d.params.Logger.Debugw("close downtrack", "flushBlankFrame", flush, "isEnding", isEnding)
 	if d.bindState.Load() == bindStateBound {
 		d.forwarder.Mute(true, true)
 
@@ -1444,7 +1488,7 @@ func (d *DownTrack) CloseWithFlush(flush bool, isEnding bool) {
 	close(d.keyFrameRequesterCh)
 	d.keyFrameRequesterChMu.Unlock()
 
-	d.params.Listener.OnDownTrackClose(!isEnding)
+	d.params.Listener.OnDownTrackClose(!flush)
 }
 
 func (d *DownTrack) SetMaxSpatialLayer(spatialLayer int32) {
@@ -2173,6 +2217,12 @@ func (d *DownTrack) retransmitPacket(epm *extPacketMeta, sourcePkt []byte, isPro
 		copy(payload[rtxOffset:], epm.codecBytes[:epm.numCodecBytesOut])
 		copy(payload[rtxOffset+int(epm.numCodecBytesOut):], pkt.Payload[epm.numCodecBytesIn:])
 		payload = payload[:rtxOffset+int(epm.numCodecBytesOut)+len(pkt.Payload)-int(epm.numCodecBytesIn)]
+	}
+
+	if d.params.StripPacketTrailer {
+		if strip := packettrailer.StripTrailer(payload[rtxOffset:], epm.marker); strip > 0 {
+			payload = payload[:len(payload)-strip]
+		}
 	}
 
 	headerSize := hdr.MarshalSize()

@@ -20,22 +20,23 @@ func IsPubliclyReachable(rtcConfig *rtcconfig.RTCConfig, webrtcConfig *rtcconfig
 		return true, nil
 	}
 
-	localIPs, err := rtcconfig.GetLocalIPAddresses(false, nil)
+	localIPs, err := rtcconfig.GetLocalIPAddresses(false, false, nil, nil)
 	if err != nil {
 		logger.Warnw("could not get local IP addresses", err)
 		return false, err
 	}
 
+	nodeIP := rtcConfig.NodeIP.PrimaryIP()
 	for _, localIP := range localIPs {
-		if localIP == rtcConfig.NodeIP {
+		if localIP == nodeIP {
 			return false, nil
 		}
 	}
 
 	port := int(rtcConfig.ICEPortRangeStart)
-	if err := ValidateExternalIP(context.Background(), rtcConfig.NodeIP, port); err != nil {
+	if err := ValidateExternalIP(context.Background(), nodeIP, port); err != nil {
 		logger.Warnw("external IP is not publicly reachable (UDP hairpin test failed)",
-			err, "nodeIP", rtcConfig.NodeIP)
+			err, "nodeIP", nodeIP)
 		return false, nil
 	}
 

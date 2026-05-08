@@ -2,6 +2,81 @@
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] - 2026-04-17
+
+NOTE: Minor version bump that enables data tracks (https://docs.livekit.io/transport/data/data-tracks/) by default.
+
+### Added
+- Embedded turn test (#4412)
+- chore: log API key during worker registration (#4428)
+- Add some simple data track stats (#4431)
+- Add `Close` method for UpDataTrackManager and call it on participant (#4432)
+- Log join duration. (#4433)
+- Add subscriber stream start event notification (#4449)
+
+### Changed
+- Cleaning up some logs and standardising log frequency. (#4420)
+- Keep subscription synchronous when publisher is expected to resume. (#4424, #4425)
+- Do not close publisher peer connection to aid migration. (#4426, #4427)
+- Enable data tracks by default. (#4429)
+- chore: pin GH commits and switch to golangci-lint (#4444)
+- Switch to stdlib maps, slices (#4445)
+- Store concrete ICE candidate for remote candidates. (#4458)
+
+### Fixed
+- clear track notifier observers on subscription teardown (#4413)
+- Guard against timestamp inversion in RED -> Opus conversion. (#4414, #4415, #4418)
+- ensure participant init is correctly serialized for logging (#4417)
+- Clean up data track observers on unsubscribe. (#4421)
+- compute agent dispatch affinity from target load (#4442)
+- Apply IPFilter when get local ip (#4440)
+- Unsubscribe from data track on close (#4443)
+- Use Muted in TrackInfo to propagated published track muted. (#4453)
+- fix: limit join request and WHIP request body to http.DefaultMaxHeaderBytes (#4450)
+- fix publisher frame count reporting for simulcast streams (#4457)
+
+## [1.10.1] - 2026-03-30
+
+### Added
+- add packet trailer stripping support (#4361)
+- Path check helpers (#4392)
+- add deadline to dtls connect context (#4395)
+- feat(agent-dispatch): add job restart policy (#4401)
+
+### Changed
+- Close both peer connections to aid migration. (#4382)
+
+### Fixed
+- Fix TURN server URL (#4389)
+- AV1 parser overflow fix. (#4405)
+- Address malformed H264/H265 parsing issues (#4407)
+
+## [1.10.0] - 2026-03-23
+
+## PLEASE NOTE: The logging key for participant session ID (a.k.a participant SID) has been changed from `pID` to `participantID` in this release for the sake of clarity. Hence the minor version bump.
+
+### Added
+- Add option to require media sections when participant joining (#4347, #4354)
+- Support originating calls from custom domains (#4349)
+- Add StopEgress function to the EgressLauncher interface (#4353)
+- Add option to not re-use transceiver in e2ee. (#4356)
+- Add API to restart lite stats. (#4366, #4368)
+* handle AGENT_ERROR disconnect reason (#4339)
+
+### Changed
+- Mark last run of grow bucket outside goroutine. (#4348)
+- Refine ipv6 support (#4352)
+- Sample data send error logging. (#4358)
+- Switch data track extension to 1-byte ID/length. (#4362)
+- Do not kick off migration of closed participant (#4363)
+- Do not block all ext ID determination on stream allocator listener (#4364)
+- Rename log field pID to participantID (#4365)
+- Replace deprecated io/ioutil with io in whipservice (#4375)
+- Update grpc to address CVE-2026-33186 (#4381)
+
+### Fixed
+- Fix repair stream ID reporting for RTX pairing. (#4369)
+
 ## [1.9.12] - 2026-03-05
 
 ### Added
