@@ -347,7 +347,7 @@ func addMongoIdToEvent(eventMap map[string]interface{}, event *livekit.Analytics
 }
 
 func addMongoIdToStat(statMap map[string]interface{}, stat *livekit.AnalyticsStat) {
-	var id string = stat.RoomId + ":" + stat.ParticipantId + ":" + stat.TrackId + ":" + stat.Kind.String() + ":" + stat.Node + ":" + getTimestampFromStruct(stat.TimeStamp)
+	var id = stat.RoomId + ":" + stat.ParticipantId + ":" + stat.TrackId + ":" + stat.Kind.String() + ":" + stat.Node + ":" + getTimestampFromStruct(stat.TimeStamp)
 	statMap["_id"] = hashFromStringId(id)
 }
 

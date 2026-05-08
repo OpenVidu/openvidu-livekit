@@ -318,7 +318,7 @@ func obtainMapInterfaceFromStat(stat *livekit.AnalyticsStat) map[string]interfac
 }
 
 func getTimestampFromStruct(timestamp *timestamppb.Timestamp) string {
-	var timestampKey string = strconv.FormatInt(timestamp.Seconds, 10)
+	var timestampKey = strconv.FormatInt(timestamp.Seconds, 10)
 	if timestamp.Nanos > 0 {
 		timestampKey += strconv.FormatInt(int64(timestamp.Nanos), 10)
 	}
@@ -388,12 +388,12 @@ func parseEgressRequest(egressRequestMap map[string]interface{}, egressRequest i
 func parseRoomCompositeEgressRequest(roomCompositeMap map[string]interface{}, roomComposite *livekit.RoomCompositeEgressRequest) {
 	var options = roomComposite.Options
 	if options != nil {
-		switch options.(type) {
+		switch options := options.(type) {
 		case *livekit.RoomCompositeEgressRequest_Preset:
 			roomCompositeMap["Options"].(map[string]interface{})["Preset"] =
-				options.(*livekit.RoomCompositeEgressRequest_Preset).Preset.String()
+				options.Preset.String()
 		case *livekit.RoomCompositeEgressRequest_Advanced:
-			var advancedOptions = options.(*livekit.RoomCompositeEgressRequest_Advanced).Advanced
+			var advancedOptions = options.Advanced
 			if advancedOptions != nil {
 				parseEncodingOptions(roomCompositeMap, advancedOptions)
 			}
@@ -412,12 +412,12 @@ func parseRoomCompositeEgressRequest(roomCompositeMap map[string]interface{}, ro
 func parseWebEgressRequest(webRequestMap map[string]interface{}, webRequest *livekit.WebEgressRequest) {
 	var options = webRequest.Options
 	if options != nil {
-		switch options.(type) {
+		switch options := options.(type) {
 		case *livekit.WebEgressRequest_Preset:
 			webRequestMap["Options"].(map[string]interface{})["Preset"] =
-				options.(*livekit.WebEgressRequest_Preset).Preset.String()
+				options.Preset.String()
 		case *livekit.WebEgressRequest_Advanced:
-			var advancedOptions = options.(*livekit.WebEgressRequest_Advanced).Advanced
+			var advancedOptions = options.Advanced
 			if advancedOptions != nil {
 				parseEncodingOptions(webRequestMap, advancedOptions)
 			}
@@ -436,12 +436,12 @@ func parseWebEgressRequest(webRequestMap map[string]interface{}, webRequest *liv
 func parseParticipantEgressRequest(participantRequestMap map[string]interface{}, participantRequest *livekit.ParticipantEgressRequest) {
 	var options = participantRequest.Options
 	if options != nil {
-		switch options.(type) {
+		switch options := options.(type) {
 		case *livekit.ParticipantEgressRequest_Preset:
 			participantRequestMap["Options"].(map[string]interface{})["Preset"] =
-				options.(*livekit.ParticipantEgressRequest_Preset).Preset.String()
+				options.Preset.String()
 		case *livekit.ParticipantEgressRequest_Advanced:
-			var advancedOptions = options.(*livekit.ParticipantEgressRequest_Advanced).Advanced
+			var advancedOptions = options.Advanced
 			if advancedOptions != nil {
 				parseEncodingOptions(participantRequestMap, advancedOptions)
 			}
@@ -460,12 +460,12 @@ func parseParticipantEgressRequest(participantRequestMap map[string]interface{},
 func parseTrackCompositeEgressRequest(trackCompositeMap map[string]interface{}, trackComposite *livekit.TrackCompositeEgressRequest) {
 	var options = trackComposite.Options
 	if options != nil {
-		switch options.(type) {
+		switch options := options.(type) {
 		case *livekit.TrackCompositeEgressRequest_Preset:
 			trackCompositeMap["Options"].(map[string]interface{})["Preset"] =
-				options.(*livekit.TrackCompositeEgressRequest_Preset).Preset.String()
+				options.Preset.String()
 		case *livekit.TrackCompositeEgressRequest_Advanced:
-			var advancedOptions = options.(*livekit.TrackCompositeEgressRequest_Advanced).Advanced
+			var advancedOptions = options.Advanced
 			if advancedOptions != nil {
 				parseEncodingOptions(trackCompositeMap, advancedOptions)
 			}

@@ -56,8 +56,8 @@ func NewRedisDatabaseClient(conf *openviduconfig.AnalyticsConfig, redisConfig *r
 	return redisDatabaseClient, nil
 }
 
-func (m *RedisDatabaseClient) InitializeDatabase() error {
-	return m.createRedisJsonIndexDocuments()
+func (r *RedisDatabaseClient) InitializeDatabase() error {
+	return r.createRedisJsonIndexDocuments()
 }
 
 func (r *RedisDatabaseClient) createRedisJsonIndexDocuments() error {
