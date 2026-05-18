@@ -13,28 +13,9 @@
       "mode": "debug",
       "program": "${workspaceFolder}/cmd/server",
       "env": {
-        "LIVEKIT_KEYS": "devkey: secret",
-        "LIVEKIT_WEBHOOK_URLS": "http://localhost:8080/webhook",
+        "LIVEKIT_KEYS": "devkey: secret"
       },
-      "args": ["--dev"]
-    },
-    {
-      "name": "Go Run (OpenVidu Local Deployment)",
-      "type": "go",
-      "request": "launch",
-      "mode": "debug",
-      "program": "${workspaceFolder}/cmd/server",
-      "env": {
-        "LAN_MODE": "true",
-        "LAN_PRIVATE_IP": "192.168.1.190",
-        "NODE_IP": "192.168.1.190"
-      },
-      "args": [
-        "--config",
-        "${workspaceFolder}/.vscode/livekit-debug.yaml",
-        "--node-ip",
-        "192.168.1.190"
-      ]
+      "args": ["--config", "${workspaceFolder}/config.yaml"]
     }
   ]
 }
