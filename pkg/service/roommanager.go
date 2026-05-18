@@ -21,8 +21,10 @@ import (
 	"encoding/base64"
 	"fmt"
 	"maps"
+	"net"
 	"os"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -35,6 +37,7 @@ import (
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
+	"github.com/livekit/protocol/observability"
 	"github.com/livekit/protocol/observability/roomobs"
 	"github.com/livekit/protocol/rpc"
 	"github.com/livekit/protocol/utils"
@@ -531,6 +534,7 @@ func (r *RoomManager) StartSession(
 		LimitConfig:             r.config.Limit,
 		ProtocolVersion:         pv,
 		SessionStartTime:        sessionStartTime,
+		SessionTimer:            observability.NewSessionTimer(sessionStartTime),
 		TelemetryListener:       room.ParticipantTelemetryListener(),
 		Trailer:                 room.Trailer(),
 		PLIThrottleConfig:       r.config.RTC.PLIThrottle,
@@ -1086,15 +1090,15 @@ func (r *RoomManager) iceServersForParticipant(apiKey string, participant types.
 			// UDP TURN is used as STUN
 			hasSTUN = true
 			for _, ip := range r.config.RTC.NodeIP.ToStringSlice() {
-				urls = append(urls, fmt.Sprintf("turn:%s:%d?transport=udp", ip, r.config.TURN.UDPPort))
+				urls = append(urls, fmt.Sprintf("turn:%s?transport=udp", net.JoinHostPort(ip, strconv.Itoa(int(r.config.TURN.UDPPort)))))
 			}
 		}
 		if r.config.TURN.TLSPort > 0 {
 			urls = append(urls, fmt.Sprintf("turns:%s:443?transport=tcp", r.config.TURN.Domain))
 		}
 		if len(urls) > 0 {
-			username := r.turnAuthHandler.CreateUsername(apiKey, participant.ID())
-			password, err := r.turnAuthHandler.CreatePassword(apiKey, participant.ID())
+			username, expiry := r.turnAuthHandler.CreateUsername(apiKey, participant.ID(), r.config.TURN.TTLSeconds)
+			password, err := r.turnAuthHandler.CreatePassword(apiKey, participant.ID(), expiry)
 			if err != nil {
 				participant.GetLogger().Warnw("could not create turn password", err)
 				hasSTUN = false

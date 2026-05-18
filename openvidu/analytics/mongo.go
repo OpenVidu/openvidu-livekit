@@ -24,9 +24,9 @@ import (
 
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/openvidu/openvidu-livekit/openvidu/livekithelper/livekithelperinterface"
 	"github.com/openvidu/openvidu-livekit/openvidu/openviduconfig"
@@ -42,14 +42,13 @@ type MongoDatabaseClient struct {
 }
 
 func NewMongoDatabaseClient(conf *openviduconfig.AnalyticsConfig, livekithelper livekithelperinterface.LivekitHelper) (*MongoDatabaseClient, error) {
-	context := context.TODO()
-	mongoClient, err := mongo.Connect(context, options.Client().ApplyURI(conf.MongoUrl))
+	mongoClient, err := mongo.Connect(options.Client().ApplyURI(conf.MongoUrl))
 	if err != nil {
 		return nil, err
 	}
 
 	logger.Infow("connecting to mongodb", "url", conf.MongoUrl)
-	err = mongoClient.Ping(context, nil)
+	err = mongoClient.Ping(context.TODO(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +91,7 @@ func (m *MongoDatabaseClient) SendBatch() {
 }
 
 func (m *MongoDatabaseClient) sendEventsBatch() {
-	callback := func(sessCtx mongo.SessionContext) (interface{}, error) {
+	callback := func(ctx context.Context) (any, error) {
 		events := dequeEvents(m.owner.eventsQueue)
 
 		var parsedEvents []interface{}
@@ -115,7 +114,7 @@ func (m *MongoDatabaseClient) sendEventsBatch() {
 
 		logger.Debugw("inserting events into MongoDB...")
 
-		result, err := eventCollection.InsertMany(sessCtx, parsedEvents, options.InsertMany().SetOrdered(false))
+		result, err := eventCollection.InsertMany(ctx, parsedEvents, options.InsertMany().SetOrdered(false))
 		if err != nil {
 			logger.Debugw("failed to insert events into MongoDB", err)
 			logger.Debugw("restoring events for next batch")
@@ -128,7 +127,7 @@ func (m *MongoDatabaseClient) sendEventsBatch() {
 		if len(newActiveEntities) > 0 {
 			logger.Debugw("inserting active entities into MongoDB...")
 
-			result, err := activeEntityCollection.InsertMany(sessCtx, newActiveEntities, options.InsertMany().SetOrdered(false))
+			result, err := activeEntityCollection.InsertMany(ctx, newActiveEntities, options.InsertMany().SetOrdered(false))
 			if err != nil {
 				logger.Debugw("failed to insert active entities in MongoDB", err)
 				handleInsertActiveEntitiesError(err, m.owner.eventsQueue, events, newActiveEntities)
@@ -141,7 +140,7 @@ func (m *MongoDatabaseClient) sendEventsBatch() {
 		if len(deletedActiveEntities) > 0 {
 			logger.Debugw("deleting active entities from MongoDB...")
 
-			result, err := activeEntityCollection.DeleteMany(sessCtx, bson.D{{Key: "$or", Value: deletedActiveEntities}})
+			result, err := activeEntityCollection.DeleteMany(ctx, bson.D{{Key: "$or", Value: deletedActiveEntities}})
 			if err != nil {
 				logger.Debugw("failed to delete active entities from MongoDB", err)
 				restoreAllEventsOrStats(m.owner.eventsQueue, events)
@@ -420,13 +419,13 @@ func (m *MongoDatabaseClient) FixActiveEntities() {
 	m.filterFakeCloseEvents()
 
 	openviduDb := m.client.Database(m.databaseName)
-	callback := func(sessCtx mongo.SessionContext) (interface{}, error) {
+	callback := func(ctx context.Context) (any, error) {
 		// Insert all necessary fake close events in MongoDB
 		if len(m.fakeCloseEvents) > 0 {
 			logger.Debugw("inserting events into MongoDB...")
 
 			eventCollection := openviduDb.Collection("events")
-			result, err := eventCollection.InsertMany(sessCtx, m.fakeCloseEvents, options.InsertMany().SetOrdered(false))
+			result, err := eventCollection.InsertMany(ctx, m.fakeCloseEvents, options.InsertMany().SetOrdered(false))
 			if err != nil {
 				logger.Debugw("failed to insert events into MongoDB", err)
 				return nil, err
@@ -440,7 +439,7 @@ func (m *MongoDatabaseClient) FixActiveEntities() {
 			logger.Debugw("deleting active entities from MongoDB...")
 
 			activeEntityCollection := openviduDb.Collection("active_entities")
-			result, err := activeEntityCollection.DeleteMany(sessCtx, bson.D{{Key: "$or", Value: m.deletedActiveEntities}})
+			result, err := activeEntityCollection.DeleteMany(ctx, bson.D{{Key: "$or", Value: m.deletedActiveEntities}})
 			if err != nil {
 				logger.Debugw("failed to delete inactive entities from MongoDB", err)
 				return nil, err
@@ -886,7 +885,7 @@ func (m *MongoDatabaseClient) updateLastTimestampAlive() {
 			{Key: "_id", Value: lastActive.ID},
 			{Key: "last_alive", Value: lastActive.LastAlive}},
 		}},
-		options.Update().SetUpsert(true),
+		options.UpdateOne().SetUpsert(true),
 	)
 	if err != nil {
 		logger.Errorw("failed to update last alive timestamp in MongoDB", err)

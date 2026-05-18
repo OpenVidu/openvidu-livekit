@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/pion/turn/v5"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 
@@ -957,20 +958,58 @@ func TestTURNSecurity_NonStandalone_CloseDelegate(t *testing.T) {
 	require.True(t, inner.closed)
 }
 
-func TestTURNSecurity_AllocateConn_TCP_Denied(t *testing.T) {
-	gen := newOpenViduRelayAddrGen(nil, 0, 0, false)
-	conn, addr, err := gen.AllocateConn("tcp", 0)
+func TestTURNSecurity_AllocateConn_PortOutOfRange(t *testing.T) {
+	inner := &mockRelayAddrGen{}
+	gen := newOpenViduRelayAddrGen(inner, 5000, 6000, false)
+
+	conn, err := gen.AllocateConn(turn.AllocateConnConfig{
+		Network:    "tcp4",
+		RemoteAddr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 80},
+	})
 	require.Nil(t, conn)
-	require.Nil(t, addr)
-	require.ErrorIs(t, err, errTCPAllocDenied)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "outside allowed range")
 }
 
-func TestTURNSecurity_AllocateConn_TCP_DeniedWithPortRange(t *testing.T) {
-	gen := newOpenViduRelayAddrGen(nil, 5000, 6000, true)
-	conn, addr, err := gen.AllocateConn("tcp", 5500)
+func TestTURNSecurity_AllocateConn_PortInRange(t *testing.T) {
+	inner := &mockRelayAddrGen{}
+	gen := newOpenViduRelayAddrGen(inner, 5000, 6000, false)
+
+	conn, err := gen.AllocateConn(turn.AllocateConnConfig{
+		Network:    "tcp4",
+		RemoteAddr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 5500},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+}
+
+func TestTURNSecurity_AllocateConn_ZeroPortRange_AllDenied(t *testing.T) {
+	inner := &mockRelayAddrGen{}
+	gen := newOpenViduRelayAddrGen(inner, 0, 0, false)
+
+	conn, err := gen.AllocateConn(turn.AllocateConnConfig{
+		Network:    "tcp4",
+		RemoteAddr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 5500},
+	})
 	require.Nil(t, conn)
-	require.Nil(t, addr)
-	require.ErrorIs(t, err, errTCPAllocDenied)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "outside allowed range")
+}
+
+// mockRelayAddrGen is a minimal turn.RelayAddressGenerator for testing.
+type mockRelayAddrGen struct{}
+
+func (m *mockRelayAddrGen) Validate() error { return nil }
+func (m *mockRelayAddrGen) AllocatePacketConn(turn.AllocateListenerConfig) (net.PacketConn, net.Addr, error) {
+	return nil, nil, nil
+}
+func (m *mockRelayAddrGen) AllocateListener(turn.AllocateListenerConfig) (net.Listener, net.Addr, error) {
+	return nil, nil, nil
+}
+func (m *mockRelayAddrGen) AllocateConn(turn.AllocateConnConfig) (net.Conn, error) {
+	server, client := net.Pipe()
+	_ = server.Close()
+	return client, nil
 }
 
 // END OPENVIDU BLOCK

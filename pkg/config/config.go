@@ -261,6 +261,18 @@ type TURNConfig struct {
 	ExternalTLS         bool     `yaml:"external_tls,omitempty"`
 	BindAddresses       []string `yaml:"bind_addresses,omitempty"`
 
+	// TTL of the TURN credentials in seconds - defaults to 300
+	TTLSeconds int `yaml:"ttl_seconds,omitempty"`
+	// list of restricted peer CIDRs (loopback, link-local (unicast, multicast), multicast, private, unspecified) to allow access to.
+	// By default (i. e. empty list), all restricted peer CIDRs are denied access.
+	// When not empty, only the specified CIDRs are allowed access.
+	// Note that this check is applied to restricted peer CIDRs only.
+	AllowRestrictedPeerCIDRs []string `yaml:"allow_restricted_peer_cidrs,omitempty"`
+	// list of peer CIDRs to deny access to
+	// This applies to all peer CIDRs, including restricted ones.
+	// Deny list takes precedence over allow list.
+	DenyPeerCIDRs []string `yaml:"deny_peer_cidrs,omitempty"`
+
 	// BEGIN OPENVIDU BLOCK
 	// RelayAddress explicitly sets the TURN relay IP address.
 	// When set, skips auto-discovery regardless of node reachability.
@@ -464,6 +476,7 @@ var DefaultConfig = Config{
 	TURN: TURNConfig{
 		Enabled:       false,
 		BindAddresses: []string{"0.0.0.0"},
+		TTLSeconds:    300,
 	},
 	NodeSelector: NodeSelectorConfig{
 		Kind:         "any",

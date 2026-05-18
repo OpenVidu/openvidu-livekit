@@ -304,7 +304,8 @@ func (c *RTCClient) createTransport(rtcconf webrtc.Configuration) error {
 	c.publisher, err = rtc.NewPCTransport(rtc.TransportParams{
 		Config:                           &conf,
 		DirectionConfig:                  conf.Subscriber,
-		EnabledCodecs:                    c.enabledCodecs,
+		EnabledPublishCodecs:             c.enabledCodecs,
+		EnabledSubscribeCodecs:           c.enabledCodecs,
 		IsOfferer:                        true,
 		IsSendSide:                       true,
 		Handler:                          publisherHandler,
@@ -389,7 +390,8 @@ func (c *RTCClient) createTransport(rtcconf webrtc.Configuration) error {
 		c.subscriber, err = rtc.NewPCTransport(rtc.TransportParams{
 			Config:                           &conf,
 			DirectionConfig:                  conf.Publisher,
-			EnabledCodecs:                    c.enabledCodecs,
+			EnabledPublishCodecs:             c.enabledCodecs,
+			EnabledSubscribeCodecs:           c.enabledCodecs,
 			Handler:                          subscriberHandler,
 			DatachannelMaxReceiverBufferSize: 1500,
 			DatachannelSlowThreshold:         1024 * 1024 * 1024,
@@ -689,8 +691,11 @@ func (c *RTCClient) handleSignalResponse(res *livekit.SignalResponse) error {
 	return nil
 }
 
-func (c *RTCClient) WaitUntilConnected() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+func (c *RTCClient) WaitUntilConnected(timeout time.Duration) error {
+	if timeout == 0 {
+		timeout = 20 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	for {
 		select {

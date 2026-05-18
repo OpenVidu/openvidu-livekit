@@ -23,7 +23,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pion/turn/v4"
+	"github.com/pion/turn/v5"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/livekit/mediatransportutil/pkg/rtcconfig"
@@ -305,12 +305,12 @@ func (g *openviduRelayAddrGen) Validate() error {
 	return g.inner.Validate()
 }
 
-func (g *openviduRelayAddrGen) AllocatePacketConn(network string, requestedPort int) (net.PacketConn, net.Addr, error) {
-	conn, addr, err := g.inner.AllocatePacketConn(network, requestedPort)
+func (g *openviduRelayAddrGen) AllocatePacketConn(conf turn.AllocateListenerConfig) (net.PacketConn, net.Addr, error) {
+	conn, addr, err := g.inner.AllocatePacketConn(conf)
 	if err != nil {
 		logger.Warnw("TURN AllocatePacketConn failed", err,
-			"network", network,
-			"requestedPort", requestedPort,
+			"network", conf.Network,
+			"requestedPort", conf.RequestedPort,
 		)
 		return nil, nil, err
 	}
@@ -326,19 +326,79 @@ func (g *openviduRelayAddrGen) AllocatePacketConn(network string, requestedPort 
 	}, addr, nil
 }
 
-// AllocateConn handles TCP relay allocation requests (RFC 6062).
-// Always denied: pion/turn v4 does not implement RFC 6062 server-side — all
-// built-in RelayAddressGenerators return errTODO and the server allocation
-// path never calls AllocateConn. This method exists only to satisfy the
-// turn.RelayAddressGenerator interface.
-// If a future pion/turn version adds RFC 6062 support, this should be
-// revisited: a net.Conn wrapper with port restriction and telemetry
-// (analogous to openviduRelayPacketConn) would be needed.
-func (g *openviduRelayAddrGen) AllocateConn(string, int) (net.Conn, net.Addr, error) {
-	logger.Infow("TURN AllocateConn denied: TCP relay allocations are not permitted")
-	return nil, nil, errTCPAllocDenied
+// AllocateConn handles outbound TCP relay connections (RFC 6062 Connect).
+// pion/turn v5 fully implements RFC 6062 server-side and calls AllocateConn
+// when a client sends a Connect request. The connection is subject to the
+// same port restriction as UDP relay (minPort/maxPort on the remote peer),
+// and wrapped with Prometheus telemetry in standalone mode.
+func (g *openviduRelayAddrGen) AllocateConn(c turn.AllocateConnConfig) (net.Conn, error) {
+	port, err := extractPort(c.RemoteAddr)
+	if err != nil {
+		return nil, err
+	}
+	if port < g.minPort || port > g.maxPort {
+		portErr := fmt.Errorf("destination port %d outside allowed range [%d, %d]", port, g.minPort, g.maxPort)
+		logger.Warnw("TURN AllocateConn denied: destination port outside allowed range", portErr,
+			"remoteAddr", c.RemoteAddr.String(), "port", port, "minPort", g.minPort, "maxPort", g.maxPort)
+		return nil, portErr
+	}
+
+	conn, err := g.inner.AllocateConn(c)
+	if err != nil {
+		logger.Warnw("TURN AllocateConn failed", err,
+			"network", c.Network,
+			"remoteAddr", c.RemoteAddr.String(),
+		)
+		return nil, err
+	}
+
+	if g.standalone {
+		prometheus.AddConnection(prometheus.Outgoing)
+	}
+	return &openviduRelayConn{
+		Conn:       conn,
+		standalone: g.standalone,
+	}, nil
 }
 
-var errTCPAllocDenied = fmt.Errorf("TCP relay allocations are not permitted")
+func (g *openviduRelayAddrGen) AllocateListener(conf turn.AllocateListenerConfig) (net.Listener, net.Addr, error) {
+	return g.inner.AllocateListener(conf)
+}
+
+// openviduRelayConn wraps a net.Conn (RFC 6062 outbound TCP) with:
+//   - Prometheus telemetry: when standalone is true, counts bytes on
+//     Read/Write and tracks connection count on Close.
+//
+// Port restriction is enforced at allocation time in AllocateConn since
+// net.Conn has a fixed remote address.
+type openviduRelayConn struct {
+	net.Conn
+	standalone bool
+}
+
+func (c *openviduRelayConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if c.standalone && n > 0 {
+		prometheus.IncrementBytes("", prometheus.Incoming, uint64(n), false)
+		prometheus.IncrementPackets("", prometheus.Incoming, 1, false)
+	}
+	return n, err
+}
+
+func (c *openviduRelayConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	if c.standalone && n > 0 {
+		prometheus.IncrementBytes("", prometheus.Outgoing, uint64(n), false)
+		prometheus.IncrementPackets("", prometheus.Outgoing, 1, false)
+	}
+	return n, err
+}
+
+func (c *openviduRelayConn) Close() error {
+	if c.standalone {
+		prometheus.SubConnection(prometheus.Outgoing)
+	}
+	return c.Conn.Close()
+}
 
 // END OPENVIDU BLOCK

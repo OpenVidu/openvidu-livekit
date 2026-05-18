@@ -62,7 +62,8 @@ type JobRequest struct {
 	// only set for participant jobs
 	Participant *livekit.ParticipantInfo
 	Metadata    string
-	AgentName   string
+	AgentName  string
+	Deployment string
 }
 
 type agentClient struct {
@@ -154,7 +155,7 @@ func (c *agentClient) LaunchJob(ctx context.Context, desc *JobRequest) *serverut
 	}
 
 	dispatcher.ForEach(func(curNs string) {
-		topic := GetAgentTopic(desc.AgentName, curNs)
+		topic := GetAgentTopic(desc.AgentName, curNs, desc.Deployment)
 
 		wg.Add(1)
 		c.workers.Submit(func() {
@@ -170,6 +171,7 @@ func (c *agentClient) LaunchJob(ctx context.Context, desc *JobRequest) *serverut
 				AgentName:       desc.AgentName,
 				Metadata:        desc.Metadata,
 				EnableRecording: c.config.EnableUserDataRecording,
+				Deployment:      desc.Deployment,
 			}
 			resp, err := c.client.JobRequest(context.Background(), topic, jobTypeTopic, job)
 			if err != nil {
@@ -326,14 +328,19 @@ func (c *agentClient) Stop() error {
 	return nil
 }
 
-func GetAgentTopic(agentName, namespace string) string {
+func GetAgentTopic(agentName, namespace, deployment string) string {
+	var topic string
 	if agentName == "" {
 		// Backward compatibility
-		return namespace
+		topic = namespace
 	} else if namespace == "" {
 		// Forward compatibility once the namespace field is removed from the worker SDK
-		return agentName
+		topic = agentName
 	} else {
-		return fmt.Sprintf("%s_%s", agentName, namespace)
+		topic = fmt.Sprintf("%s_%s", agentName, namespace)
 	}
+	if deployment != "" {
+		topic += "_" + deployment
+	}
+	return topic
 }

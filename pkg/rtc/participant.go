@@ -171,6 +171,7 @@ type ParticipantParams struct {
 	LimitConfig             config.LimitConfig
 	ProtocolVersion         types.ProtocolVersion
 	SessionStartTime        time.Time
+	SessionTimer            *observability.SessionTimer
 	TelemetryListener       types.ParticipantTelemetryListener
 	Trailer                 []byte
 	PLIThrottleConfig       sfu.PLIThrottleConfig
@@ -405,15 +406,15 @@ func NewParticipant(params ParticipantParams) (*ParticipantImpl, error) {
 		p.supervisor.OnPublicationError(p.onPublicationError)
 	}
 
-	sessionTimer := observability.NewSessionTimer(p.params.SessionStartTime)
 	params.Reporter.RegisterFunc(func(ts time.Time, tx roomobs.ParticipantSessionTx) bool {
 		if dts := p.disconnectedAt.Load(); dts != nil {
 			ts = *dts
 			tx.ReportEndTime(ts)
 		}
 
-		millis, mins := sessionTimer.Advance(ts)
+		millis, secs, mins := p.params.SessionTimer.Advance(ts)
 		tx.ReportDuration(uint16(millis))
+		tx.ReportDurationSeconds(uint16(secs))
 		tx.ReportDurationMinutes(uint8(mins))
 
 		return !p.IsClosed()
@@ -1170,6 +1171,9 @@ func (p *ParticipantImpl) HandleOffer(sd *livekit.SessionDescription) error {
 
 func (p *ParticipantImpl) onPublisherSetRemoteDescription() {
 	offer := p.TransportManager.LastPublisherOfferPending()
+	if offer == nil {
+		return
+	}
 	parsedOffer, err := offer.Unmarshal()
 	if err != nil {
 		p.pubLogger.Warnw("could not parse offer", err)
@@ -2287,6 +2291,7 @@ func (p *ParticipantImpl) onMediaTrack(rtcTrack *webrtc.TrackRemote, rtpReceiver
 	)
 
 	if !isNewTrack && !publishedTrack.HasPendingCodec() && p.IsReady() {
+		p.dirty.Store(true)
 		p.listener().OnTrackUpdated(p, publishedTrack)
 	}
 }
@@ -2862,7 +2867,7 @@ func (p *ParticipantImpl) addPendingTrackLocked(req *livekit.AddTrackRequest) *l
 
 	if len(req.SimulcastCodecs) == 0 {
 		// clients not supporting simulcast codecs, synthesise a codec
-		videoLayerMode := livekit.VideoLayer_MODE_UNUSED
+		videoLayerMode := livekit.VideoLayer_ONE_SPATIAL_LAYER_PER_STREAM
 		if p.params.ClientInfo.isOBS() {
 			videoLayerMode = livekit.VideoLayer_ONE_SPATIAL_LAYER_PER_STREAM_INCOMPLETE_RTCP_SR
 		}
@@ -3756,6 +3761,10 @@ func (p *ParticipantImpl) SupportsSyncStreamID() bool {
 }
 
 func (p *ParticipantImpl) SupportsTransceiverReuse(mt types.MediaTrack) bool {
+	if !p.params.ClientInfo.SupportsTransceiverReuse() {
+		return false
+	}
+
 	if p.params.UseOneShotSignallingMode {
 		return p.ProtocolVersion().SupportsTransceiverReuse()
 	}

@@ -385,6 +385,7 @@ type DownTrack struct {
 	blankFramesGeneration atomic.Uint32
 
 	connectionStats *connectionquality.ConnectionStats
+	onStatsUpdate   atomic.Value // func(d *DownTrack, stat *livekit.AnalyticsStat)
 
 	isNACKThrottled atomic.Bool
 
@@ -471,6 +472,9 @@ func NewDownTrack(params DownTrackParams) (*DownTrack, error) {
 	})
 	d.connectionStats.OnStatsUpdate(func(_cs *connectionquality.ConnectionStats, stat *livekit.AnalyticsStat) {
 		d.params.Listener.OnStatsUpdate(stat)
+		if fn, ok := d.onStatsUpdate.Load().(func(*DownTrack, *livekit.AnalyticsStat)); ok && fn != nil {
+			fn(d, stat)
+		}
 	})
 
 	if d.kind == webrtc.RTPCodecTypeVideo {
@@ -629,6 +633,9 @@ func (d *DownTrack) Bind(t webrtc.TrackLocalContext) (webrtc.RTPCodecParameters,
 		d.writeStream = t.WriteStream()
 		if rr := d.params.BufferFactory.GetOrNew(packetio.RTCPBufferPacket, d.ssrc).(*buffer.RTCPReader); rr != nil {
 			rr.OnPacket(func(pkt []byte) {
+				if len(pkt) > 1400 {
+					d.params.Logger.Infow("large RTCP packet received primary", "size", len(pkt))
+				}
 				d.handleRTCP(pkt)
 			})
 			d.rtcpReader = rr
@@ -636,6 +643,9 @@ func (d *DownTrack) Bind(t webrtc.TrackLocalContext) (webrtc.RTPCodecParameters,
 		if d.ssrcRTX != 0 {
 			if rr := d.params.BufferFactory.GetOrNew(packetio.RTCPBufferPacket, d.ssrcRTX).(*buffer.RTCPReader); rr != nil {
 				rr.OnPacket(func(pkt []byte) {
+					if len(pkt) > 1400 {
+						d.params.Logger.Infow("large RTCP packet received rtx", "size", len(pkt))
+					}
 					d.handleRTCPRTX(pkt)
 				})
 				d.rtcpReaderRTX = rr
@@ -2018,6 +2028,7 @@ func (d *DownTrack) handleRTCP(bytes []byte) {
 				if r.SSRC != d.ssrc {
 					continue
 				}
+				rr.Reports = append(rr.Reports, r)
 
 				rtt, isRttChanged := d.rtpStats.UpdateFromReceiverReport(r)
 				if isRttChanged {
@@ -2481,6 +2492,13 @@ func (d *DownTrack) DebugInfo() map[string]any {
 
 func (d *DownTrack) GetConnectionScoreAndQuality() (float32, livekit.ConnectionQuality) {
 	return d.connectionStats.GetScoreAndQuality()
+}
+
+// OnStatsUpdate registers an additional callback that fires alongside the
+// configured DownTrackListener whenever connection-quality stats are produced.
+// Intended for tests and observers; the production listener path is unaffected.
+func (d *DownTrack) OnStatsUpdate(fn func(d *DownTrack, stat *livekit.AnalyticsStat)) {
+	d.onStatsUpdate.Store(fn)
 }
 
 func (d *DownTrack) GetTrackStats() *livekit.RTPStats {

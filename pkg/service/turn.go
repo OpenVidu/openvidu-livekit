@@ -21,9 +21,11 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jxskiss/base62"
-	"github.com/pion/turn/v4"
+	"github.com/pion/stun/v3"
+	"github.com/pion/turn/v5"
 	"github.com/pkg/errors"
 
 	"github.com/livekit/protocol/auth"
@@ -47,6 +49,8 @@ const (
 
 	allocateRetries = 50
 )
+
+var ErrExpired = errors.New("expired")
 
 // BEGIN OPENVIDU BLOCK — added rc parameter for TURNSecurity
 func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone bool, rc redis.UniversalClient) (*turn.Server, error) {
@@ -86,7 +90,6 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 	} else {
 		logger.Warnw("TURN relay peer port restriction: no ICE port range configured, all peer relay ports will be denied", nil)
 	}
-	permissionHandler := NewTURNSecurity(conf, rc).PermissionHandler()
 	// END OPENVIDU BLOCK
 
 	serverConfig := turn.ServerConfig{
@@ -134,6 +137,41 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 		)
 		// END OPENVIDU BLOCK
 
+		permissionHandler := func(_clientAddr net.Addr, peerIP net.IP) bool {
+			// restricted peer IP is denied by default, unless allowed by the allow list,
+			if peerIP.IsLoopback() ||
+				peerIP.IsLinkLocalUnicast() ||
+				peerIP.IsLinkLocalMulticast() ||
+				peerIP.IsMulticast() ||
+				peerIP.IsPrivate() ||
+				peerIP.IsUnspecified() {
+				allowed := false
+				for _, cidr := range turnConf.AllowRestrictedPeerCIDRs {
+					if _, ipnet, err := net.ParseCIDR(cidr); err == nil {
+						if ipnet.Contains(peerIP) {
+							allowed = true
+							break
+						}
+					}
+				}
+				if !allowed {
+					return false
+				}
+
+				// if allowed, check deny list for overrides
+			}
+
+			for _, cidr := range turnConf.DenyPeerCIDRs {
+				if _, ipnet, err := net.ParseCIDR(cidr); err == nil {
+					if ipnet.Contains(peerIP) {
+						return false
+					}
+				}
+			}
+
+			return true
+		}
+
 		if turnConf.TLSPort > 0 {
 			var listener net.Listener
 			var listenerErr error
@@ -163,9 +201,7 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 			listenerConfig := turn.ListenerConfig{
 				Listener:              listener,
 				RelayAddressGenerator: relayAddrGen,
-				// BEGIN OPENVIDU BLOCK
-				PermissionHandler: permissionHandler,
-				// END OPENVIDU BLOCK
+				PermissionHandler:     permissionHandler,
 			}
 			serverConfig.ListenerConfigs = append(serverConfig.ListenerConfigs, listenerConfig)
 
@@ -185,9 +221,7 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 			packetConfig := turn.PacketConnConfig{
 				PacketConn:            udpListener,
 				RelayAddressGenerator: relayAddrGen,
-				// BEGIN OPENVIDU BLOCK
-				PermissionHandler: permissionHandler,
-				// END OPENVIDU BLOCK
+				PermissionHandler:     permissionHandler,
 			}
 			serverConfig.PacketConnConfigs = append(serverConfig.PacketConnConfigs, packetConfig)
 			logValues = append(logValues, "turn.portUDP", turnConf.UDPPort)
@@ -250,46 +284,85 @@ func NewTURNAuthHandler(keyProvider auth.KeyProvider) *TURNAuthHandler {
 	}
 }
 
-func (h *TURNAuthHandler) CreateUsername(apiKey string, pID livekit.ParticipantID) string {
-	return base62.EncodeToString([]byte(fmt.Sprintf("%s|%s", apiKey, pID)))
+func (h *TURNAuthHandler) CreateUsername(apiKey string, pID livekit.ParticipantID, ttlSeconds int) (string, int64) {
+	expiry := time.Now().Add(time.Duration(ttlSeconds) * time.Second).Unix()
+	return base62.EncodeToString(fmt.Appendf(nil, "%s|%s|%d", apiKey, pID, expiry)), expiry
 }
 
-func (h *TURNAuthHandler) ParseUsername(username string) (apiKey string, pID livekit.ParticipantID, err error) {
+func (h *TURNAuthHandler) ParseUsername(username string) (apiKey string, pID livekit.ParticipantID, expiry int64, err error) {
 	decoded, err := base62.DecodeString(username)
 	if err != nil {
-		return "", "", err
+		return "", "", 0, err
 	}
 	parts := strings.Split(string(decoded), "|")
-	if len(parts) != 2 {
-		return "", "", errors.New("invalid username")
+	if len(parts) != 2 && len(parts) != 3 {
+		return "", "", 0, errors.New("invalid username")
+	}
+	expiry = 0
+	if len(parts) == 3 {
+		var err error
+		if expiry, err = strconv.ParseInt(parts[2], 10, 64); err != nil {
+			return "", "", 0, err
+		}
 	}
 
-	return parts[0], livekit.ParticipantID(parts[1]), nil
+	return parts[0], livekit.ParticipantID(parts[1]), expiry, nil
 }
 
-func (h *TURNAuthHandler) CreatePassword(apiKey string, pID livekit.ParticipantID) (string, error) {
+func (h *TURNAuthHandler) CreatePassword(apiKey string, pID livekit.ParticipantID, expiry int64) (string, error) {
+	if expiry != 0 && time.Now().After(time.Unix(expiry, 0)) {
+		return "", ErrExpired
+	}
+	return h.computePassword(apiKey, pID, expiry)
+}
+
+func (h *TURNAuthHandler) computePassword(apiKey string, pID livekit.ParticipantID, expiry int64) (string, error) {
 	secret := h.keyProvider.GetSecret(apiKey)
 	if secret == "" {
 		return "", ErrInvalidAPIKey
 	}
+
 	keyInput := fmt.Sprintf("%s|%s", secret, pID)
+	if expiry != 0 {
+		keyInput = fmt.Sprintf("%s|%s|%d", secret, pID, expiry)
+	}
+
 	sum := sha256.Sum256([]byte(keyInput))
 	return base62.EncodeToString(sum[:]), nil
 }
 
-func (h *TURNAuthHandler) HandleAuth(username, realm string, srcAddr net.Addr) (key []byte, ok bool) {
+func (h *TURNAuthHandler) HandleAuth(ra *turn.RequestAttributes) (userID string, key []byte, ok bool) {
+	username := ra.Username
 	decoded, err := base62.DecodeString(username)
 	if err != nil {
-		return nil, false
+		return "", nil, false
 	}
 	parts := strings.Split(string(decoded), "|")
-	if len(parts) != 2 {
-		return nil, false
+	if len(parts) != 2 && len(parts) != 3 {
+		return "", nil, false
 	}
-	password, err := h.CreatePassword(parts[0], livekit.ParticipantID(parts[1]))
+	expiry := int64(0)
+	if len(parts) == 3 {
+		var err error
+		if expiry, err = strconv.ParseInt(parts[2], 10, 64); err != nil {
+			return "", nil, false
+		}
+		expiryTime := time.Unix(expiry, 0)
+		if time.Now().After(expiryTime) {
+			// TTL only applies to initial allocation. Refresh / CreatePermission /
+			// ChannelBind / Send / Data requests are still authenticated against the
+			// username/password but skip the TTL check so long-running sessions can
+			// keep refreshing past the credential expiry.
+			if ra.Method == stun.MethodAllocate {
+				logger.Infow("TURN credential expired", "username", decoded, "participantID", parts[1], "expiry", expiryTime, "method", ra.Method)
+				return "", nil, false
+			}
+		}
+	}
+	password, err := h.computePassword(parts[0], livekit.ParticipantID(parts[1]), expiry)
 	if err != nil {
-		logger.Warnw("could not create TURN password", err, "username", username)
-		return nil, false
+		logger.Warnw("could not create TURN password", err, "username", decoded)
+		return "", nil, false
 	}
-	return turn.GenerateAuthKey(username, LivekitRealm, password), true
+	return parts[1], turn.GenerateAuthKey(username, LivekitRealm, password), true
 }

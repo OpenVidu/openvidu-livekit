@@ -16,7 +16,7 @@ package buffer
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
@@ -24,6 +24,7 @@ import (
 	"go.uber.org/atomic"
 
 	dd "github.com/livekit/livekit-server/pkg/sfu/rtpextension/dependencydescriptor"
+	"github.com/livekit/mediatransportutil/pkg/codec"
 	"github.com/livekit/mediatransportutil/pkg/utils"
 	"github.com/livekit/protocol/logger"
 )
@@ -288,8 +289,14 @@ func ProcessFrameDependencyStructure(structure *dd.FrameDependencyStructure) []D
 	}
 
 	// sort decode target layer by spatial and temporal from high to low
-	sort.Slice(decodeTargets, func(i, j int) bool {
-		return decodeTargets[i].Layer.GreaterThan(decodeTargets[j].Layer)
+	slices.SortFunc(decodeTargets, func(a, b DependencyDescriptorDecodeTarget) int {
+		if a.Layer.GreaterThan(b.Layer) {
+			return -1
+		}
+		if b.Layer.GreaterThan(a.Layer) {
+			return 1
+		}
+		return 0
 	})
 
 	return decodeTargets
@@ -308,14 +315,14 @@ func GetActiveDecodeTargetBitmask(layer VideoLayer, decodeTargets []DependencyDe
 
 // ------------------------------------------------------------------------------
 
-func ExtractDependencyDescriptorVideoSize(dd *dd.DependencyDescriptor) []VideoSize {
+func ExtractDependencyDescriptorVideoSize(dd *dd.DependencyDescriptor) []codec.VideoSize {
 	if dd.AttachedStructure == nil {
 		return nil
 	}
 
-	videoSizes := make([]VideoSize, 0, len(dd.AttachedStructure.Resolutions))
+	videoSizes := make([]codec.VideoSize, 0, len(dd.AttachedStructure.Resolutions))
 	for _, res := range dd.AttachedStructure.Resolutions {
-		videoSizes = append(videoSizes, VideoSize{Width: uint32(res.Width), Height: uint32(res.Height)})
+		videoSizes = append(videoSizes, codec.VideoSize{Width: uint32(res.Width), Height: uint32(res.Height)})
 	}
 
 	return videoSizes

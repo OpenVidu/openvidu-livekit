@@ -301,16 +301,23 @@ func (t *MediaTrack) AddReceiver(receiver *webrtc.RTPReceiver, track sfu.TrackRe
 
 	var lastRR uint32
 	rtcpReader.OnPacket(func(bytes []byte) {
+		isLargePacket := len(bytes) > 1400
 		pkts, err := rtcp.Unmarshal(bytes)
 		if err != nil {
-			t.params.Logger.Errorw("could not unmarshal RTCP", err)
+			t.params.Logger.Errorw("could not unmarshal RTCP", err, "size", len(bytes))
 			return
 		}
 
 		for _, pkt := range pkts {
 			switch pkt := pkt.(type) {
 			case *rtcp.SourceDescription:
+				if isLargePacket {
+					t.params.Logger.Infow("large RTCP packet received with SDES", "size", len(bytes))
+				}
 			case *rtcp.SenderReport:
+				if isLargePacket {
+					t.params.Logger.Infow("large RTCP packet received with sender report", "size", len(bytes), "SSRC", pkt.SSRC)
+				}
 				if pkt.SSRC == uint32(track.SSRC()) {
 					buff.SetSenderReportData(&livekit.RTCPSenderReportState{
 						RtpTimestamp: pkt.RTPTime,
@@ -321,6 +328,9 @@ func (t *MediaTrack) AddReceiver(receiver *webrtc.RTPReceiver, track sfu.TrackRe
 					})
 				}
 			case *rtcp.ExtendedReport:
+				if isLargePacket {
+					t.params.Logger.Infow("large RTCP packet received with extendedreport", "size", len(bytes))
+				}
 			rttFromXR:
 				for _, report := range pkt.Reports {
 					if rr, ok := report.(*rtcp.DLRRReportBlock); ok {
@@ -437,6 +447,11 @@ func (t *MediaTrack) AddReceiver(receiver *webrtc.RTPReceiver, track sfu.TrackRe
 			ti.Source,
 			ti.Type,
 		)
+		for _, c := range ti.Codecs {
+			for _, l := range c.Layers {
+				t.params.Reporter.ReportLayer(roomobs.PackTrackLayer(l.Height, l.Width))
+			}
+		}
 		newWR.OnStatsUpdate(func(_ *sfu.WebRTCReceiver, stat *livekit.AnalyticsStat) {
 			// send for only one codec, either primary (priority == 0) OR regressed codec
 			t.lock.RLock()
@@ -452,7 +467,6 @@ func (t *MediaTrack) AddReceiver(receiver *webrtc.RTPReceiver, track sfu.TrackRe
 						tx.ReportType(roomobs.TrackTypeFromProto(ti.Type))
 						tx.ReportSource(roomobs.TrackSourceFromProto(ti.Source))
 						tx.ReportMime(mime.NormalizeMimeType(ti.MimeType).ReporterType())
-						tx.ReportLayer(roomobs.PackTrackLayer(ti.Height, ti.Width))
 						tx.ReportDuration(uint16(cs.EndTime.Sub(cs.StartTime).Milliseconds()))
 						tx.ReportFrames(uint16(cs.Frames))
 						tx.ReportRecvBytes(uint32(cs.Bytes))
@@ -560,6 +574,7 @@ func (t *MediaTrack) AddReceiver(receiver *webrtc.RTPReceiver, track sfu.TrackRe
 		return newCodec, false
 	}
 
+	t.MediaTrackReceiver.MaybeSetSimulcast()
 	t.MediaTrackReceiver.SetLayerSsrcsForRid(mimeType, track.RID(), uint32(track.SSRC()), 0)
 
 	if regressCodec {

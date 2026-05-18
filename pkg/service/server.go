@@ -28,7 +28,7 @@ import (
 	"time"
 
 	"github.com/openvidu/openvidu-livekit/pkg/routing/selector"
-	"github.com/pion/turn/v4"
+	"github.com/pion/turn/v5"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/cors"
 	"github.com/twitchtv/twirp"

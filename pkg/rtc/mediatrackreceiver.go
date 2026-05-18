@@ -18,7 +18,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 
@@ -27,6 +26,7 @@ import (
 	"go.uber.org/atomic"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/livekit/mediatransportutil/pkg/codec"
 	"github.com/livekit/protocol/codecs/mime"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
@@ -207,8 +207,8 @@ func (t *MediaTrackReceiver) SetupReceiver(receiver sfu.TrackReceiver, priority 
 		receivers = append(receivers, &simulcastReceiver{TrackReceiver: receiver, priority: priority})
 	}
 
-	sort.Slice(receivers, func(i, j int) bool {
-		return receivers[i].Priority() < receivers[j].Priority()
+	slices.SortFunc(receivers, func(a, b *simulcastReceiver) int {
+		return sutils.Signum(a.Priority() - b.Priority())
 	})
 
 	if mid != "" {
@@ -349,8 +349,8 @@ func (t *MediaTrackReceiver) SetPotentialCodecs(codecs []webrtc.RTPCodecParamete
 			})
 		}
 	}
-	sort.Slice(receivers, func(i, j int) bool {
-		return receivers[i].Priority() < receivers[j].Priority()
+	slices.SortFunc(receivers, func(a, b *simulcastReceiver) int {
+		return sutils.Signum(a.Priority() - b.Priority())
 	})
 	t.receivers = receivers
 	t.lock.Unlock()
@@ -648,6 +648,29 @@ func (t *MediaTrackReceiver) updateTrackInfoOfReceivers() {
 	}
 
 	t.MediaTrackSubscriptions.SetMuted(ti.GetMuted())
+}
+
+func (t *MediaTrackReceiver) MaybeSetSimulcast() {
+	// only primary receiver (i.e. receiver at index 0) for legacy use case
+	primaryReceiver := t.PrimaryReceiver()
+	if primaryReceiver == nil {
+		return
+	}
+	if wr, ok := primaryReceiver.(*sfu.WebRTCReceiver); !ok || wr.NumUpTracks() < 2 {
+		return
+	}
+
+	t.lock.Lock()
+	trackInfo := t.TrackInfoClone()
+	if trackInfo.Simulcast {
+		t.lock.Unlock()
+		return
+	}
+	trackInfo.Simulcast = true
+	t.trackInfo.Store(trackInfo)
+	t.lock.Unlock()
+
+	t.updateTrackInfoOfReceivers()
 }
 
 func (t *MediaTrackReceiver) SetLayerSsrcsForRid(mimeType mime.MimeType, rid string, ssrc uint32, repairSSRC uint32) {
@@ -954,7 +977,7 @@ func (t *MediaTrackReceiver) UpdateVideoTrack(update *livekit.UpdateLocalVideoTr
 	t.params.Logger.Debugw("updated video track", "before", logger.Proto(trackInfo), "after", logger.Proto(clonedInfo))
 }
 
-func (t *MediaTrackReceiver) UpdateVideoSize(mimeType mime.MimeType, sizes []buffer.VideoSize) {
+func (t *MediaTrackReceiver) UpdateVideoSize(mimeType mime.MimeType, sizes []codec.VideoSize) {
 	var changed bool
 	t.lock.Lock()
 	trackInfo := t.TrackInfo()
@@ -1040,7 +1063,7 @@ func (t *MediaTrackReceiver) GetQualityForDimension(mimeType mime.MimeType, widt
 
 	trackInfo := t.TrackInfo()
 
-	var mediaSizes []buffer.VideoSize
+	var mediaSizes []codec.VideoSize
 	if receiver := t.Receiver(mimeType); receiver != nil {
 		mediaSizes = receiver.VideoSizes()
 	}
@@ -1059,10 +1082,7 @@ func (t *MediaTrackReceiver) GetQualityForDimension(mimeType mime.MimeType, widt
 	if origSize == 0 {
 		for i := len(mediaSizes) - 1; i >= 0; i-- {
 			if mediaSizes[i].Height > 0 {
-				origSize = mediaSizes[i].Height
-				if mediaSizes[i].Width < mediaSizes[i].Height {
-					origSize = mediaSizes[i].Width
-				}
+				origSize = min(mediaSizes[i].Width, mediaSizes[i].Height)
 				break
 			}
 		}
@@ -1090,9 +1110,7 @@ func (t *MediaTrackReceiver) GetQualityForDimension(mimeType mime.MimeType, widt
 		layerSizes = providedSizes
 		// comparing height always
 		requestedSize = height
-		sort.Slice(layerSizes, func(i, j int) bool {
-			return layerSizes[i] < layerSizes[j]
-		})
+		slices.Sort(layerSizes)
 	}
 
 	// finds the highest layer with smallest dimensions that still satisfy client demands

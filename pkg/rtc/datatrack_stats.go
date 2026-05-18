@@ -38,6 +38,7 @@ type dataTrackStats struct {
 	numPacketsLost        int
 	numPacketsOutOfOrder  int
 	numFrames             int // count of `F` tagged packets, i. e. packets with final packet of frame marker
+	numBytes              int
 }
 
 func newDataTrackStats(params dataTrackStatsParams) *dataTrackStats {
@@ -46,9 +47,11 @@ func newDataTrackStats(params dataTrackStatsParams) *dataTrackStats {
 	}
 }
 
-func (d *dataTrackStats) Update(packet *datatrack.Packet, arrivalTime int64) {
+func (d *dataTrackStats) Update(packet *datatrack.Packet, arrivalTime int64, payloadLength int) {
 	d.lock.Lock()
 	defer d.lock.Unlock()
+
+	d.numBytes += payloadLength
 
 	if d.endTime != 0 {
 		return
@@ -89,16 +92,19 @@ func (d *dataTrackStats) Close() {
 
 	d.endTime = mono.UnixNano()
 
-	duration := time.Duration(d.endTime - d.startTime).Seconds()
-	fps := float64(d.numFrames) / duration
+	if d.startTime != 0 {
+		duration := time.Duration(d.endTime - d.startTime).Seconds()
+		fps := float64(d.numFrames) / duration
 
-	d.params.Logger.Infow(
-		"data track stats",
-		"duration", duration,
-		"numPackets", d.numPackets,
-		"numPacketsLost", d.numPacketsLost,
-		"numPacketsOutOfOrder", d.numPacketsOutOfOrder,
-		"numFrames", d.numFrames,
-		"fps", fps,
-	)
+		d.params.Logger.Infow(
+			"data track stats",
+			"duration", duration,
+			"numPackets", d.numPackets,
+			"numPacketsLost", d.numPacketsLost,
+			"numPacketsOutOfOrder", d.numPacketsOutOfOrder,
+			"numFrames", d.numFrames,
+			"fps", fps,
+			"numBytes", d.numBytes,
+		)
+	}
 }

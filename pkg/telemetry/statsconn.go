@@ -17,6 +17,8 @@ package telemetry
 import (
 	"net"
 
+	"github.com/pion/turn/v5"
+
 	"github.com/livekit/livekit-server/pkg/telemetry/prometheus"
 )
 
@@ -105,3 +107,38 @@ func (c *PacketConn) Close() error {
 
 // BEGIN OPENVIDU BLOCK — RelayAddressGenerator removed; replaced by openviduRelayAddrGen in turn_security.go
 // END OPENVIDU BLOCK
+
+type RelayAddressGenerator struct {
+	turn.RelayAddressGenerator
+}
+
+func NewRelayAddressGenerator(g turn.RelayAddressGenerator) *RelayAddressGenerator {
+	return &RelayAddressGenerator{RelayAddressGenerator: g}
+}
+
+func (g *RelayAddressGenerator) AllocatePacketConn(c turn.AllocateListenerConfig) (net.PacketConn, net.Addr, error) {
+	conn, addr, err := g.RelayAddressGenerator.AllocatePacketConn(c)
+	if err != nil {
+		return nil, addr, err
+	}
+
+	return NewPacketConn(conn, prometheus.Outgoing), addr, err
+}
+
+func (g *RelayAddressGenerator) AllocateConn(c turn.AllocateConnConfig) (net.Conn, error) {
+	conn, err := g.RelayAddressGenerator.AllocateConn(c)
+	if err != nil {
+		return nil, err
+	}
+
+	return NewConn(conn, prometheus.Outgoing), err
+}
+
+func (g *RelayAddressGenerator) AllocateListener(c turn.AllocateListenerConfig) (net.Listener, net.Addr, error) {
+	l, addr, err := g.RelayAddressGenerator.AllocateListener(c)
+	if err != nil {
+		return nil, addr, err
+	}
+
+	return NewListener(l), addr, err
+}
