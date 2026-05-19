@@ -165,7 +165,9 @@ func NewLocalRoomManager(
 		for _, lip := range localIPs {
 			hostCandidateIPs = append(hostCandidateIPs, lip+"/"+lip)
 		}
-		rtcConf.SettingEngine.SetNAT1To1IPs(hostCandidateIPs, webrtc.ICECandidateTypeHost)
+		if err := rtcconfig.SetNAT1To1AddressRewriteRules(&rtcConf.SettingEngine, hostCandidateIPs, webrtc.ICECandidateTypeHost); err != nil {
+			return nil, errors.Wrap(err, "failed to set ICE address rewrite rules for local IPs")
+		}
 		rtcConf.NAT1To1IPs = hostCandidateIPs
 		logger.Infow("Added local IPs as host candidates for ICE", "hostCandidateIPs", hostCandidateIPs)
 	}
