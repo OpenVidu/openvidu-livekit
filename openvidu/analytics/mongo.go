@@ -355,6 +355,33 @@ func hashFromStringId(id string) string {
 	return hex.EncodeToString(hash[:])
 }
 
+// convertBsonDInMap recursively converts any nested bson.D values in a map to map[string]interface{}.
+// This is needed because mongo-driver v2 decodes embedded documents as bson.D instead of map[string]interface{}.
+func convertBsonDInMap(m map[string]interface{}) {
+	for key, val := range m {
+		switch v := val.(type) {
+		case bson.D:
+			converted := make(map[string]interface{}, len(v))
+			for _, elem := range v {
+				converted[elem.Key] = elem.Value
+			}
+			m[key] = converted
+			convertBsonDInMap(converted)
+		case bson.A:
+			for i, elem := range v {
+				if d, ok := elem.(bson.D); ok {
+					converted := make(map[string]interface{}, len(d))
+					for _, e := range d {
+						converted[e.Key] = e.Value
+					}
+					v[i] = converted
+					convertBsonDInMap(converted)
+				}
+			}
+		}
+	}
+}
+
 func (m *MongoDatabaseClient) accumluateActiveEntityForCreationEvents(event *livekit.AnalyticsEvent, activeEntities []interface{}) []interface{} {
 	var entity EntityType
 	var id string
@@ -570,6 +597,8 @@ func (m *MongoDatabaseClient) fixActiveRooms(activeRoomsDb []string, lastAlive T
 				continue
 			}
 
+			convertBsonDInMap(roomCreatedEventMap)
+
 			// Fill "ROOM_ENDED" event with necessary info
 			roomEndedEvent := roomCreatedEventMap
 			roomEndedEvent["type"] = livekit.AnalyticsEventType_ROOM_ENDED.String()
@@ -635,6 +664,8 @@ func (m *MongoDatabaseClient) fixActiveParticipants(activeParticipantsDb []strin
 
 				continue
 			}
+
+			convertBsonDInMap(participantActiveEventMap)
 
 			// Fill "PARTICIPANT_LEFT" event with necessary info
 			participantLeftEvent := participantActiveEventMap
@@ -703,6 +734,8 @@ func (m *MongoDatabaseClient) fixActiveEgresses(activeEgressesDb []string, lastA
 
 				continue
 			}
+
+			convertBsonDInMap(egressStartedEventMap)
 
 			// Fill "EGRESS_ENDED" event with necessary info
 			egressEndedEvent := egressStartedEventMap
@@ -777,6 +810,8 @@ func (m *MongoDatabaseClient) fixActiveIngresses(activeIngressesDb []string, las
 
 				continue
 			}
+
+			convertBsonDInMap(ingressStartedEventMap)
 
 			// Fill "INGRESS_ENDED" event with necessary info
 			ingressEndedEvent := ingressStartedEventMap
