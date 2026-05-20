@@ -57,6 +57,13 @@ type TURNSecurity struct {
 	localIPs map[string]struct{} // this machine's IPs — always checked first
 	allowed  map[string]struct{} // static set for no-Redis mode (NodeIP + RelayAddress)
 
+	// Parsed CIDR rules from the TURN config. These mirror the
+	// AllowRestrictedPeerCIDRs / DenyPeerCIDRs fields and are enforced
+	// inside handlePermission so that the OpenVidu cluster-node allow
+	// logic never overrides the configured deny/allow policy.
+	allowNets []*net.IPNet
+	denyNets  []*net.IPNet
+
 	// Redis-mode cache: refreshed on cache miss or TTL expiry.
 	cacheMu   sync.RWMutex
 	cachedIPs map[string]struct{}
@@ -70,6 +77,18 @@ type TURNSecurity struct {
 // When rc is nil, only local IPs and the configured NodeIP/RelayAddress are used.
 func NewTURNSecurity(conf *config.Config, rc redis.UniversalClient) *TURNSecurity {
 	s := &TURNSecurity{rc: rc, cacheTTL: defaultTURNCacheTTL}
+
+	// Parse CIDR allow/deny rules so handlePermission can enforce them.
+	for _, cidr := range conf.TURN.AllowRestrictedPeerCIDRs {
+		if _, ipnet, err := net.ParseCIDR(cidr); err == nil {
+			s.allowNets = append(s.allowNets, ipnet)
+		}
+	}
+	for _, cidr := range conf.TURN.DenyPeerCIDRs {
+		if _, ipnet, err := net.ParseCIDR(cidr); err == nil {
+			s.denyNets = append(s.denyNets, ipnet)
+		}
+	}
 
 	// Always discover this machine's local IPs.
 	localIPs := make(map[string]struct{})
@@ -104,7 +123,46 @@ func NewTURNSecurity(conf *config.Config, rc redis.UniversalClient) *TURNSecurit
 // PermissionHandler returns a turn.PermissionHandler suitable for use in
 // ListenerConfig / PacketConnConfig.
 func (s *TURNSecurity) PermissionHandler() turn.PermissionHandler {
-	return s.handlePermission
+	return s.handlePermissionWithCIDRs
+}
+
+func (s *TURNSecurity) handlePermissionWithCIDRs(clientAddr net.Addr, peerIP net.IP) bool {
+	peerStr := peerIP.String()
+
+	// Deny CIDRs always take precedence — even over local/cluster IPs.
+	for _, ipnet := range s.denyNets {
+		if ipnet.Contains(peerIP) {
+			logger.Infow("TURN permission denied by deny CIDR", "peerIP", peerStr)
+			return false
+		}
+	}
+
+	// Only check the allow CIDRs if any are configured using YAML property "allow_restricted_peer_cidrs"
+	// The default behavior on an empty list is to allow all restricted IPs, which is the opposite of the default LiveKit behaviour.
+	// This is acceptable because our OpenVidu deployment manages IP security at a greater level.
+	if len(s.allowNets) > 0 {
+		// restricted peer IP is denied by default, unless allowed by the allow list,
+		if peerIP.IsLoopback() ||
+			peerIP.IsLinkLocalUnicast() ||
+			peerIP.IsLinkLocalMulticast() ||
+			peerIP.IsMulticast() ||
+			peerIP.IsPrivate() ||
+			peerIP.IsUnspecified() {
+			allowedByCIDR := false
+			for _, ipnet := range s.allowNets {
+				if ipnet.Contains(peerIP) {
+					allowedByCIDR = true
+					break
+				}
+			}
+			if !allowedByCIDR {
+				logger.Infow("TURN permission denied: restricted IP not in allow CIDRs", "peerIP", peerStr)
+				return false
+			}
+		}
+	}
+
+	return s.handlePermission(clientAddr, peerIP)
 }
 
 func (s *TURNSecurity) handlePermission(_ net.Addr, peerIP net.IP) bool {
