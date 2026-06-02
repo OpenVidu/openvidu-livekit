@@ -281,6 +281,11 @@ type TURNConfig struct {
 	// when auto-discovering on nodes that are not publicly reachable.
 	// Ignored when RelayAddress is explicitly set or the node is publicly reachable.
 	RelayPreferredInterface string `yaml:"relay_preferred_interface,omitempty"`
+	// EnableRFC6062 enables RFC 6062 (TURN Extensions for TCP Allocations), i.e.
+	// the Connect / ConnectionBind requests that let a client relay traffic to a
+	// peer over an outbound TCP connection. Disabled by default: clients can only
+	// allocate UDP relays unless this is explicitly turned on.
+	EnableRFC6062 bool `yaml:"enable_rfc6062,omitempty"`
 	// END OPENVIDU BLOCK
 }
 
@@ -477,6 +482,8 @@ var DefaultConfig = Config{
 		Enabled:       false,
 		BindAddresses: []string{"0.0.0.0"},
 		TTLSeconds:    300,
+		// RFC 6062 (TURN TCP allocations) is disabled by default.
+		EnableRFC6062: false,
 	},
 	NodeSelector: NodeSelectorConfig{
 		Kind:         "any",

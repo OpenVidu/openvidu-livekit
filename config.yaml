@@ -251,6 +251,10 @@ keys:
 #   # network interface to use for TURN relay address auto-discovery on nodes that are not
 #   # publicly reachable. Ignored when relay_address is explicitly set or the node is publicly reachable.
 #   # relay_preferred_interface: eth0
+#   # enable RFC 6062 (TURN Extensions for TCP Allocations): allows clients to relay traffic to a
+#   # peer over an outbound TCP connection (Connect / ConnectionBind). Disabled by default — clients
+#   # can only allocate UDP relays unless this is set.
+#   # enable_rfc6062: false
 #   # set external_tls to true if using a L4 load balancer to terminate TLS. when enabled,
 #   # LiveKit expects unencrypted traffic on tls_port, and still advertise tls_port as a TURN/TLS candidate.
 #   external_tls: true

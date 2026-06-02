@@ -279,6 +279,10 @@ keys:
 #   # key_file: /path/to/key.pem
 #   # TTL of the TURN credentials in seconds - defaults to 300
 #   ttl_seconds: 300
+#   # enable RFC 6062 (TURN Extensions for TCP Allocations): allows clients to relay
+#   # traffic to a peer over an outbound TCP connection (Connect / ConnectionBind).
+#   # Disabled by default — clients can only allocate UDP relays unless this is set.
+#   enable_rfc6062: false
 #   # list of restricted peer CIDRs (loopback, link-local (unicast, multicast), multicast, private, unspecified) to allow access to.
 #   # By default (i. e. empty list), all restricted peer CIDRs are denied access.
 #   # When not empty, only the specified CIDRs are allowed access.

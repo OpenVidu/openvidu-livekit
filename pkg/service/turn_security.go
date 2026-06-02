@@ -348,14 +348,24 @@ type openviduRelayAddrGen struct {
 	minPort    uint16
 	maxPort    uint16
 	standalone bool
+	// enableRFC6062 controls whether RFC 6062 (TURN Extensions for TCP
+	// Allocations) is permitted. RFC 6062 has two entry points on the relay
+	// address generator:
+	//   - AllocateListener: a TCP Allocate (REQUESTED-TRANSPORT=TCP) creating a
+	//     relay listener for inbound peer connections (used with ConnectionBind).
+	//   - AllocateConn: a Connect request creating an outbound TCP connection.
+	// When false, both are rejected so clients cannot establish TCP relays at
+	// all; UDP relays (AllocatePacketConn) are unaffected.
+	enableRFC6062 bool
 }
 
-func newOpenViduRelayAddrGen(inner turn.RelayAddressGenerator, minPort, maxPort uint16, standalone bool) *openviduRelayAddrGen {
+func newOpenViduRelayAddrGen(inner turn.RelayAddressGenerator, minPort, maxPort uint16, standalone, enableRFC6062 bool) *openviduRelayAddrGen {
 	return &openviduRelayAddrGen{
-		inner:      inner,
-		minPort:    minPort,
-		maxPort:    maxPort,
-		standalone: standalone,
+		inner:         inner,
+		minPort:       minPort,
+		maxPort:       maxPort,
+		standalone:    standalone,
+		enableRFC6062: enableRFC6062,
 	}
 }
 
@@ -386,10 +396,23 @@ func (g *openviduRelayAddrGen) AllocatePacketConn(conf turn.AllocateListenerConf
 
 // AllocateConn handles outbound TCP relay connections (RFC 6062 Connect).
 // pion/turn v5 fully implements RFC 6062 server-side and calls AllocateConn
-// when a client sends a Connect request. The connection is subject to the
-// same port restriction as UDP relay (minPort/maxPort on the remote peer),
-// and wrapped with Prometheus telemetry in standalone mode.
+// when a client sends a Connect request. When RFC 6062 is disabled (the
+// default), every Connect is rejected here, which makes pion/turn return a
+// 447 (Connection Timeout or Failure) error to the client. When enabled, the
+// connection is subject to the same port restriction as UDP relay
+// (minPort/maxPort on the remote peer), and wrapped with Prometheus telemetry
+// in standalone mode.
 func (g *openviduRelayAddrGen) AllocateConn(c turn.AllocateConnConfig) (net.Conn, error) {
+	// RFC 6062 (TURN TCP allocations) is opt-in. When disabled, reject the
+	// Connect request before doing any work — this takes precedence over the
+	// port restriction below.
+	if !g.enableRFC6062 {
+		rfcErr := fmt.Errorf("RFC 6062 (TURN TCP allocations) is disabled")
+		logger.Warnw("TURN AllocateConn denied: RFC 6062 (TURN TCP allocations) is disabled", rfcErr,
+			"network", c.Network, "remoteAddr", c.RemoteAddr.String())
+		return nil, rfcErr
+	}
+
 	port, err := extractPort(c.RemoteAddr)
 	if err != nil {
 		return nil, err
@@ -419,7 +442,20 @@ func (g *openviduRelayAddrGen) AllocateConn(c turn.AllocateConnConfig) (net.Conn
 	}, nil
 }
 
+// AllocateListener handles TCP relay allocations (RFC 6062 Allocate with
+// REQUESTED-TRANSPORT=TCP). pion/turn calls this to create the relay listener
+// that accepts inbound peer TCP connections (later bound by the client via
+// ConnectionBind). When RFC 6062 is disabled (the default), the TCP Allocate is
+// rejected here, which makes pion/turn return a 508 (Insufficient Capacity)
+// error to the client. UDP allocations go through AllocatePacketConn and are
+// unaffected.
 func (g *openviduRelayAddrGen) AllocateListener(conf turn.AllocateListenerConfig) (net.Listener, net.Addr, error) {
+	if !g.enableRFC6062 {
+		rfcErr := fmt.Errorf("RFC 6062 (TURN TCP allocations) is disabled")
+		logger.Warnw("TURN AllocateListener denied: RFC 6062 (TURN TCP allocations) is disabled", rfcErr,
+			"network", conf.Network)
+		return nil, nil, rfcErr
+	}
 	return g.inner.AllocateListener(conf)
 }
 

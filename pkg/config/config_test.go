@@ -83,3 +83,29 @@ func TestGeneratedFlags(t *testing.T) {
 func TestYAMLTag(t *testing.T) {
 	require.NoError(t, configtest.CheckYAMLTags(Config{}))
 }
+
+// BEGIN OPENVIDU BLOCK
+
+func TestConfig_TURN_RFC6062DisabledByDefault(t *testing.T) {
+	conf, err := NewConfig("", true, nil, nil)
+	require.NoError(t, err)
+	require.False(t, conf.TURN.EnableRFC6062, "RFC 6062 (TURN TCP allocations) must be disabled by default")
+}
+
+func TestConfig_TURN_RFC6062EnabledViaYAML(t *testing.T) {
+	const content = `turn:
+  enable_rfc6062: true`
+	conf, err := NewConfig(content, true, nil, nil)
+	require.NoError(t, err)
+	require.True(t, conf.TURN.EnableRFC6062)
+}
+
+func TestConfig_TURN_RFC6062DisabledViaYAML(t *testing.T) {
+	const content = `turn:
+  enable_rfc6062: false`
+	conf, err := NewConfig(content, true, nil, nil)
+	require.NoError(t, err)
+	require.False(t, conf.TURN.EnableRFC6062)
+}
+
+// END OPENVIDU BLOCK

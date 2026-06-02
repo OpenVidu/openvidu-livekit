@@ -90,6 +90,12 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 	} else {
 		logger.Warnw("TURN relay peer port restriction: no ICE port range configured, all peer relay ports will be denied", nil)
 	}
+
+	if turnConf.EnableRFC6062 {
+		logger.Infow("TURN RFC 6062 (TCP allocations) enabled")
+	} else {
+		logger.Infow("TURN RFC 6062 (TCP allocations) disabled — clients can only allocate UDP relays")
+	}
 	// END OPENVIDU BLOCK
 
 	serverConfig := turn.ServerConfig{
@@ -134,6 +140,7 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 			uint16(conf.RTC.ICEPortRangeStart),
 			uint16(conf.RTC.ICEPortRangeEnd),
 			standalone,
+			turnConf.EnableRFC6062,
 		)
 		// END OPENVIDU BLOCK
 
