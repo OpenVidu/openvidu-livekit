@@ -39,7 +39,7 @@ services:
         condition: service_started
 
   minio:
-    image: docker.io/openvidu/minio:RELEASE.2026-05-04T00-27-21Z-r0
+    image: docker.io/openvidu/minio:RELEASE.2026-06-04T00-54-11Z-r0
     container_name: minio
     ports:
       - 9000:9000
@@ -51,7 +51,7 @@ services:
       - minio_browser=on
 
   mongo:
-    image: docker.io/openvidu/mongodb:8.0.21-r0
+    image: docker.io/openvidu/mongodb:8.0.26-r0
     container_name: mongo
     ports:
       - 27017:27017
