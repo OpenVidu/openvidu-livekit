@@ -1319,6 +1319,7 @@ func TestSinglePublisherDataTrack(t *testing.T) {
 	}
 }
 
+// BEGIN OPENVIDU BLOCK
 func TestTurnRelay(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
@@ -1338,9 +1339,12 @@ func TestTurnRelay(t *testing.T) {
 			true,
 		},
 		{
-			"not-allowed",
+			// TURNSecurity always permits relaying to the node's own media
+			// address, so "no CIDRs" connects. Use an explicit deny that covers
+			// the relay/local subnet to verify deny_peer_cidrs blocks the relay.
+			"deny-only",
 			nil,
-			nil,
+			[]string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"},
 			false,
 		},
 		{
@@ -1389,6 +1393,8 @@ func TestTurnRelay(t *testing.T) {
 		})
 	}
 }
+
+// END OPENVIDU BLOCK
 
 func TestTurnAuthFailure(t *testing.T) {
 	if testing.Short() {
