@@ -108,6 +108,16 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 	logValues = append(logValues, "turn.relay_range_start", turnConf.RelayPortRangeStart)
 	logValues = append(logValues, "turn.relay_range_end", turnConf.RelayPortRangeEnd)
 
+	// BEGIN OPENVIDU BLOCK
+	// Restrict TURN relay peers to this machine's local IPs and the registered
+	// cluster-node IPs (Redis nodes_openvidu). Without this the embedded relay
+	// is an open proxy to any public IP for anyone holding valid TURN
+	// credentials. TURNSecurity also enforces the configured
+	// AllowRestrictedPeerCIDRs / DenyPeerCIDRs rules, superseding the previous
+	// inline permission handler. Built once and shared across bind addresses.
+	turnSecurity := NewTURNSecurity(conf, rc)
+	// END OPENVIDU BLOCK
+
 	for _, addr := range turnConf.BindAddresses {
 		// BEGIN OPENVIDU BLOCK
 		// Use the resolved relay address (which may come from explicit config,
@@ -144,40 +154,12 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 		)
 		// END OPENVIDU BLOCK
 
-		permissionHandler := func(_clientAddr net.Addr, peerIP net.IP) bool {
-			// restricted peer IP is denied by default, unless allowed by the allow list,
-			if peerIP.IsLoopback() ||
-				peerIP.IsLinkLocalUnicast() ||
-				peerIP.IsLinkLocalMulticast() ||
-				peerIP.IsMulticast() ||
-				peerIP.IsPrivate() ||
-				peerIP.IsUnspecified() {
-				allowed := false
-				for _, cidr := range turnConf.AllowRestrictedPeerCIDRs {
-					if _, ipnet, err := net.ParseCIDR(cidr); err == nil {
-						if ipnet.Contains(peerIP) {
-							allowed = true
-							break
-						}
-					}
-				}
-				if !allowed {
-					return false
-				}
-
-				// if allowed, check deny list for overrides
-			}
-
-			for _, cidr := range turnConf.DenyPeerCIDRs {
-				if _, ipnet, err := net.ParseCIDR(cidr); err == nil {
-					if ipnet.Contains(peerIP) {
-						return false
-					}
-				}
-			}
-
-			return true
-		}
+		// BEGIN OPENVIDU BLOCK
+		// Enforce the cluster-node peer-IP allowlist (plus the configured
+		// AllowRestrictedPeerCIDRs / DenyPeerCIDRs rules). This replaces the
+		// previous inline handler, which allowed relaying to any public IP.
+		permissionHandler := turnSecurity.PermissionHandler()
+		// END OPENVIDU BLOCK
 
 		if turnConf.TLSPort > 0 {
 			var listener net.Listener

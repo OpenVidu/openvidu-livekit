@@ -1119,4 +1119,257 @@ func (m *mockRelayAddrGen) AllocateConn(turn.AllocateConnConfig) (net.Conn, erro
 	return client, nil
 }
 
+// ---------------------------------------------------------------------------
+// CIDR allow/deny policy (allow_restricted_peer_cidrs / deny_peer_cidrs)
+// ---------------------------------------------------------------------------
+//
+// These exercise TURNSecurity.handlePermissionWithCIDRs:
+//   - deny_peer_cidrs denies, with precedence over local AND cluster IPs and
+//     over the allow list;
+//   - allow_restricted_peer_cidrs GRANTS access to any listed IP (private,
+//     public, or cluster); and when non-empty it also denies restricted peer
+//     IPs that are not listed (narrowing);
+//   - default (empty lists) leaves the decision to the cluster/local allowlist.
+
+// firstPrivateLocalIPv4 returns a private IPv4 address of this machine, or skips
+// the test if none is available. These IPs are exactly the ones NewTURNSecurity
+// discovers into its localIPs set.
+func firstPrivateLocalIPv4(t *testing.T) string {
+	t.Helper()
+	ips, err := rtcconfig.GetLocalIPAddresses(false, false, nil, nil)
+	if err != nil {
+		t.Skipf("could not get local IPs: %v", err)
+	}
+	for _, ip := range ips {
+		if p := net.ParseIP(ip); p != nil && p.To4() != nil && p.IsPrivate() {
+			return ip
+		}
+	}
+	t.Skip("no private IPv4 local address available")
+	return ""
+}
+
+// deny_peer_cidrs must deny a registered cluster-node IP (precedence over the
+// cluster allowlist).
+func TestTURNSecurity_DenyCIDR_OverridesClusterNode(t *testing.T) {
+	mr, rc := newMiniredis(t)
+	setNode(t, mr, "node-1", "10.0.0.5", "10.0.0.5")
+	setNode(t, mr, "node-2", "172.16.0.9", "172.16.0.9")
+
+	conf := &config.Config{}
+	conf.TURN.DenyPeerCIDRs = []string{"10.0.0.0/8"}
+
+	h := NewTURNSecurity(conf, rc).PermissionHandler()
+
+	require.False(t, checkPermission(h, "10.0.0.5"),
+		"deny CIDR must override a registered cluster-node IP")
+	require.True(t, checkPermission(h, "172.16.0.9"),
+		"cluster node outside deny range must remain allowed")
+}
+
+// deny_peer_cidrs must take precedence over the local-IP fast path.
+func TestTURNSecurity_DenyCIDR_OverridesLocalIP(t *testing.T) {
+	v4 := firstPrivateLocalIPv4(t)
+
+	_, rc := newMiniredis(t)
+	conf := &config.Config{}
+	conf.TURN.DenyPeerCIDRs = []string{"0.0.0.0/0"} // deny every IPv4
+
+	h := NewTURNSecurity(conf, rc).PermissionHandler()
+
+	require.False(t, checkPermission(h, v4),
+		"deny CIDR must override the always-allow local-IP fast path")
+}
+
+// deny_peer_cidrs takes precedence over allow_restricted_peer_cidrs.
+func TestTURNSecurity_DenyCIDR_TakesPrecedenceOverAllow(t *testing.T) {
+	mr, rc := newMiniredis(t)
+	setNode(t, mr, "node-1", "10.1.2.3", "10.1.2.3")
+
+	conf := &config.Config{}
+	conf.TURN.AllowRestrictedPeerCIDRs = []string{"10.0.0.0/8"}
+	conf.TURN.DenyPeerCIDRs = []string{"10.0.0.0/8"}
+
+	h := NewTURNSecurity(conf, rc).PermissionHandler()
+
+	require.False(t, checkPermission(h, "10.1.2.3"),
+		"deny list must take precedence over allow list")
+}
+
+// allow_restricted_peer_cidrs grants access to any listed IP — including a
+// PUBLIC, non-cluster IP. An unlisted public non-cluster IP is still denied.
+func TestTURNSecurity_AllowCIDR_GrantsListedPublicIP(t *testing.T) {
+	_, rc := newMiniredis(t) // empty cluster
+	conf := &config.Config{}
+	conf.TURN.AllowRestrictedPeerCIDRs = []string{"1.1.1.0/24"}
+
+	h := NewTURNSecurity(conf, rc).PermissionHandler()
+
+	require.True(t, checkPermission(h, "1.1.1.1"),
+		"a public IP explicitly listed in the allow CIDRs must be permitted")
+	require.False(t, checkPermission(h, "8.8.8.8"),
+		"a public IP not listed (and not a cluster node) must be denied")
+}
+
+// allow_restricted_peer_cidrs grants access to a listed PRIVATE IP even when it
+// is not a registered cluster node.
+func TestTURNSecurity_AllowCIDR_GrantsListedPrivateNonClusterIP(t *testing.T) {
+	_, rc := newMiniredis(t) // empty cluster — 10.1.2.3 is NOT a registered node
+	conf := &config.Config{}
+	conf.TURN.AllowRestrictedPeerCIDRs = []string{"10.0.0.0/8"}
+
+	h := NewTURNSecurity(conf, rc).PermissionHandler()
+
+	require.True(t, checkPermission(h, "10.1.2.3"),
+		"a listed private IP must be permitted even if it is not a cluster node")
+	require.False(t, checkPermission(h, "192.168.1.9"),
+		"a restricted IP outside the allow CIDRs must be denied")
+}
+
+// allow_restricted_peer_cidrs: a restricted cluster-node IP inside the allow
+// range is permitted.
+func TestTURNSecurity_AllowCIDR_AllowsClusterNodeInRange(t *testing.T) {
+	mr, rc := newMiniredis(t)
+	setNode(t, mr, "node-1", "10.1.2.3", "10.1.2.3")
+
+	conf := &config.Config{}
+	conf.TURN.AllowRestrictedPeerCIDRs = []string{"10.0.0.0/8"}
+
+	h := NewTURNSecurity(conf, rc).PermissionHandler()
+
+	require.True(t, checkPermission(h, "10.1.2.3"),
+		"restricted cluster node inside an allow CIDR must be permitted")
+}
+
+// allow_restricted_peer_cidrs: a restricted cluster-node IP OUTSIDE the allow
+// range is denied — the allow list narrows access even for registered cluster
+// nodes.
+func TestTURNSecurity_AllowCIDR_DeniesClusterNodeOutOfRange(t *testing.T) {
+	mr, rc := newMiniredis(t)
+	setNode(t, mr, "node-1", "192.168.1.5", "192.168.1.5")
+
+	conf := &config.Config{}
+	conf.TURN.AllowRestrictedPeerCIDRs = []string{"10.0.0.0/8"}
+
+	h := NewTURNSecurity(conf, rc).PermissionHandler()
+
+	require.False(t, checkPermission(h, "192.168.1.5"),
+		"restricted cluster node outside the allow CIDRs must be denied")
+}
+
+// allow_restricted_peer_cidrs with multiple ranges: membership in any listed
+// CIDR is permitted.
+func TestTURNSecurity_AllowCIDR_MultipleRanges(t *testing.T) {
+	mr, rc := newMiniredis(t)
+	setNode(t, mr, "node-1", "10.1.2.3", "10.1.2.3")
+	setNode(t, mr, "node-2", "192.168.50.7", "192.168.50.7")
+	setNode(t, mr, "node-3", "172.16.0.1", "172.16.0.1") // restricted, NOT in either allow CIDR
+
+	conf := &config.Config{}
+	conf.TURN.AllowRestrictedPeerCIDRs = []string{"10.0.0.0/8", "192.168.0.0/16"}
+
+	h := NewTURNSecurity(conf, rc).PermissionHandler()
+
+	require.True(t, checkPermission(h, "10.1.2.3"))
+	require.True(t, checkPermission(h, "192.168.50.7"))
+	require.False(t, checkPermission(h, "172.16.0.1"),
+		"cluster node outside all allow CIDRs must be denied")
+}
+
+// FOOTGUN: the allow-list restricted-gate runs BEFORE the local-IP fast path, so
+// a local (restricted) IP that is not covered by the allow list is denied — even
+// though local IPs are normally always allowed. When using an allow list,
+// operators must include the local/cluster ranges.
+func TestTURNSecurity_AllowCIDR_DeniesUnlistedLocalIP(t *testing.T) {
+	localIP := firstPrivateLocalIPv4(t)
+	_, rc := newMiniredis(t)
+	conf := &config.Config{}
+	conf.TURN.AllowRestrictedPeerCIDRs = []string{"203.0.113.0/24"} // public range; excludes the local IP
+	h := NewTURNSecurity(conf, rc).PermissionHandler()
+
+	require.False(t, checkPermission(h, localIP),
+		"local restricted IP not in the allow list is denied (allow gate precedes the local fast path)")
+}
+
+// Complement of the footgun: a local IP that IS covered by the allow list is
+// permitted.
+func TestTURNSecurity_AllowCIDR_AllowsListedLocalIP(t *testing.T) {
+	localIP := firstPrivateLocalIPv4(t)
+	_, rc := newMiniredis(t)
+	conf := &config.Config{}
+	conf.TURN.AllowRestrictedPeerCIDRs = []string{fmt.Sprintf("%s/32", localIP)}
+	h := NewTURNSecurity(conf, rc).PermissionHandler()
+
+	require.True(t, checkPermission(h, localIP),
+		"local IP included in the allow list is permitted")
+}
+
+// The restricted-IP gate only narrows RESTRICTED IPs: a PUBLIC cluster-node IP
+// that is not in the allow list still passes through to the cluster allowlist.
+func TestTURNSecurity_AllowCIDR_DoesNotBlockPublicClusterNode(t *testing.T) {
+	mr, rc := newMiniredis(t)
+	setNode(t, mr, "node-pub", "203.0.113.50", "203.0.113.50") // public cluster-node IP
+	conf := &config.Config{}
+	conf.TURN.AllowRestrictedPeerCIDRs = []string{"10.0.0.0/8"} // does not cover the public node
+
+	h := NewTURNSecurity(conf, rc).PermissionHandler()
+
+	require.True(t, checkPermission(h, "203.0.113.50"),
+		"public cluster node not in the allow list is still allowed (gate only narrows restricted IPs)")
+	require.False(t, checkPermission(h, "198.51.100.7"),
+		"public non-cluster IP not in the allow list is denied")
+}
+
+// allow_restricted_peer_cidrs also grants in static (no-Redis) mode.
+func TestTURNSecurity_Static_AllowCIDR_Grants(t *testing.T) {
+	conf := &config.Config{}
+	conf.RTC.NodeIP = rtcconfig.NodeIP{V4: "10.0.0.1"}
+	conf.ResolvedRelayAddress = "10.0.0.1"
+	conf.TURN.AllowRestrictedPeerCIDRs = []string{"10.0.0.0/8"}
+
+	h := NewTURNSecurity(conf, nil).PermissionHandler() // static mode
+
+	require.True(t, checkPermission(h, "10.0.0.1"), "node IP within allow list permitted")
+	require.True(t, checkPermission(h, "10.5.5.5"), "any listed IP permitted (even a non-node) in static mode")
+	require.False(t, checkPermission(h, "192.168.1.1"), "restricted IP outside allow list denied in static mode")
+}
+
+// deny_peer_cidrs overrides even the configured node/relay IP in static mode.
+func TestTURNSecurity_Static_DenyCIDR_OverridesNodeIP(t *testing.T) {
+	conf := &config.Config{}
+	conf.RTC.NodeIP = rtcconfig.NodeIP{V4: "10.0.0.1"}
+	conf.ResolvedRelayAddress = "10.0.0.1"
+	conf.TURN.DenyPeerCIDRs = []string{"10.0.0.0/8"}
+
+	h := NewTURNSecurity(conf, nil).PermissionHandler()
+
+	require.False(t, checkPermission(h, "10.0.0.1"),
+		"deny CIDR overrides the configured node/relay IP in static mode")
+}
+
+// Default (no allow/deny CIDRs): restricted cluster nodes are allowed; restricted
+// and public non-cluster IPs are denied.
+func TestTURNSecurity_NoCIDRs_DefaultRestrictedHandling(t *testing.T) {
+	mr, rc := newMiniredis(t)
+	setNode(t, mr, "node-1", "10.1.2.3", "10.1.2.3")
+
+	h := NewTURNSecurity(&config.Config{}, rc).PermissionHandler()
+
+	require.True(t, checkPermission(h, "10.1.2.3"), "restricted cluster node allowed")
+	require.False(t, checkPermission(h, "192.168.9.9"), "restricted non-cluster IP denied")
+	require.False(t, checkPermission(h, "8.8.8.8"), "public non-cluster IP denied")
+}
+
+// CIDR rules work for IPv6 peers too.
+func TestTURNSecurity_AllowCIDR_IPv6Grant(t *testing.T) {
+	_, rc := newMiniredis(t)
+	conf := &config.Config{}
+	conf.TURN.AllowRestrictedPeerCIDRs = []string{"2001:db8::/32"}
+
+	h := NewTURNSecurity(conf, rc).PermissionHandler()
+
+	require.True(t, checkPermission(h, "2001:db8::1"), "listed IPv6 peer permitted")
+	require.False(t, checkPermission(h, "2001:dead::1"), "unlisted public IPv6 peer denied")
+}
+
 // END OPENVIDU BLOCK

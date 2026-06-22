@@ -263,10 +263,14 @@ type TURNConfig struct {
 
 	// TTL of the TURN credentials in seconds - defaults to 300
 	TTLSeconds int `yaml:"ttl_seconds,omitempty"`
-	// list of restricted peer CIDRs (loopback, link-local (unicast, multicast), multicast, private, unspecified) to allow access to.
-	// By default (i. e. empty list), all restricted peer CIDRs are denied access.
-	// When not empty, only the specified CIDRs are allowed access.
-	// Note that this check is applied to restricted peer CIDRs only.
+	// list of peer CIDRs to explicitly allow relay access to. Any peer IP that
+	// falls in one of these CIDRs is permitted, regardless of whether it is
+	// private, public, or a cluster-node IP (deny_peer_cidrs still takes
+	// precedence). In addition, when this list is non-empty it narrows restricted
+	// peer IPs: restricted IPs (loopback, link-local (unicast/multicast),
+	// multicast, private, unspecified) that are NOT listed here are denied.
+	// By default (empty list) this check is disabled and access is governed by
+	// the cluster/local allowlist.
 	AllowRestrictedPeerCIDRs []string `yaml:"allow_restricted_peer_cidrs,omitempty"`
 	// list of peer CIDRs to deny access to
 	// This applies to all peer CIDRs, including restricted ones.

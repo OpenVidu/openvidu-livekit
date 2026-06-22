@@ -129,7 +129,8 @@ func (s *TURNSecurity) PermissionHandler() turn.PermissionHandler {
 func (s *TURNSecurity) handlePermissionWithCIDRs(clientAddr net.Addr, peerIP net.IP) bool {
 	peerStr := peerIP.String()
 
-	// Deny CIDRs always take precedence — even over local/cluster IPs.
+	// Deny CIDRs always take precedence — over the allow list below and over
+	// local/cluster IPs.
 	for _, ipnet := range s.denyNets {
 		if ipnet.Contains(peerIP) {
 			logger.Infow("TURN permission denied by deny CIDR", "peerIP", peerStr)
@@ -137,28 +138,27 @@ func (s *TURNSecurity) handlePermissionWithCIDRs(clientAddr net.Addr, peerIP net
 		}
 	}
 
-	// Only check the allow CIDRs if any are configured using YAML property "allow_restricted_peer_cidrs"
-	// The default behavior on an empty list is to allow all restricted IPs, which is the opposite of the default LiveKit behaviour.
-	// This is acceptable because our OpenVidu deployment manages IP security at a greater level.
 	if len(s.allowNets) > 0 {
-		// restricted peer IP is denied by default, unless allowed by the allow list,
+		// A peer IP explicitly listed in allow_restricted_peer_cidrs is permitted,
+		// regardless of whether it is private, public, or a cluster node. This is
+		// an explicit operator override (deny CIDRs above still take precedence).
+		for _, ipnet := range s.allowNets {
+			if ipnet.Contains(peerIP) {
+				return true
+			}
+		}
+		// With an allow list configured, restricted peer IPs that are NOT listed
+		// are denied — the allow list narrows which restricted ranges may be used.
+		// Non-restricted (public) IPs that are not listed fall through to the
+		// cluster/local allowlist below.
 		if peerIP.IsLoopback() ||
 			peerIP.IsLinkLocalUnicast() ||
 			peerIP.IsLinkLocalMulticast() ||
 			peerIP.IsMulticast() ||
 			peerIP.IsPrivate() ||
 			peerIP.IsUnspecified() {
-			allowedByCIDR := false
-			for _, ipnet := range s.allowNets {
-				if ipnet.Contains(peerIP) {
-					allowedByCIDR = true
-					break
-				}
-			}
-			if !allowedByCIDR {
-				logger.Infow("TURN permission denied: restricted IP not in allow CIDRs", "peerIP", peerStr)
-				return false
-			}
+			logger.Infow("TURN permission denied: restricted IP not in allow CIDRs", "peerIP", peerStr)
+			return false
 		}
 	}
 
