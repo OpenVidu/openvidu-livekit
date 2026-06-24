@@ -390,29 +390,36 @@ func (s *LivekitServer) debugInfo(w http.ResponseWriter, _ *http.Request) {
 }
 
 // BEGIN OPENVIDU BLOCK
-
-type roomDebugInfo struct {
-	Room string        `json:"room"`
-	Node *livekit.Node `json:"node"`
+type debugRoomsResponse struct {
+	Nodes []*livekit.Node   `json:"nodes"`
+	Rooms map[string]string `json:"rooms"`
 }
 
 // return debug information about rooms, including which node they are on.
-// requires a LiveKit token with "roomAdmin" permission
+// requires a LiveKit token with "roomList" permission
 func (s *LivekitServer) debugRooms(w http.ResponseWriter, r *http.Request) {
-	if err := EnsureAdminPermission(r.Context(), ""); err != nil {
+	if err := EnsureListPermission(r.Context()); err != nil {
 		HandleError(w, r, http.StatusUnauthorized, twirpAuthError(err))
 		return
 	}
 
 	redisRouter, ok := s.router.(*routing.RedisRouter)
 	if !ok {
+		node := s.Node()
 		s.roomManager.lock.RLock()
-		info := make([]roomDebugInfo, 0, len(s.roomManager.rooms))
+		rooms := make(map[string]string, len(s.roomManager.rooms))
 		for name := range s.roomManager.rooms {
-			info = append(info, roomDebugInfo{Room: string(name), Node: s.Node()})
+			rooms[string(name)] = node.Id
 		}
 		s.roomManager.lock.RUnlock()
-		s.writeDebugJSON(w, info)
+		s.writeDebugJSON(w, debugRoomsResponse{Nodes: []*livekit.Node{node}, Rooms: rooms})
+		return
+	}
+
+	nodes, err := redisRouter.ListNodes()
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(err.Error()))
 		return
 	}
 
@@ -423,22 +430,7 @@ func (s *LivekitServer) debugRooms(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// resolve and cache each node so we only hit Redis once per node
-	nodeCache := make(map[string]*livekit.Node)
-	info := make([]roomDebugInfo, 0, len(roomNodeMap))
-	for roomName, nodeID := range roomNodeMap {
-		node, cached := nodeCache[nodeID]
-		if !cached {
-			node, err = redisRouter.GetNode(livekit.NodeID(nodeID))
-			if err != nil {
-				// the node may have disappeared; still report the id we have on record
-				node = &livekit.Node{Id: nodeID}
-			}
-			nodeCache[nodeID] = node
-		}
-		info = append(info, roomDebugInfo{Room: roomName, Node: node})
-	}
-	s.writeDebugJSON(w, info)
+	s.writeDebugJSON(w, debugRoomsResponse{Nodes: nodes, Rooms: roomNodeMap})
 }
 
 func (s *LivekitServer) writeDebugJSON(w http.ResponseWriter, v any) {
