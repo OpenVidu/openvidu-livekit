@@ -142,6 +142,7 @@ func NewLivekitServer(conf *config.Config,
 
 	// BEGIN OPENVIDU BLOCK
 	mux.HandleFunc("/twirp/health", s.healthCheck)
+	mux.HandleFunc("/twirp/debug", s.debugRooms)
 	// END OPENVIDU BLOCK
 
 	xtwirp.RegisterServer(mux, roomServer)
@@ -387,6 +388,71 @@ func (s *LivekitServer) debugInfo(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(b)
 	}
 }
+
+// BEGIN OPENVIDU BLOCK
+
+type roomDebugInfo struct {
+	Room string        `json:"room"`
+	Node *livekit.Node `json:"node"`
+}
+
+// return debug information about rooms, including which node they are on.
+// requires a LiveKit token with "roomAdmin" permission
+func (s *LivekitServer) debugRooms(w http.ResponseWriter, r *http.Request) {
+	if err := EnsureAdminPermission(r.Context(), ""); err != nil {
+		HandleError(w, r, http.StatusUnauthorized, twirpAuthError(err))
+		return
+	}
+
+	redisRouter, ok := s.router.(*routing.RedisRouter)
+	if !ok {
+		s.roomManager.lock.RLock()
+		info := make([]roomDebugInfo, 0, len(s.roomManager.rooms))
+		for name := range s.roomManager.rooms {
+			info = append(info, roomDebugInfo{Room: string(name), Node: s.Node()})
+		}
+		s.roomManager.lock.RUnlock()
+		s.writeDebugJSON(w, info)
+		return
+	}
+
+	roomNodeMap, err := redisRouter.GetRoomNodeMap()
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(err.Error()))
+		return
+	}
+
+	// resolve and cache each node so we only hit Redis once per node
+	nodeCache := make(map[string]*livekit.Node)
+	info := make([]roomDebugInfo, 0, len(roomNodeMap))
+	for roomName, nodeID := range roomNodeMap {
+		node, cached := nodeCache[nodeID]
+		if !cached {
+			node, err = redisRouter.GetNode(livekit.NodeID(nodeID))
+			if err != nil {
+				// the node may have disappeared; still report the id we have on record
+				node = &livekit.Node{Id: nodeID}
+			}
+			nodeCache[nodeID] = node
+		}
+		info = append(info, roomDebugInfo{Room: roomName, Node: node})
+	}
+	s.writeDebugJSON(w, info)
+}
+
+func (s *LivekitServer) writeDebugJSON(w http.ResponseWriter, v any) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(err.Error()))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(b)
+}
+
+// END OPENVIDU BLOCK
 
 func (s *LivekitServer) defaultHandler(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/" {

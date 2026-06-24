@@ -189,6 +189,18 @@ func (r *RedisRouter) RemoveDeadNodes(customCleanup CustomCleanup) error {
 
 // END OPENVIDU BLOCK
 
+// BEGIN OPENVIDU BLOCK
+// GetRoomNodeMap returns the full mapping of room name => node id tracked in Redis
+func (r *RedisRouter) GetRoomNodeMap() (map[string]string, error) {
+	m, err := r.rc.HGetAll(r.ctx, NodeRoomKey).Result()
+	if err != nil {
+		return nil, errors.Wrap(err, "could not get room node map")
+	}
+	return m, nil
+}
+
+// END OPENVIDU BLOCK
+
 // GetNodeForRoom finds the node where the room is hosted at
 func (r *RedisRouter) GetNodeForRoom(_ context.Context, roomName livekit.RoomName) (*livekit.Node, error) {
 	nodeID, err := r.rc.HGet(r.ctx, NodeRoomKey, string(roomName)).Result()
