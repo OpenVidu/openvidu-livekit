@@ -174,6 +174,7 @@ func (s *TURNSecurity) handlePermission(_ net.Addr, peerIP net.IP) bool {
 		return true
 	}
 
+	// If no Redis is configured, check directly against the static allow list.
 	if s.rc == nil {
 		_, ok := s.allowed[peerStr]
 		if !ok {

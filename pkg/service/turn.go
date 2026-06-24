@@ -63,6 +63,7 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 		return nil, err
 	}
 	conf.ResolvedRelayAddress = relayAddress
+	logger.Infow("TURN relay address configured", "relayAddress", conf.ResolvedRelayAddress)
 	// END OPENVIDU BLOCK
 
 	if !turnConf.Enabled {
