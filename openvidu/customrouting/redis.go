@@ -21,6 +21,8 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"github.com/livekit/protocol/logger"
+
 	"github.com/livekit/livekit-server/pkg/config"
 )
 
@@ -61,6 +63,20 @@ func RegisterNodeCustom(ctx context.Context, rc redis.UniversalClient, nodeId st
 		return nil
 	}
 
+	return registerNode(ctx, rc, nodeId, nodeIP, globalConfig.ResolvedRelayAddress)
+}
+
+// registerNode registers nodeId in the nodes_openvidu hash, replacing any stale
+// entries that advertise the same nodeIP.
+//
+// The removal of stale entries (HDEL) and the insertion of the new entry (HSET)
+// are performed together in a single MULTI/EXEC transaction. This guarantees a
+// concurrent reader (notably the TURN permission check, which does an HGETALL of
+// this hash) can never observe a transient window where the IP is absent from
+// the hash. Done as two separate commands, recycling a node's IP would briefly
+// drop it from the allow set and cause spurious "peer IP not in cluster nodes"
+// TURN denials for that IP.
+func registerNode(ctx context.Context, rc redis.UniversalClient, nodeId, nodeIP, relayAddress string) error {
 	exist, err := rc.HExists(ctx, NodesOpenViduKey, nodeId).Result()
 	if err != nil {
 		return fmt.Errorf("failed to check if node is registered: %w", err)
@@ -74,30 +90,28 @@ func RegisterNodeCustom(ctx context.Context, rc redis.UniversalClient, nodeId st
 		return fmt.Errorf("failed to get all nodes: %w", err)
 	}
 
-	// collect IDs of old nodes to remove them
+	// collect IDs of stale nodes advertising the same IP so they can be replaced
+	// atomically together with this node's registration
 	var nodeIDsToRemove []string
 	for _, rawNode := range rawNodes {
 		var ovNode NodeOpenVidu
-		err := json.Unmarshal([]byte(rawNode), &ovNode)
-		if err != nil {
-			return fmt.Errorf("failed to unmarshal node: %w", err)
+		if err := json.Unmarshal([]byte(rawNode), &ovNode); err != nil {
+			// A single malformed sibling entry must not block this node from
+			// registering — that would leave it absent from nodes_openvidu and
+			// cause spurious TURN denials. Skip it, mirroring the reader's
+			// tolerance (fetchAllowedIPs in the TURN permission check).
+			logger.Warnw("skipping malformed node entry during registration", err, "raw", rawNode)
+			continue
 		}
 		if ovNode.NodeIp == nodeIP && ovNode.NodeId != nodeId {
 			nodeIDsToRemove = append(nodeIDsToRemove, ovNode.NodeId)
 		}
 	}
 
-	// remove old nodes if any exist
-	if len(nodeIDsToRemove) > 0 {
-		if err := rc.HDel(ctx, NodesOpenViduKey, nodeIDsToRemove...).Err(); err != nil {
-			return fmt.Errorf("failed to delete nodes: %w", err)
-		}
-	}
-
 	ovNode := NodeOpenVidu{
 		NodeId:       nodeId,
 		NodeIp:       nodeIP,
-		RelayAddress: globalConfig.ResolvedRelayAddress,
+		RelayAddress: relayAddress,
 	}
 
 	jsonOvNode, err := json.Marshal(ovNode)
@@ -105,8 +119,15 @@ func RegisterNodeCustom(ctx context.Context, rc redis.UniversalClient, nodeId st
 		return fmt.Errorf("failed to marshal node: %w", err)
 	}
 
-	if err := rc.HSet(ctx, NodesOpenViduKey, nodeId, jsonOvNode).Err(); err != nil {
-		return fmt.Errorf("failed to set node: %w", err)
+	// Atomic replace: HDEL stale entries + HSET this node in one transaction so
+	// the IP is never transiently missing from nodes_openvidu.
+	pipe := rc.TxPipeline()
+	if len(nodeIDsToRemove) > 0 {
+		pipe.HDel(ctx, NodesOpenViduKey, nodeIDsToRemove...)
+	}
+	pipe.HSet(ctx, NodesOpenViduKey, nodeId, jsonOvNode)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("failed to register node: %w", err)
 	}
 
 	return nil

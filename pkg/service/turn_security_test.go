@@ -1372,4 +1372,131 @@ func TestTURNSecurity_AllowCIDR_IPv6Grant(t *testing.T) {
 	require.False(t, checkPermission(h, "2001:dead::1"), "unlisted public IPv6 peer denied")
 }
 
+// ---------------------------------------------------------------------------
+// Refresh dedup: a newer snapshot is only trusted for a positive result
+// ---------------------------------------------------------------------------
+
+func TestTURNSecurity_Redis_RefreshRevalidatesNegativeDedup(t *testing.T) {
+	// Simulate a poisoned snapshot: the cache is fresh but missing an IP that is
+	// actually present in Redis (as if captured during a transient gap). A
+	// concurrent refresh for that IP must NOT trust the newer snapshot; it must
+	// refetch from Redis and find the IP.
+	mr, rc := newMiniredis(t)
+	setNode(t, mr, "node-1", "10.0.0.1", "10.0.0.1")
+
+	s := NewTURNSecurity(&config.Config{}, rc)
+
+	s.cacheMu.Lock()
+	s.cachedIPs = map[string]struct{}{"10.0.0.2": {}} // poisoned: missing 10.0.0.1
+	s.cacheTime = time.Now().Add(-time.Second)        // older than negativeRevalidateInterval
+	s.cacheMu.Unlock()
+
+	// prevCacheTime in the past → the dedup short-circuit would otherwise fire;
+	// the snapshot is older than negativeRevalidateInterval so it is revalidated.
+	allowed, err := s.refreshCache(time.Time{}, "10.0.0.1")
+	require.NoError(t, err)
+	_, ok := allowed["10.0.0.1"]
+	require.True(t, ok, "negative dedup must refetch and find the present IP")
+}
+
+func TestTURNSecurity_Redis_PositiveDedupSkipsRefetch(t *testing.T) {
+	// When the newer snapshot already confirms the IP, the dedup short-circuit
+	// is used and no Redis fetch happens — proven by breaking Redis and still
+	// getting a positive result without error.
+	mr, rc := newMiniredis(t)
+	setNode(t, mr, "node-1", "10.0.0.1", "10.0.0.1")
+
+	s := NewTURNSecurity(&config.Config{}, rc)
+
+	s.cacheMu.Lock()
+	s.cachedIPs = map[string]struct{}{"10.0.0.1": {}}
+	s.cacheTime = time.Now()
+	s.cacheMu.Unlock()
+
+	mr.SetError("LOADING Redis is loading the dataset in memory")
+
+	allowed, err := s.refreshCache(time.Time{}, "10.0.0.1")
+	require.NoError(t, err, "positive dedup must not hit Redis")
+	_, ok := allowed["10.0.0.1"]
+	require.True(t, ok)
+}
+
+func TestTURNSecurity_Redis_RefreshNegativeDedupStillDeniesAbsentIP(t *testing.T) {
+	// Revalidating a negative dedup must not falsely allow: if the IP is also
+	// genuinely absent from Redis, the refetched snapshot is negative and the IP
+	// stays denied. (Guards against the fix turning every miss into an allow.)
+	mr, rc := newMiniredis(t)
+	setNode(t, mr, "node-1", "10.0.0.1", "10.0.0.1")
+
+	s := NewTURNSecurity(&config.Config{}, rc)
+
+	s.cacheMu.Lock()
+	s.cachedIPs = map[string]struct{}{"10.0.0.1": {}}
+	s.cacheTime = time.Now().Add(-time.Second) // older than negativeRevalidateInterval → revalidates
+	s.cacheMu.Unlock()
+
+	allowed, err := s.refreshCache(time.Time{}, "9.9.9.9")
+	require.NoError(t, err)
+	_, ok := allowed["9.9.9.9"]
+	require.False(t, ok, "genuinely absent IP must stay denied after revalidation")
+	// The revalidating refetch also reconciled the cache with real Redis state.
+	_, ok = allowed["10.0.0.1"]
+	require.True(t, ok)
+}
+
+func TestTURNSecurity_Redis_NegativeDedupRateLimitedWhenFresh(t *testing.T) {
+	// A negative result against a very fresh snapshot is reused (not refetched),
+	// bounding refetch load under a burst of misses for a genuinely-absent IP.
+	mr, rc := newMiniredis(t)
+	setNode(t, mr, "node-1", "10.0.0.1", "10.0.0.1")
+
+	s := NewTURNSecurity(&config.Config{}, rc)
+
+	fresh := time.Now()
+	s.cacheMu.Lock()
+	s.cachedIPs = map[string]struct{}{"10.0.0.1": {}}
+	s.cacheTime = fresh
+	s.cacheMu.Unlock()
+
+	allowed, err := s.refreshCache(time.Time{}, "9.9.9.9")
+	require.NoError(t, err)
+	_, ok := allowed["9.9.9.9"]
+	require.False(t, ok)
+
+	// No refetch happened within the interval: the snapshot/time are untouched.
+	s.cacheMu.RLock()
+	require.Equal(t, fresh, s.cacheTime, "fresh negative snapshot must be reused, not refetched")
+	s.cacheMu.RUnlock()
+}
+
+// ---------------------------------------------------------------------------
+// Denied-peer severity classification
+// ---------------------------------------------------------------------------
+
+func TestTURNSecurity_IsPublicIP(t *testing.T) {
+	// Public/global addresses (a denied relay peer here is a genuine external
+	// target → warning); private/local addresses (a benign in-cluster address
+	// transiently missing from nodes_openvidu → info).
+	cases := []struct {
+		ip   string
+		want bool
+	}{
+		{"3.252.97.62", true},    // public (AWS)
+		{"108.131.122.27", true}, // public
+		{"2001:db8::1", true},    // global unicast IPv6
+		{"10.0.0.1", false},      // private
+		{"10.10.14.163", false},  // private (cluster node)
+		{"172.16.5.4", false},    // private
+		{"192.168.1.1", false},   // private
+		{"127.0.0.1", false},     // loopback
+		{"169.254.1.1", false},   // link-local
+		{"fe80::1", false},       // link-local IPv6
+		{"fd00::1", false},       // unique-local IPv6 (private)
+	}
+	for _, c := range cases {
+		require.Equal(t, c.want, isPublicIP(net.ParseIP(c.ip)), "ip=%s", c.ip)
+	}
+	require.False(t, isPublicIP(nil))
+}
+
 // END OPENVIDU BLOCK
