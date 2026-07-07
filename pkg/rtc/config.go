@@ -37,6 +37,13 @@ type WebRTCConfig struct {
 	Receiver      ReceiverConfig
 	Publisher     DirectionConfig
 	Subscriber    DirectionConfig
+
+	// BEGIN OPENVIDU BLOCK
+	// AdvertiseInternalIP mirrors config.RTCConfig.AdvertiseInternalIP so per-transport code
+	// (transport.go) can decide whether to keep the internal IP exposed even for clients that
+	// do not support prflx-over-relay (e.g. Firefox).
+	AdvertiseInternalIP bool
+	// END OPENVIDU BLOCK
 }
 
 type ReceiverConfig struct {
@@ -88,6 +95,9 @@ func NewWebRTCConfig(conf *config.Config) (*WebRTCConfig, error) {
 		},
 		Publisher:  getPublisherConfig(false),
 		Subscriber: getSubscriberConfig(rtcConf.CongestionControl.UseSendSideBWEInterceptor || rtcConf.CongestionControl.UseSendSideBWE),
+		// BEGIN OPENVIDU BLOCK
+		AdvertiseInternalIP: rtcConf.AdvertiseInternalIP,
+		// END OPENVIDU BLOCK
 	}, nil
 }
 

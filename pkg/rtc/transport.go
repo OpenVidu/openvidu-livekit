@@ -426,10 +426,24 @@ func newPeerConnection(
 			}
 		}
 		if len(nat1to1Ips) > 0 {
-			params.Logger.Infow("client doesn't support prflx over relay, use external ip only as host candidate", "ips", nat1to1Ips)
-			if err := rtcconfig.SetNAT1To1AddressRewriteRules(&se, nat1to1Ips, webrtc.ICECandidateTypeHost); err != nil {
-				params.Logger.Warnw("failed to set ICE address rewrite rules", err, "ips", nat1to1Ips)
+			// BEGIN OPENVIDU BLOCK
+			// When advertise_internal_ip is enabled, expose BOTH the external and the internal
+			// address as host candidates (append mode) rather than external only. The internal
+			// address is then signaled explicitly, so the client can pair it directly without
+			// needing prflx-over-relay (works for clients like Firefox too). The IP filter below
+			// still restricts gathering to the mapped local IPs in both cases.
+			if params.Config.AdvertiseInternalIP {
+				params.Logger.Infow("advertise_internal_ip: exposing external and internal IPs as host candidates for non-prflx client", "ips", nat1to1Ips)
+				if err := SetHostRewriteRulesAppendingInternal(&se, nat1to1Ips); err != nil {
+					params.Logger.Warnw("failed to set ICE address rewrite rules", err, "ips", nat1to1Ips)
+				}
+			} else {
+				params.Logger.Infow("client doesn't support prflx over relay, use external ip only as host candidate", "ips", nat1to1Ips)
+				if err := rtcconfig.SetNAT1To1AddressRewriteRules(&se, nat1to1Ips, webrtc.ICECandidateTypeHost); err != nil {
+					params.Logger.Warnw("failed to set ICE address rewrite rules", err, "ips", nat1to1Ips)
+				}
 			}
+			// END OPENVIDU BLOCK
 			se.SetIPFilter(func(ip net.IP) bool {
 				if ip.To4() == nil {
 					return true
