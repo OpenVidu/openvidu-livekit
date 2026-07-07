@@ -65,6 +65,9 @@ rtc:
   # this is useful for cloud environments such as AWS & Google where hosts have an internal IP
   # that maps to an external one
   use_external_ip: true
+  # # advertise both the mapped external IP and the internal IP as host candidates (requires use_external_ip)
+  # # useful when clients connect from both private and public networks
+  # advertise_internal_ip: true
   # # there are cases where the public IP determined via STUN is not the correct one
   # # in such cases, use this setting to set the public IP of the node
   # # use_external_ip takes precedence, for this to take effect, set use_external_ip to false

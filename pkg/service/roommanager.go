@@ -170,6 +170,16 @@ func NewLocalRoomManager(
 		}
 		rtcConf.NAT1To1IPs = hostCandidateIPs
 		logger.Infow("Added local IPs as host candidates for ICE", "hostCandidateIPs", hostCandidateIPs)
+	} else if conf.RTC.AdvertiseInternalIP && len(rtcConf.NAT1To1IPs) > 0 {
+		// Node is publicly reachable via an external-IP NAT1To1 mapping. Re-issue those mappings
+		// in APPEND mode so that both the external and the internal IPs are advertised as host
+		// candidates (advertise_internal_ip). This case is mutually exclusive with the block above:
+		// a resolved external NAT1To1 mapping makes IsPubliclyReachable return true.
+		if err := rtc.SetHostRewriteRulesAppendingInternal(&rtcConf.SettingEngine, rtcConf.NAT1To1IPs); err != nil {
+			return nil, errors.Wrap(err, "failed to set ICE address rewrite rules for advertise_internal_ip")
+		}
+		logger.Infow("advertise_internal_ip enabled: advertising external and internal IPs as host candidates",
+			"mappings", rtcConf.NAT1To1IPs)
 	}
 	// END OPENVIDU BLOCK
 

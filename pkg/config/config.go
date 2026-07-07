@@ -128,6 +128,14 @@ type Config struct {
 type RTCConfig struct {
 	rtcconfig.RTCConfig `yaml:",inline"`
 
+	// BEGIN OPENVIDU BLOCK
+	// AdvertiseInternalIP, when true, advertises both the mapped external IP and the
+	// internal (local) IP as host candidates. Only takes effect together with
+	// use_external_ip. Mirrors upstream LiveKit's rtc.advertise_internal_ip, implemented
+	// locally against the pinned pion/mediatransportutil versions.
+	AdvertiseInternalIP bool `yaml:"advertise_internal_ip,omitempty"`
+	// END OPENVIDU BLOCK
+
 	TURNServers []TURNServer `yaml:"turn_servers,omitempty"`
 
 	// Deprecated

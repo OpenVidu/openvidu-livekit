@@ -120,4 +120,26 @@ func TestConfig_TURN_RFC6062DisabledViaYAML(t *testing.T) {
 	require.False(t, conf.TURN.EnableRFC6062)
 }
 
+func TestConfig_AdvertiseInternalIP_DefaultFalse(t *testing.T) {
+	conf, err := NewConfig("", true, nil, nil)
+	require.NoError(t, err)
+	require.False(t, conf.RTC.AdvertiseInternalIP, "advertise_internal_ip must be disabled by default")
+}
+
+func TestConfig_AdvertiseInternalIP_EnabledViaYAML(t *testing.T) {
+	const content = `rtc:
+  advertise_internal_ip: true`
+	conf, err := NewConfig(content, true, nil, nil)
+	require.NoError(t, err)
+	require.True(t, conf.RTC.AdvertiseInternalIP)
+}
+
+func TestConfig_AdvertiseInternalIP_DisabledViaYAML(t *testing.T) {
+	const content = `rtc:
+  advertise_internal_ip: false`
+	conf, err := NewConfig(content, true, nil, nil)
+	require.NoError(t, err)
+	require.False(t, conf.RTC.AdvertiseInternalIP)
+}
+
 // END OPENVIDU BLOCK
