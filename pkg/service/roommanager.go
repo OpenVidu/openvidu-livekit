@@ -173,7 +173,7 @@ func NewLocalRoomManager(
 		// in APPEND mode so that both the external and the internal IPs are advertised as host
 		// candidates (advertise_internal_ip). This case is mutually exclusive with the block above:
 		// a resolved external NAT1To1 mapping makes IsPubliclyReachable return true.
-		if err := rtc.SetHostRewriteRulesAppendingInternal(&rtcConf.SettingEngine, rtcConf.NAT1To1IPs); err != nil {
+		if err := rtcconfig.SetNAT1To1AddressRewriteRules(&rtcConf.SettingEngine, rtcConf.NAT1To1IPs, true); err != nil {
 			return nil, errors.Wrap(err, "failed to set ICE address rewrite rules for advertise_internal_ip")
 		}
 		logger.Infow("advertise_internal_ip enabled: advertising external and internal IPs as host candidates",

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/livekit/mediatransportutil/pkg/rtcconfig"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/protocol/logger/pionlogger"
 )
@@ -71,10 +72,11 @@ func gatherHostAddresses(t *testing.T, se webrtc.SettingEngine) []string {
 	return hostAddrs
 }
 
-// TestSetHostRewriteRulesAppendingInternal_AdvertisesBothIPs verifies that the helper advertises
-// BOTH the mapped external IP and the internal IP as host candidates (the advertise_internal_ip
-// behavior), using append mode.
-func TestSetHostRewriteRulesAppendingInternal_AdvertisesBothIPs(t *testing.T) {
+// TestSetNAT1To1AddressRewriteRulesIncludeInternal_AdvertisesBothIPs verifies that
+// rtcconfig.SetNAT1To1AddressRewriteRules with includeInternal=true advertises BOTH the mapped
+// external IP and the internal IP as host candidates (the advertise_internal_ip behavior). The
+// fork relies on this append semantic, so this guards it against future module bumps.
+func TestSetNAT1To1AddressRewriteRulesIncludeInternal_AdvertisesBothIPs(t *testing.T) {
 	const (
 		localIP    = "10.0.0.2"
 		externalIP = "203.0.113.30"
@@ -86,7 +88,7 @@ func TestSetHostRewriteRulesAppendingInternal_AdvertisesBothIPs(t *testing.T) {
 	se.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
 	se.SetNet(nw)
 
-	require.NoError(t, SetHostRewriteRulesAppendingInternal(&se, []string{externalIP + "/" + localIP}))
+	require.NoError(t, rtcconfig.SetNAT1To1AddressRewriteRules(&se, []string{externalIP + "/" + localIP}, true))
 
 	hostAddrs := gatherHostAddresses(t, se)
 	require.NotEmpty(t, hostAddrs, "expected host candidates")

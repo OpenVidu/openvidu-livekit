@@ -436,7 +436,7 @@ func newPeerConnection(
 			// still restricts gathering to the mapped local IPs in both cases.
 			if params.Config.AdvertiseInternalIP {
 				params.Logger.Infow("advertise_internal_ip: exposing external and internal IPs as host candidates for non-prflx client", "ips", nat1to1Ips)
-				if err := SetHostRewriteRulesAppendingInternal(&se, nat1to1Ips); err != nil {
+				if err := rtcconfig.SetNAT1To1AddressRewriteRules(&se, nat1to1Ips, true); err != nil {
 					params.Logger.Warnw("failed to set ICE address rewrite rules", err, "ips", nat1to1Ips)
 				}
 			} else {
