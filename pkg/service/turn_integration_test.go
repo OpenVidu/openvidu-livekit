@@ -301,9 +301,10 @@ func TestTURNAuth_MalformedUsernameRejected(t *testing.T) {
 	}
 }
 
-// A 2-part username (no expiry) is accepted, with the password computed for
-// expiry==0.
-func TestTURNAuth_CredentialWithoutExpiryAllocate(t *testing.T) {
+// A 2-part username (no expiry) is rejected: upstream removed the backwards
+// compatibility path for pre-expiry TURN credentials (livekit#4539), so only
+// apiKey|pID|expiry usernames authenticate.
+func TestTURNAuth_CredentialWithoutExpiryRejected(t *testing.T) {
 	udpPort, h := startAuthTestTurnServer(t)
 
 	username := base62.EncodeToString([]byte(turnTestAPIKey + "|" + string(turnTestPID)))
@@ -311,9 +312,8 @@ func TestTURNAuth_CredentialWithoutExpiryAllocate(t *testing.T) {
 	require.NoError(t, err)
 
 	client := dialTURNClient(t, udpPort, username, password)
-	relay, err := client.Allocate()
-	require.NoError(t, err, "credential without expiry must allocate")
-	_ = relay.Close()
+	_, err = client.Allocate()
+	require.Error(t, err, "credential without expiry must be rejected")
 }
 
 // The TTL is enforced only on the initial Allocate: a long-running session can
