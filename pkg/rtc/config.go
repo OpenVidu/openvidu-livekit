@@ -39,7 +39,7 @@ type WebRTCConfig struct {
 	Subscriber    DirectionConfig
 
 	// BEGIN OPENVIDU BLOCK
-	// AdvertiseInternalIP mirrors config.RTCConfig.AdvertiseInternalIP so per-transport code
+	// AdvertiseInternalIP mirrors rtcconfig.RTCConfig.AdvertiseInternalIP so per-transport code
 	// (transport.go) can decide whether to keep the internal IP exposed even for clients that
 	// do not support prflx-over-relay (e.g. Firefox).
 	AdvertiseInternalIP bool
