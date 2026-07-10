@@ -46,9 +46,12 @@ var (
 	promTrackSubscribedCurrent *prometheus.GaugeVec
 	promTrackPublishCounter    *prometheus.CounterVec
 	promTrackSubscribeCounter  *prometheus.CounterVec
+	promSessionJoinLatency     *prometheus.HistogramVec
 	promSessionStartTime       *prometheus.HistogramVec
 	promSessionDuration        *prometheus.HistogramVec
 	promPubSubTime             *prometheus.HistogramVec
+
+	promPeerConnection *prometheus.CounterVec
 )
 
 func initRoomStats(nodeID string, nodeType livekit.NodeType) {
@@ -97,6 +100,13 @@ func initRoomStats(nodeID string, nodeType livekit.NodeType) {
 		Name:        "subscribe_counter",
 		ConstLabels: prometheus.Labels{"node_id": nodeID, "node_type": nodeType.String()},
 	}, []string{"state", "error"})
+	promSessionJoinLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace:   livekitNamespace,
+		Subsystem:   "session",
+		Name:        "join_latency_ms",
+		ConstLabels: prometheus.Labels{"node_id": nodeID, "node_type": nodeType.String()},
+		Buckets:     prometheus.ExponentialBucketsRange(10, 10000, 15),
+	}, []string{"protocol_version"})
 	promSessionStartTime = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace:   livekitNamespace,
 		Subsystem:   "session",
@@ -118,6 +128,12 @@ func initRoomStats(nodeID string, nodeType livekit.NodeType) {
 		ConstLabels: prometheus.Labels{"node_id": nodeID, "node_type": nodeType.String()},
 		Buckets:     []float64{100, 200, 500, 700, 1000, 5000, 10000},
 	}, append(promStreamLabels, "sdk", "kind", "count"))
+	promPeerConnection = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace:   livekitNamespace,
+		Subsystem:   "peer_connection",
+		Name:        "state",
+		ConstLabels: prometheus.Labels{"node_id": nodeID, "node_type": nodeType.String()},
+	}, []string{"transport", "state"})
 
 	prometheus.MustRegister(promRoomCurrent)
 	prometheus.MustRegister(promRoomDuration)
@@ -126,9 +142,11 @@ func initRoomStats(nodeID string, nodeType livekit.NodeType) {
 	prometheus.MustRegister(promTrackSubscribedCurrent)
 	prometheus.MustRegister(promTrackPublishCounter)
 	prometheus.MustRegister(promTrackSubscribeCounter)
+	prometheus.MustRegister(promSessionJoinLatency)
 	prometheus.MustRegister(promSessionStartTime)
 	prometheus.MustRegister(promSessionDuration)
 	prometheus.MustRegister(promPubSubTime)
+	prometheus.MustRegister(promPeerConnection)
 }
 
 func RoomStarted() {
@@ -262,10 +280,18 @@ func RecordTrackSubscribeCancels(numCancels int32) {
 	promTrackSubscribeCounter.WithLabelValues("cancel", "").Add(float64(numCancels))
 }
 
+func RecordSessionJoinLatency(protocolVersion int, d time.Duration) {
+	promSessionJoinLatency.WithLabelValues(strconv.Itoa(protocolVersion)).Observe(float64(d.Milliseconds()))
+}
+
 func RecordSessionStartTime(protocolVersion int, d time.Duration) {
 	promSessionStartTime.WithLabelValues(strconv.Itoa(protocolVersion)).Observe(float64(d.Milliseconds()))
 }
 
 func RecordSessionDuration(protocolVersion int, d time.Duration) {
 	promSessionDuration.WithLabelValues(strconv.Itoa(protocolVersion)).Observe(float64(d.Milliseconds()))
+}
+
+func RecordPeerConnectionState(transport livekit.SignalTarget, state string) {
+	promPeerConnection.WithLabelValues(transport.String(), state).Inc()
 }

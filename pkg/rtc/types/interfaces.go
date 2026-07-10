@@ -225,6 +225,23 @@ func (p ParticipantCloseReason) ToDisconnectReason() livekit.DisconnectReason {
 	}
 }
 
+// IsIntentionalDisconnect reports whether a disconnect reason represents an
+// intentional/expected closure (client leaving, admin action, room teardown,
+// migration, etc.) as opposed to a connection failure.
+func IsIntentionalDisconnect(reason livekit.DisconnectReason) bool {
+	switch reason {
+	case livekit.DisconnectReason_CLIENT_INITIATED,
+		livekit.DisconnectReason_SERVER_SHUTDOWN,
+		livekit.DisconnectReason_DUPLICATE_IDENTITY,
+		livekit.DisconnectReason_MIGRATION,
+		livekit.DisconnectReason_PARTICIPANT_REMOVED,
+		livekit.DisconnectReason_ROOM_DELETED,
+		livekit.DisconnectReason_ROOM_CLOSED:
+		return true
+	}
+	return false
+}
+
 // ---------------------------------------------
 
 type SignallingCloseReason int
@@ -288,6 +305,7 @@ type Participant interface {
 	ConnectedAt() time.Time
 	CloseReason() ParticipantCloseReason
 	Kind() livekit.ParticipantInfo_Kind
+	KindDetails() []livekit.ParticipantInfo_KindDetail
 	IsRecorder() bool
 	IsDependent() bool
 	IsAgent() bool
@@ -337,6 +355,9 @@ type Participant interface {
 	HandleReceivedDataTrackMessage([]byte, *datatrack.Packet, int64)
 
 	GetParticipantListener() ParticipantListener
+
+	AddDataBlob(dataBlob *livekit.DataBlob)
+	GetDataBlob(key *livekit.DataBlobKey) *livekit.DataBlob
 }
 
 // -------------------------------------------------------
@@ -385,6 +406,7 @@ type LocalParticipant interface {
 	GetReporter() roomobs.ParticipantSessionReporter
 	GetReporterResolver() roomobs.ParticipantReporterResolver
 	GetAdaptiveStream() bool
+	GetEnableStartAtDesiredQuality() bool
 	ProtocolVersion() ProtocolVersion
 	SupportsSyncStreamID() bool
 	SupportsTransceiverReuse(mt MediaTrack) bool
@@ -423,6 +445,7 @@ type LocalParticipant interface {
 
 	// permissions
 	ClaimGrants() *auth.ClaimGrants
+	TokenExpiresAt() time.Time
 	SetPermission(permission *livekit.ParticipantPermission) bool
 	CanPublish() bool
 	CanPublishSource(source livekit.TrackSource) bool
@@ -542,6 +565,9 @@ type LocalParticipant interface {
 	HandlePublishDataTrackRequest(*livekit.PublishDataTrackRequest)
 	HandleUnpublishDataTrackRequest(*livekit.UnpublishDataTrackRequest)
 	HandleUpdateDataSubscription(*livekit.UpdateDataSubscription)
+	HandleStoreDataBlobRequest(*livekit.StoreDataBlobRequest)
+	HandleGetDataBlobRequest(*livekit.GetDataBlobRequest)
+	ProcessGetDataBlobRequest(*livekit.GetDataBlobRequest, Participant)
 
 	HandleSignalMessage(msg proto.Message) error
 
@@ -552,6 +578,8 @@ type LocalParticipant interface {
 	ClearParticipantListener()
 
 	GetNextSubscribedDataTrackHandle() uint16
+
+	GetAllDataBlob() []*livekit.DataBlob
 }
 
 // ---------------------------------------------
@@ -601,6 +629,8 @@ type LocalParticipantListener interface {
 	)
 	OnUpdateSubscriptionPermission(LocalParticipant, *livekit.SubscriptionPermission) error
 	OnUpdateDataSubscriptions(LocalParticipant, *livekit.UpdateDataSubscription)
+	OnStoreDataBlob(LocalParticipant, *livekit.DataBlob)
+	OnGetDataBlob(LocalParticipant, *livekit.GetDataBlobRequest)
 	OnSyncState(LocalParticipant, *livekit.SyncState) error
 	OnSimulateScenario(LocalParticipant, *livekit.SimulateScenario) error
 	OnLeave(LocalParticipant, ParticipantCloseReason)
@@ -631,6 +661,10 @@ func (*NullLocalParticipantListener) OnUpdateSubscriptionPermission(LocalPartici
 	return nil
 }
 func (*NullLocalParticipantListener) OnUpdateDataSubscriptions(LocalParticipant, *livekit.UpdateDataSubscription) {
+}
+func (*NullLocalParticipantListener) OnStoreDataBlob(LocalParticipant, *livekit.DataBlob) {
+}
+func (*NullLocalParticipantListener) OnGetDataBlob(LocalParticipant, *livekit.GetDataBlobRequest) {
 }
 func (*NullLocalParticipantListener) OnSyncState(LocalParticipant, *livekit.SyncState) error {
 	return nil
@@ -807,6 +841,7 @@ type DataTrack interface {
 	AddSubscriber(sub LocalParticipant) (DataDownTrack, error)
 	RemoveSubscriber(participantID livekit.ParticipantID)
 	IsSubscriber(subID livekit.ParticipantID) bool
+	RevokeDisallowedSubscribers(allowedSubscriberIdentities []livekit.ParticipantIdentity) []livekit.ParticipantIdentity
 
 	AddDataDownTrack(sender DataTrackSender) error
 	DeleteDataDownTrack(subscriberID livekit.ParticipantID)
@@ -819,6 +854,7 @@ type DataTrack interface {
 //counterfeiter:generate . DataDownTrack
 type DataDownTrack interface {
 	Close()
+	OnClose(fn func())
 
 	Handle() uint16
 	PublishDataTrack() DataTrack
@@ -883,8 +919,10 @@ type DataResolverResult struct {
 	TrackChangedNotifier ChangeNotifier
 	TrackRemovedNotifier ChangeNotifier
 	DataTrack            DataTrack
-	PublisherID          livekit.ParticipantID
-	PublisherIdentity    livekit.ParticipantIdentity
+	// is permission given to the requesting participant
+	HasPermission     bool
+	PublisherID       livekit.ParticipantID
+	PublisherIdentity livekit.ParticipantIdentity
 }
 
 // MediaTrackResolver locates a specific media track for a subscriber

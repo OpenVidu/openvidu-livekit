@@ -79,6 +79,8 @@ type MediaTrackParams struct {
 	ParticipantIdentity              livekit.ParticipantIdentity
 	ParticipantVersion               uint32
 	ParticipantCountry               string
+	ParticipantKind                  livekit.ParticipantInfo_Kind
+	ParticipantKindDetails           []livekit.ParticipantInfo_KindDetail
 	BufferFactory                    *buffer.Factory
 	ReceiverConfig                   ReceiverConfig
 	SubscriberConfig                 DirectionConfig
@@ -301,7 +303,6 @@ func (t *MediaTrack) AddReceiver(receiver *webrtc.RTPReceiver, track sfu.TrackRe
 
 	var lastRR uint32
 	rtcpReader.OnPacket(func(bytes []byte) {
-		isLargePacket := len(bytes) > 1400
 		pkts, err := rtcp.Unmarshal(bytes)
 		if err != nil {
 			t.params.Logger.Errorw("could not unmarshal RTCP", err, "size", len(bytes))
@@ -311,13 +312,7 @@ func (t *MediaTrack) AddReceiver(receiver *webrtc.RTPReceiver, track sfu.TrackRe
 		for _, pkt := range pkts {
 			switch pkt := pkt.(type) {
 			case *rtcp.SourceDescription:
-				if isLargePacket {
-					t.params.Logger.Infow("large RTCP packet received with SDES", "size", len(bytes))
-				}
 			case *rtcp.SenderReport:
-				if isLargePacket {
-					t.params.Logger.Infow("large RTCP packet received with sender report", "size", len(bytes), "SSRC", pkt.SSRC)
-				}
 				if pkt.SSRC == uint32(track.SSRC()) {
 					buff.SetSenderReportData(&livekit.RTCPSenderReportState{
 						RtpTimestamp: pkt.RTPTime,
@@ -328,9 +323,6 @@ func (t *MediaTrack) AddReceiver(receiver *webrtc.RTPReceiver, track sfu.TrackRe
 					})
 				}
 			case *rtcp.ExtendedReport:
-				if isLargePacket {
-					t.params.Logger.Infow("large RTCP packet received with extendedreport", "size", len(bytes))
-				}
 			rttFromXR:
 				for _, report := range pkt.Reports {
 					if rr, ok := report.(*rtcp.DLRRReportBlock); ok {
@@ -462,6 +454,9 @@ func (t *MediaTrack) AddReceiver(receiver *webrtc.RTPReceiver, track sfu.TrackRe
 
 				if cs, ok := telemetry.CondenseStat(stat); ok {
 					t.params.Reporter.Tx(func(tx roomobs.TrackTx) {
+						tx.ParticipantSession().ReportKind(t.params.ParticipantKind.String())
+						tx.ParticipantSession().ReportKindCode(roomobs.ParticipantKindCode(t.params.ParticipantKind))
+						tx.ParticipantSession().ReportKindDetailsCodes(roomobs.ParticipantKindDetailsCodes(t.params.ParticipantKindDetails))
 						tx.ReportName(ti.Name)
 						tx.ReportKind(roomobs.TrackKindPub)
 						tx.ReportType(roomobs.TrackTypeFromProto(ti.Type))

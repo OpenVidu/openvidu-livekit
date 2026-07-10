@@ -35,6 +35,7 @@ import (
 
 	"github.com/livekit/mediatransportutil/pkg/rtcconfig"
 	"github.com/livekit/protocol/auth"
+	"github.com/livekit/protocol/codecs/mime"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/protocol/observability"
@@ -365,9 +366,21 @@ func (r *RoomManager) StartSession(
 ) error {
 	sessionStartTime := time.Now()
 
+	if pi.Identity != "" && pi.Grants != nil {
+		if !r.config.Limit.CheckMetadataSize(pi.Grants.Metadata) {
+			return ErrMetadataExceedsLimits
+		}
+		if !r.config.Limit.CheckAttributesSize(pi.Grants.Attributes) {
+			return ErrAttributeExceedsLimits
+		}
+	}
+
 	createRoom := pi.CreateRoom
 	room, err := r.getOrCreateRoom(ctx, createRoom)
 	if err != nil {
+		if pi.Identity != "" {
+			prometheus.IncrementParticipantRtcCanceled(1)
+		}
 		return err
 	}
 	defer room.Release()
@@ -443,9 +456,11 @@ func (r *RoomManager) StartSession(
 				pi.ReconnectReason,
 			); err != nil {
 				participant.GetLogger().Warnw("could not resume participant", err)
+				prometheus.IncrementParticipantRtcCanceled(1)
 				return err
 			}
 			r.telemetry.ParticipantResumed(ctx, room.ToProto(), participant.ToProto(), r.currentNode.NodeID(), pi.ReconnectReason)
+			prometheus.IncrementParticipantRtcActive(1)
 
 			go room.HandleSyncState(participant, pi.SyncState)
 
@@ -535,35 +550,45 @@ func (r *RoomManager) StartSession(
 		subscriberAllowPause = *pi.SubscriberAllowPause
 	}
 
+	enabledCodecs := protoRoom.EnabledCodecs
+	if !slices.ContainsFunc(enabledCodecs, func(codec *livekit.Codec) bool {
+		return mime.IsMimeTypeStringRTX(codec.Mime)
+	}) {
+		enabledCodecs = append(enabledCodecs, &livekit.Codec{Mime: mime.MimeTypeRTX.String()})
+	}
+
 	participant, err = rtc.NewParticipant(rtc.ParticipantParams{
-		Identity:                pi.Identity,
-		Name:                    pi.Name,
-		SID:                     sid,
-		Config:                  &rtcConf,
-		Sink:                    responseSink,
-		AudioConfig:             r.config.Audio,
-		VideoConfig:             r.config.Video,
-		LimitConfig:             r.config.Limit,
-		ProtocolVersion:         pv,
-		SessionStartTime:        sessionStartTime,
-		SessionTimer:            observability.NewSessionTimer(sessionStartTime),
-		TelemetryListener:       room.ParticipantTelemetryListener(),
-		Trailer:                 room.Trailer(),
-		PLIThrottleConfig:       r.config.RTC.PLIThrottle,
-		CongestionControlConfig: r.config.RTC.CongestionControl,
-		PublishEnabledCodecs:    protoRoom.EnabledCodecs,
-		SubscribeEnabledCodecs:  protoRoom.EnabledCodecs,
-		Grants:                  pi.Grants,
-		Reconnect:               pi.Reconnect,
-		Logger:                  pLogger,
-		Reporter:                roomobs.NewNoopParticipantSessionReporter(),
-		ClientConf:              clientConf,
-		ClientInfo:              rtc.ClientInfo{ClientInfo: pi.Client},
-		Region:                  pi.Region,
-		AdaptiveStream:          pi.AdaptiveStream,
-		AllowTCPFallback:        allowFallback,
-		TURNSEnabled:            r.config.IsTURNSEnabled(),
-		ParticipantListener:     room.LocalParticipantListener(),
+		Identity:                 pi.Identity,
+		Name:                     pi.Name,
+		SID:                      sid,
+		Config:                   &rtcConf,
+		Sink:                     responseSink,
+		AudioConfig:              r.config.Audio,
+		VideoConfig:              r.config.Video,
+		LimitConfig:              r.config.Limit,
+		ProtocolVersion:          pv,
+		SessionStartTime:         sessionStartTime,
+		SessionTimer:             observability.NewSessionTimer(sessionStartTime),
+		TelemetryListener:        room.ParticipantTelemetryListener(),
+		Trailer:                  room.Trailer(),
+		PLIThrottleConfig:        r.config.RTC.PLIThrottle,
+		CongestionControlConfig:  r.config.RTC.CongestionControl,
+		PublishEnabledCodecs:     enabledCodecs,
+		SubscribeEnabledCodecs:   enabledCodecs,
+		Grants:                   pi.Grants,
+		TokenExpiresAt:           pi.TokenExpiresAt,
+		Reconnect:                pi.Reconnect,
+		Logger:                   pLogger,
+		Reporter:                 roomobs.NewNoopParticipantSessionReporter(),
+		ClientConf:               clientConf,
+		ClientInfo:               rtc.ClientInfo{ClientInfo: pi.Client},
+		Region:                   pi.Region,
+		AdaptiveStream:           pi.AdaptiveStream,
+		AllowTCPFallback:         allowFallback,
+		TCPFallbackRTTThreshold:  r.config.RTC.TCPFallbackRTTThreshold,
+		AllowUDPUnstableFallback: r.config.RTC.AllowUDPUnstableFallback,
+		TURNSEnabled:             r.config.IsTURNSEnabled(),
+		ParticipantListener:      room.LocalParticipantListener(),
 		ParticipantHelper: &roomManagerParticipantHelper{
 			room:                     room,
 			codecRegressionThreshold: r.config.Video.CodecRegressionThreshold,
@@ -586,9 +611,11 @@ func (r *RoomManager) StartSession(
 		FireOnTrackBySdp:                true,
 		UseSinglePeerConnection:         pi.UseSinglePeerConnection,
 		EnableDataTracks:                r.config.EnableDataTracks,
+		EnableParticipantDataBlob:       r.config.EnableParticipantDataBlob,
 		EnableRTPStreamRestartDetection: r.config.RTC.EnableRTPStreamRestartDetection,
 	})
 	if err != nil {
+		prometheus.IncrementParticipantRtcCanceled(1)
 		return err
 	}
 	iceConfig := r.setIceConfig(room.Name(), participant)
@@ -604,6 +631,7 @@ func (r *RoomManager) StartSession(
 	if err = room.Join(participant, requestSource, &opts, iceServers); err != nil {
 		pLogger.Errorw("could not join room", err)
 		_ = participant.Close(true, types.ParticipantCloseReasonJoinFailed, false)
+		prometheus.IncrementParticipantRtcCanceled(1)
 		return err
 	}
 
@@ -615,6 +643,7 @@ func (r *RoomManager) StartSession(
 		participantServerClosers.Close()
 		pLogger.Errorw("could not join register participant topic", err)
 		_ = participant.Close(true, types.ParticipantCloseReasonMessageBusFailed, false)
+		prometheus.IncrementParticipantRtcCanceled(1)
 		return err
 	}
 
@@ -625,6 +654,7 @@ func (r *RoomManager) StartSession(
 			participantServerClosers.Close()
 			pLogger.Errorw("could not join register participant topic for rtc rest participant server", err)
 			_ = participant.Close(true, types.ParticipantCloseReasonMessageBusFailed, false)
+			prometheus.IncrementParticipantRtcCanceled(1)
 			return err
 		}
 	}
@@ -1187,11 +1217,20 @@ func (r *RoomManager) refreshToken(participant types.LocalParticipant) error {
 	}
 
 	grants := participant.ClaimGrants()
+
+	// Preserve the original token's expiry
+	validFor := tokenDefaultTTL
+	if expiresAt := participant.TokenExpiresAt(); !expiresAt.IsZero() {
+		if remaining := time.Until(expiresAt); remaining > validFor {
+			validFor = remaining
+		}
+	}
+
 	token := auth.NewAccessToken(key, secret)
 	token.SetName(grants.Name).
 		SetIdentity(string(participant.Identity())).
 		SetKind(grants.GetParticipantKind()).
-		SetValidFor(tokenDefaultTTL).
+		SetValidFor(validFor).
 		SetMetadata(grants.Metadata).
 		SetAttributes(grants.Attributes).
 		SetVideoGrant(grants.Video).

@@ -80,9 +80,6 @@ const (
 
 	PingIntervalSeconds = 5
 	PingTimeoutSeconds  = 15
-
-	audioSectionsCountWithJoinResponse = 3
-	videoSectionsCountWithJoinResponse = 3
 )
 
 var (
@@ -177,57 +174,60 @@ type ParticipantParams struct {
 	PLIThrottleConfig       sfu.PLIThrottleConfig
 	CongestionControlConfig config.CongestionControlConfig
 	// codecs that are enabled for this room
-	PublishEnabledCodecs                []*livekit.Codec
-	SubscribeEnabledCodecs              []*livekit.Codec
-	Logger                              logger.Logger
-	LoggerResolver                      logger.DeferredFieldResolver
-	Reporter                            roomobs.ParticipantSessionReporter
-	ReporterResolver                    roomobs.ParticipantReporterResolver
-	SimTracks                           map[uint32]interceptor.SimulcastTrackInfo
-	Grants                              *auth.ClaimGrants
-	InitialVersion                      uint32
-	ClientConf                          *livekit.ClientConfiguration
-	ClientInfo                          ClientInfo
-	Region                              string
-	Migration                           bool
-	Reconnect                           bool
-	AdaptiveStream                      bool
-	AllowTCPFallback                    bool
-	TCPFallbackRTTThreshold             int
-	AllowUDPUnstableFallback            bool
-	TURNSEnabled                        bool
-	ParticipantListener                 types.LocalParticipantListener
-	ParticipantHelper                   types.LocalParticipantHelper
-	DisableSupervisor                   bool
-	ReconnectOnPublicationError         bool
-	ReconnectOnSubscriptionError        bool
-	ReconnectOnDataChannelError         bool
-	VersionGenerator                    utils.TimedVersionGenerator
-	DisableDynacast                     bool
-	SubscriberAllowPause                bool
-	SubscriptionLimitAudio              int32
-	SubscriptionLimitVideo              int32
-	PlayoutDelay                        *livekit.PlayoutDelay
-	SyncStreams                         bool
-	ForwardStats                        *sfu.ForwardStats
-	DisableSenderReportPassThrough      bool
-	MetricConfig                        metric.MetricConfig
-	UseOneShotSignallingMode            bool
-	EnableMetrics                       bool
-	DataChannelMaxBufferedAmount        uint64
-	DatachannelSlowThreshold            int
-	DatachannelLossyTargetLatency       time.Duration
-	FireOnTrackBySdp                    bool
-	DisableCodecRegression              bool
-	LastPubReliableSeq                  uint32
-	Country                             string
-	PreferVideoSizeFromMedia            bool
-	UseSinglePeerConnection             bool
-	EnableDataTracks                    bool
-	EnableRTPStreamRestartDetection     bool
-	ForceBackupCodecPolicySimulcast     bool
-	RequireMediaSectionWithJoinResponse bool
-	DisableTransceiverReuseForE2EE      bool
+	PublishEnabledCodecs            []*livekit.Codec
+	SubscribeEnabledCodecs          []*livekit.Codec
+	Logger                          logger.Logger
+	LoggerResolver                  logger.DeferredFieldResolver
+	Reporter                        roomobs.ParticipantSessionReporter
+	ReporterResolver                roomobs.ParticipantReporterResolver
+	SimTracks                       map[uint32]interceptor.SimulcastTrackInfo
+	Grants                          *auth.ClaimGrants
+	TokenExpiresAt                  time.Time
+	InitialVersion                  uint32
+	ClientConf                      *livekit.ClientConfiguration
+	ClientInfo                      ClientInfo
+	Region                          string
+	Migration                       bool
+	Reconnect                       bool
+	AdaptiveStream                  bool
+	AllowTCPFallback                bool
+	TCPFallbackRTTThreshold         int
+	AllowUDPUnstableFallback        bool
+	TURNSEnabled                    bool
+	ParticipantListener             types.LocalParticipantListener
+	ParticipantHelper               types.LocalParticipantHelper
+	DisableSupervisor               bool
+	ReconnectOnPublicationError     bool
+	ReconnectOnSubscriptionError    bool
+	ReconnectOnDataChannelError     bool
+	VersionGenerator                utils.TimedVersionGenerator
+	DisableDynacast                 bool
+	SubscriberAllowPause            bool
+	SubscriptionLimitAudio          int32
+	SubscriptionLimitVideo          int32
+	PlayoutDelay                    *livekit.PlayoutDelay
+	SyncStreams                     bool
+	ForwardStats                    *sfu.ForwardStats
+	DisableSenderReportPassThrough  bool
+	MetricConfig                    metric.MetricConfig
+	UseOneShotSignallingMode        bool
+	EnableMetrics                   bool
+	DataChannelMaxBufferedAmount    uint64
+	DatachannelSlowThreshold        int
+	DatachannelLossyTargetLatency   time.Duration
+	FireOnTrackBySdp                bool
+	DisableCodecRegression          bool
+	LastPubReliableSeq              uint32
+	Country                         string
+	PreferVideoSizeFromMedia        bool
+	UseSinglePeerConnection         bool
+	EnableDataTracks                bool
+	EnableRTPStreamRestartDetection bool
+	ForceBackupCodecPolicySimulcast bool
+	DisableTransceiverReuseForE2EE  bool
+	EnableParticipantDataBlob       bool
+	EnableStartAtDesiredQuality     bool
+	MigrationWaitDuration           time.Duration
 }
 
 type ParticipantImpl struct {
@@ -336,6 +336,8 @@ type ParticipantImpl struct {
 	rpcLock             sync.Mutex
 	rpcPendingAcks      map[string]*utils.DataChannelRpcPendingAckHandler
 	rpcPendingResponses map[string]*utils.DataChannelRpcPendingResponseHandler
+
+	dataBlob *ParticipantDataBlob
 }
 
 func NewParticipant(params ParticipantParams) (*ParticipantImpl, error) {
@@ -374,6 +376,9 @@ func NewParticipant(params ParticipantParams) (*ParticipantImpl, error) {
 		telemetryGuard:                &telemetry.ReferenceGuard{},
 		nextSubscribedDataTrackHandle: uint16(rand.Intn(256)),
 		requireBroadcast:              params.Grants.Metadata != "" || len(params.Grants.Attributes) != 0,
+		dataBlob: NewParticipantDataBlob(ParticipantDataBlobParams{
+			Logger: params.Logger,
+		}),
 	}
 	p.setupSignalling()
 
@@ -382,6 +387,8 @@ func NewParticipant(params ParticipantParams) (*ParticipantImpl, error) {
 		p.params.Country,
 		BytesTrackIDForParticipantID(BytesTrackTypeData, p.ID()),
 		p.ID(),
+		params.Grants.GetParticipantKind(),
+		params.Grants.GetKindDetails(),
 		params.TelemetryListener,
 		params.Reporter,
 	)
@@ -406,11 +413,25 @@ func NewParticipant(params ParticipantParams) (*ParticipantImpl, error) {
 		p.supervisor.OnPublicationError(p.onPublicationError)
 	}
 
+	var timerStarted bool
 	params.Reporter.RegisterFunc(func(ts time.Time, tx roomobs.ParticipantSessionTx) bool {
 		if dts := p.disconnectedAt.Load(); dts != nil {
 			ts = *dts
 			tx.ReportEndTime(ts)
 		}
+
+		// Don't publish duration if participant never became active. Otherwise short-lived
+		// JOINING/JOINED -> DISCONNECTED transitions would still get rounded up to a
+		// minute by the session timer and inflate billed/reported duration.
+		if lastActive := p.lastActiveAt.Load(); lastActive == nil {
+			return !p.IsClosed()
+		} else if !timerStarted {
+			timerStarted = true
+			p.params.SessionTimer.Reset(*lastActive)
+		}
+
+		tx.ReportKindCode(roomobs.ParticipantKindCode(p.Kind()))
+		tx.ReportKindDetailsCodes(roomobs.ParticipantKindDetailsCodes(p.KindDetails()))
 
 		millis, secs, mins := p.params.SessionTimer.Advance(ts)
 		tx.ReportDuration(uint16(millis))
@@ -492,6 +513,10 @@ func (p *ParticipantImpl) GetAdaptiveStream() bool {
 	return p.params.AdaptiveStream
 }
 
+func (p *ParticipantImpl) GetEnableStartAtDesiredQuality() bool {
+	return p.params.EnableStartAtDesiredQuality
+}
+
 func (p *ParticipantImpl) GetPacer() pacer.Pacer {
 	return p.TransportManager.GetSubscriberPacer()
 }
@@ -514,6 +539,10 @@ func (p *ParticipantImpl) State() livekit.ParticipantInfo_State {
 
 func (p *ParticipantImpl) Kind() livekit.ParticipantInfo_Kind {
 	return p.grants.Load().GetParticipantKind()
+}
+
+func (p *ParticipantImpl) KindDetails() []livekit.ParticipantInfo_KindDetail {
+	return p.grants.Load().GetKindDetails()
 }
 
 func (p *ParticipantImpl) IsRecorder() bool {
@@ -769,6 +798,10 @@ func (p *ParticipantImpl) ClaimGrants() *auth.ClaimGrants {
 	return p.grants.Load()
 }
 
+func (p *ParticipantImpl) TokenExpiresAt() time.Time {
+	return p.params.TokenExpiresAt
+}
+
 func (p *ParticipantImpl) SetPermission(permission *livekit.ParticipantPermission) bool {
 	if permission == nil {
 		return false
@@ -885,6 +918,7 @@ func (p *ParticipantImpl) ToProtoWithVersion() (*livekit.ParticipantInfo, utils.
 		KindDetails:      grants.GetKindDetails(),
 		DisconnectReason: p.CloseReason().ToDisconnectReason(),
 		ClientProtocol:   clientProtocol,
+		Capabilities:     p.params.ClientInfo.GetCapabilities(),
 	}
 	p.lock.RUnlock()
 
@@ -945,7 +979,9 @@ func (p *ParticipantImpl) GetTelemetryListener() types.ParticipantTelemetryListe
 
 func (p *ParticipantImpl) AddOnClose(key string, callback func(types.LocalParticipant)) {
 	if p.isClosed.Load() {
-		go callback(p)
+		if callback != nil {
+			go callback(p)
+		}
 		return
 	}
 
@@ -1311,9 +1347,7 @@ func (p *ParticipantImpl) AddTrack(req *livekit.AddTrackRequest) {
 		return
 	}
 
-	p.pendingTracksLock.Lock()
-	ti := p.addPendingTrackLocked(req)
-	p.pendingTracksLock.Unlock()
+	ti := p.addPendingTrack(req)
 	if ti == nil {
 		return
 	}
@@ -1360,6 +1394,15 @@ func (p *ParticipantImpl) SetMigrateInfo(
 				Logger:              p.params.Logger.WithValues("trackID", dti.Sid),
 				ParticipantID:       p.ID,
 				ParticipantIdentity: p.params.Identity,
+				BytesTrackStats: NewBytesTrackStats(
+					p.params.Country,
+					livekit.TrackID(dti.Sid),
+					p.ID(),
+					p.Kind(),
+					p.KindDetails(),
+					p.params.TelemetryListener,
+					p.params.Reporter,
+				),
 			},
 			dti,
 		)
@@ -1383,11 +1426,29 @@ func (p *ParticipantImpl) IsReconnect() bool {
 	return p.params.Reconnect
 }
 
+func (p *ParticipantImpl) maybeRecordRTCanceled(closeReason types.ParticipantCloseReason) {
+	if p.State() >= livekit.ParticipantInfo_ACTIVE {
+		return
+	}
+
+	if closeReason == types.ParticipantCloseReasonClientRequestLeave ||
+		closeReason == types.ParticipantCloseReasonDuplicateIdentity ||
+		closeReason == types.ParticipantCloseReasonRoomClosed ||
+		closeReason == types.ParticipantCloseReasonMigrationRequested ||
+		closeReason == types.ParticipantCloseReasonMigrationComplete ||
+		// client closing signal connection too quickly, there is a time check to handle clients timing out and leaving without sending a leave message
+		(time.Since(p.params.SessionStartTime) < 3*time.Second && closeReason == types.ParticipantCloseReasonSignalSourceClose) {
+		prometheus.IncrementParticipantRtcCanceled(1)
+	}
+}
+
 func (p *ParticipantImpl) Close(sendLeave bool, reason types.ParticipantCloseReason, isExpectedToResume bool) error {
 	if p.isClosed.Swap(true) {
 		// already closed
 		return nil
 	}
+
+	p.maybeRecordRTCanceled(reason)
 
 	var sessionDuration time.Duration
 	if activeAt := p.ActiveAt(); !activeAt.IsZero() {
@@ -1512,7 +1573,7 @@ func (p *ParticipantImpl) setupMigrationTimerLocked() {
 	// to try and succeed. If not, close the subscriber peer connection
 	// and help the remote side to narrow down its ICE candidate pool.
 	//
-	p.migrationTimer = time.AfterFunc(migrationWaitDuration, func() {
+	p.migrationTimer = time.AfterFunc(max(p.params.MigrationWaitDuration, migrationWaitDuration), func() {
 		p.clearMigrationTimer()
 
 		if p.IsClosed() || p.IsDisconnected() {
@@ -2796,7 +2857,10 @@ func (p *ParticipantImpl) onSubscribedAudioCodecChange(
 	return p.sendSubscribedAudioCodecUpdate(subscribedAudioCodecUpdate)
 }
 
-func (p *ParticipantImpl) addPendingTrackLocked(req *livekit.AddTrackRequest) *livekit.TrackInfo {
+func (p *ParticipantImpl) addPendingTrack(req *livekit.AddTrackRequest) *livekit.TrackInfo {
+	p.pendingTracksLock.Lock()
+	defer p.pendingTracksLock.Unlock()
+
 	if req.Sid != "" {
 		track := p.GetPublishedTrack(livekit.TrackID(req.Sid))
 		if track == nil {
@@ -3193,11 +3257,11 @@ func (p *ParticipantImpl) mediaTrackReceived(
 		mt = p.addMediaTrack(signalCid, ti)
 		newTrack = true
 
-		// if the addTrackRequest is sent before participant active then it means the client tries to publish
-		// before fully connected, in this case we only record the time when the participant is active since
+		// if the addTrackRequest is sent before publisher peer connection is established, then it means the client tries to publish
+		// before fully connected, in this case we only record the time when publisher peer connection is established since
 		// we want this metric to represent the time cost by publishing.
-		if activeAt := p.lastActiveAt.Load(); activeAt != nil && createdAt.Before(*activeAt) {
-			createdAt = *activeAt
+		if connectedAt := p.TransportManager.PublisherFirstConnectedAt(); !connectedAt.IsZero() && createdAt.Before(connectedAt) {
+			createdAt = connectedAt
 		}
 		pubTime = time.Since(createdAt)
 		p.dirty.Store(true)
@@ -3301,23 +3365,25 @@ func (p *ParticipantImpl) addMigratedTrack(cid string, ti *livekit.TrackInfo) *M
 
 func (p *ParticipantImpl) addMediaTrack(signalCid string, ti *livekit.TrackInfo) *MediaTrack {
 	mt := NewMediaTrack(MediaTrackParams{
-		ParticipantID:         p.ID,
-		ParticipantIdentity:   p.params.Identity,
-		ParticipantVersion:    p.version.Load(),
-		ParticipantCountry:    p.params.Country,
-		BufferFactory:         p.params.Config.BufferFactory,
-		ReceiverConfig:        p.params.Config.Receiver,
-		AudioConfig:           p.params.AudioConfig,
-		VideoConfig:           p.params.VideoConfig,
-		TelemetryListener:     p.params.TelemetryListener,
-		Logger:                LoggerWithTrack(p.pubLogger, livekit.TrackID(ti.Sid), false),
-		Reporter:              p.params.Reporter.WithTrack(ti.Sid),
-		SubscriberConfig:      p.params.Config.Subscriber,
-		PLIThrottleConfig:     p.params.PLIThrottleConfig,
-		SimTracks:             p.params.SimTracks,
-		OnRTCP:                p.postRtcp,
-		ForwardStats:          p.params.ForwardStats,
-		OnTrackEverSubscribed: p.sendTrackHasBeenSubscribed,
+		ParticipantID:          p.ID,
+		ParticipantIdentity:    p.params.Identity,
+		ParticipantVersion:     p.version.Load(),
+		ParticipantCountry:     p.params.Country,
+		ParticipantKind:        p.Kind(),
+		ParticipantKindDetails: p.KindDetails(),
+		BufferFactory:          p.params.Config.BufferFactory,
+		ReceiverConfig:         p.params.Config.Receiver,
+		AudioConfig:            p.params.AudioConfig,
+		VideoConfig:            p.params.VideoConfig,
+		TelemetryListener:      p.params.TelemetryListener,
+		Logger:                 LoggerWithTrack(p.pubLogger, livekit.TrackID(ti.Sid), false),
+		Reporter:               p.params.Reporter.WithTrack(ti.Sid),
+		SubscriberConfig:       p.params.Config.Subscriber,
+		PLIThrottleConfig:      p.params.PLIThrottleConfig,
+		SimTracks:              p.params.SimTracks,
+		OnRTCP:                 p.postRtcp,
+		ForwardStats:           p.params.ForwardStats,
+		OnTrackEverSubscribed:  p.sendTrackHasBeenSubscribed,
 		ShouldRegressCodec: func() bool {
 			return p.helper().ShouldRegressCodec()
 		},
@@ -4046,6 +4112,7 @@ func (p *ParticipantImpl) MoveToRoom(params types.MoveToRoomParams) {
 	p.telemetryGuard = &telemetry.ReferenceGuard{}
 	p.lock.Unlock()
 
+	p.params.Reporter.ReportEndTime(time.Now())
 	p.params.LoggerResolver.Reset()
 	p.params.ReporterResolver.Reset()
 	p.setListener(params.Listener)

@@ -16,6 +16,7 @@ package rtc
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/livekit/livekit-server/pkg/rtc/datatrack"
@@ -33,12 +34,17 @@ type DataDownTrackParams struct {
 	PublishDataTrack types.DataTrack
 	Handle           uint16
 	Transport        types.DataTrackTransport
+	BytesTrackStats  *BytesTrackStats
 }
 
 type DataDownTrack struct {
 	params    DataDownTrackParams
 	logger    logger.Logger
 	createdAt int64
+
+	lock    sync.Mutex
+	closed  bool
+	onClose func()
 }
 
 func NewDataDownTrack(params DataDownTrackParams) (*DataDownTrack, error) {
@@ -58,8 +64,34 @@ func NewDataDownTrack(params DataDownTrackParams) (*DataDownTrack, error) {
 }
 
 func (d *DataDownTrack) Close() {
+	d.lock.Lock()
+	onClose := d.onClose
+	if d.closed {
+		d.lock.Unlock()
+		return
+	}
+	d.closed = true
+	d.lock.Unlock()
+
 	d.logger.Infow("closing data down track")
+	if d.params.BytesTrackStats != nil {
+		d.params.BytesTrackStats.Stop()
+	}
 	d.params.PublishDataTrack.DeleteDataDownTrack(d.SubscriberID())
+
+	if onClose != nil {
+		onClose()
+	}
+}
+
+func (d *DataDownTrack) OnClose(fn func()) {
+	d.lock.Lock()
+	d.onClose = fn
+	closed := d.closed
+	d.lock.Unlock()
+	if closed && fn != nil {
+		fn()
+	}
 }
 
 func (d *DataDownTrack) Handle() uint16 {
@@ -93,6 +125,10 @@ func (d *DataDownTrack) WritePacket(data []byte, packet *datatrack.Packet, _arri
 	}
 	if err := d.params.Transport.SendDataTrackMessage(buf); err != nil {
 		d.logger.Warnw("could not send data track message", err)
+		return
+	}
+	if d.params.BytesTrackStats != nil {
+		d.params.BytesTrackStats.AddBytes(uint64(len(buf)), true)
 	}
 }
 

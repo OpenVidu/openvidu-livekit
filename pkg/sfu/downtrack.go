@@ -312,6 +312,7 @@ type DownTrackParams struct {
 	DisableSenderReportPassThrough bool
 	SupportsCodecChange            bool
 	StripPacketTrailer             bool
+	EnableStartAtDesiredQuality    bool
 	Listener                       DownTrackListener
 }
 
@@ -463,6 +464,7 @@ func NewDownTrack(params DownTrackParams) (*DownTrack, error) {
 		d.params.Logger,
 		false, // skipReferenceTS
 		false, // disableOpportunisticAllocation
+		d.params.EnableStartAtDesiredQuality,
 		d.rtpStats,
 	)
 
@@ -633,9 +635,6 @@ func (d *DownTrack) Bind(t webrtc.TrackLocalContext) (webrtc.RTPCodecParameters,
 		d.writeStream = t.WriteStream()
 		if rr := d.params.BufferFactory.GetOrNew(packetio.RTCPBufferPacket, d.ssrc).(*buffer.RTCPReader); rr != nil {
 			rr.OnPacket(func(pkt []byte) {
-				if len(pkt) > 1400 {
-					d.params.Logger.Infow("large RTCP packet received primary", "size", len(pkt))
-				}
 				d.handleRTCP(pkt)
 			})
 			d.rtcpReader = rr
@@ -643,9 +642,6 @@ func (d *DownTrack) Bind(t webrtc.TrackLocalContext) (webrtc.RTPCodecParameters,
 		if d.ssrcRTX != 0 {
 			if rr := d.params.BufferFactory.GetOrNew(packetio.RTCPBufferPacket, d.ssrcRTX).(*buffer.RTCPReader); rr != nil {
 				rr.OnPacket(func(pkt []byte) {
-					if len(pkt) > 1400 {
-						d.params.Logger.Infow("large RTCP packet received rtx", "size", len(pkt))
-					}
 					d.handleRTCPRTX(pkt)
 				})
 				d.rtcpReaderRTX = rr
@@ -1031,6 +1027,15 @@ func (d *DownTrack) keyFrameRequester() {
 			d.params.Logger.Debugw("sending PLI for layer lock", "layer", layer)
 			d.Receiver().SendPLI(layer, false)
 			d.rtpStats.UpdateLayerLockPliAndTime(1)
+		}
+
+		// if the initial-acquisition grace expired without latching the requested layer, force a
+		// re-allocation so the target falls back to the highest layer actually seen (rather than
+		// stalling while waiting for a requested layer that never showed up)
+		if d.forwarder.MaybeExpireAcquireGrace() {
+			if sal := d.getStreamAllocatorListener(); sal != nil {
+				sal.OnAvailableLayersChanged(d)
+			}
 		}
 	}
 }

@@ -67,10 +67,6 @@ func (p *ParticipantImpl) SendJoinResponse(joinResponse *livekit.JoinResponse) e
 	p.queuedUpdates = nil
 	p.updateLock.Unlock()
 
-	if p.params.RequireMediaSectionWithJoinResponse && p.params.UseSinglePeerConnection {
-		p.sendMediaSectionsRequirement(audioSectionsCountWithJoinResponse, videoSectionsCountWithJoinResponse)
-	}
-
 	if len(queuedUpdates) > 0 {
 		return p.SendParticipantUpdate(queuedUpdates)
 	}
@@ -370,5 +366,19 @@ func (p *ParticipantImpl) sendUnpublishDataTrackResponse(dti *livekit.DataTrackI
 func (p *ParticipantImpl) SendDataTrackSubscriberHandles(handles map[uint32]*livekit.DataTrackSubscriberHandles_PublishedDataTrack) error {
 	return p.signaller.WriteMessage(p.signalling.SignalDataTrackSubscriberHandles(&livekit.DataTrackSubscriberHandles{
 		SubHandles: handles,
+	}))
+}
+
+func (p *ParticipantImpl) sendStoreDataBlobResponse(requestId uint32, key *livekit.DataBlobKey) error {
+	return p.signaller.WriteMessage(p.signalling.SignalStoreDataBlobResponse(&livekit.StoreDataBlobResponse{
+		RequestId: requestId,
+		Key:       key,
+	}))
+}
+
+func (p *ParticipantImpl) sendGetDataBlobResponse(requestId uint32, dataBlob *livekit.DataBlob) error {
+	return p.signaller.WriteMessage(p.signalling.SignalGetDataBlobResponse(&livekit.GetDataBlobResponse{
+		RequestId: requestId,
+		Blob:      dataBlob,
 	}))
 }

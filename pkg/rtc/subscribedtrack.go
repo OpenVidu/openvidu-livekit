@@ -48,6 +48,7 @@ type SubscribedTrackParams struct {
 	Subscriber                   types.LocalParticipant
 	MediaTrack                   types.MediaTrack
 	AdaptiveStream               bool
+	EnableStartAtDesiredQuality  bool
 	TelemetryListener            types.ParticipantTelemetryListener
 	WrappedReceiver              *WrappedReceiver
 	IsRelayed                    bool
@@ -154,6 +155,7 @@ func NewSubscribedTrack(params SubscribedTrackParams) (*SubscribedTrack, error) 
 		RTCPWriter:                     params.Subscriber.WriteSubscriberRTCP,
 		DisableSenderReportPassThrough: params.Subscriber.GetDisableSenderReportPassThrough(),
 		SupportsCodecChange:            params.Subscriber.SupportsCodecChange(),
+		EnableStartAtDesiredQuality:    params.EnableStartAtDesiredQuality,
 		Listener:                       s,
 	})
 	if err != nil {
@@ -212,7 +214,12 @@ func (t *SubscribedTrack) Bound(err error) {
 				t.logger.Debugw("enabling subscriber track settings on bind", "settings", logger.Proto(t.settings))
 			}
 		} else {
-			if t.params.AdaptiveStream {
+			if t.params.EnableStartAtDesiredQuality {
+				// default to HIGH quality so the subscriber acquires the top layer directly instead of
+				// ramping up from a lower layer. adaptive stream clients can still scale down afterwards
+				// based on viewport.
+				t.settings = &livekit.UpdateTrackSettings{Quality: livekit.VideoQuality_HIGH}
+			} else if t.params.AdaptiveStream {
 				t.settings = &livekit.UpdateTrackSettings{Quality: livekit.VideoQuality_LOW}
 			} else {
 				t.settings = &livekit.UpdateTrackSettings{Quality: livekit.VideoQuality_HIGH}
@@ -413,6 +420,8 @@ func (t *SubscribedTrack) OnStatsUpdate(stat *livekit.AnalyticsStat) {
 	if cs, ok := telemetry.CondenseStat(stat); ok {
 		ti := t.params.WrappedReceiver.TrackInfo()
 		t.reporter.Tx(func(tx roomobs.TrackTx) {
+			tx.ParticipantSession().ReportKindCode(roomobs.ParticipantKindCode(t.params.Subscriber.Kind()))
+			tx.ParticipantSession().ReportKindDetailsCodes(roomobs.ParticipantKindDetailsCodes(t.params.Subscriber.KindDetails()))
 			tx.ReportName(ti.Name)
 			tx.ReportKind(roomobs.TrackKindSub)
 			tx.ReportType(roomobs.TrackTypeFromProto(ti.Type))

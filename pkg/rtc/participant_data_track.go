@@ -16,6 +16,7 @@ package rtc
 
 import (
 	"github.com/livekit/livekit-server/pkg/rtc/datatrack"
+	"github.com/livekit/livekit-server/pkg/rtc/types"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/protocol/utils"
@@ -59,6 +60,19 @@ func (p *ParticipantImpl) HandlePublishDataTrackRequest(req *livekit.PublishData
 		return
 	}
 
+	if !p.params.LimitConfig.CheckDataTrackFrameEncoding(req.FrameEncoding) ||
+		!p.params.LimitConfig.CheckDataTrackSchemaID(req.Schema) {
+		p.pubLogger.Warnw("invalid encoding identifier", nil, "req", logger.Proto(req))
+		p.sendRequestResponse(&livekit.RequestResponse{
+			Reason:  livekit.RequestResponse_INVALID_REQUEST,
+			Message: "encoding identifier is empty or exceeds the maximum length",
+			Request: &livekit.RequestResponse_PublishDataTrack{
+				PublishDataTrack: utils.CloneProto(req),
+			},
+		})
+		return
+	}
+
 	publishedDataTracks := p.UpDataTrackManager.GetPublishedDataTracks()
 	for _, dt := range publishedDataTracks {
 		message := ""
@@ -94,11 +108,22 @@ func (p *ParticipantImpl) HandlePublishDataTrackRequest(req *livekit.PublishData
 		Name:       req.Name,
 		Encryption: req.Encryption,
 	}
+	dti.FrameEncoding = utils.CloneProto(req.GetFrameEncoding())
+	dti.Schema = utils.CloneProto(req.GetSchema())
 	dt := NewDataTrack(
 		DataTrackParams{
 			Logger:              p.params.Logger.WithValues("trackID", dti.Sid),
 			ParticipantID:       p.ID,
 			ParticipantIdentity: p.params.Identity,
+			BytesTrackStats: NewBytesTrackStats(
+				p.params.Country,
+				livekit.TrackID(dti.Sid),
+				p.ID(),
+				p.Kind(),
+				p.KindDetails(),
+				p.params.TelemetryListener,
+				p.params.Reporter,
+			),
 		},
 		dti,
 	)
@@ -145,6 +170,33 @@ func (p *ParticipantImpl) onReceivedDataTrackMessage(data []byte, arrivalTime in
 	p.UpDataTrackManager.HandleReceivedDataTrackMessage(data, &packet, arrivalTime)
 
 	p.listener().OnDataTrackMessage(p, data, &packet)
+}
+
+// wraps the promoted UpTrackManager.UpdateSubscriptionPermission to also revoke
+// data track subscriptions that are no longer permitted
+func (p *ParticipantImpl) UpdateSubscriptionPermission(
+	subscriptionPermission *livekit.SubscriptionPermission,
+	timedVersion utils.TimedVersion,
+	resolverBySid func(participantID livekit.ParticipantID) types.LocalParticipant,
+) error {
+	if err := p.UpTrackManager.UpdateSubscriptionPermission(subscriptionPermission, timedVersion, resolverBySid); err != nil {
+		return err
+	}
+
+	p.maybeRevokeDataTrackSubscriptions()
+	return nil
+}
+
+func (p *ParticipantImpl) maybeRevokeDataTrackSubscriptions() {
+	for _, dt := range p.UpDataTrackManager.GetPublishedDataTracks() {
+		allowed := p.UpTrackManager.GetAllowedSubscribers(dt.ID())
+		if allowed == nil {
+			// no restrictions
+			continue
+		}
+
+		dt.RevokeDisallowedSubscribers(allowed)
+	}
 }
 
 func (p *ParticipantImpl) GetNextSubscribedDataTrackHandle() uint16 {

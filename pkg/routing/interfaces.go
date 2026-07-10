@@ -204,6 +204,7 @@ type ParticipantInit struct {
 	AutoSubscribeDataTrack  *bool
 	Client                  *livekit.ClientInfo
 	Grants                  *auth.ClaimGrants
+	TokenExpiresAt          time.Time
 	Region                  string
 	AdaptiveStream          bool
 	ID                      livekit.ParticipantID
@@ -236,6 +237,9 @@ func (pi *ParticipantInit) MarshalLogObject(e zapcore.ObjectEncoder) error {
 	logBoolPtr("AutoSubscribeDataTrack", pi.AutoSubscribeDataTrack)
 	e.AddObject("Client", logger.Proto(utils.ClientInfoWithoutAddress(pi.Client)))
 	e.AddObject("Grants", pi.Grants)
+	if !pi.TokenExpiresAt.IsZero() {
+		e.AddTime("TokenExpiresAt", pi.TokenExpiresAt)
+	}
 	e.AddString("Region", pi.Region)
 	logBoolPtr("AdaptiveStream", &pi.AdaptiveStream)
 	e.AddString("ID", string(pi.ID))
@@ -255,6 +259,11 @@ func (pi *ParticipantInit) ToStartSession(roomName livekit.RoomName, connectionI
 		return nil, err
 	}
 
+	var tokenExpiresAt int64
+	if !pi.TokenExpiresAt.IsZero() {
+		tokenExpiresAt = pi.TokenExpiresAt.Unix()
+	}
+
 	ss := &livekit.StartSession{
 		RoomName:                string(roomName),
 		Identity:                string(pi.Identity),
@@ -265,6 +274,7 @@ func (pi *ParticipantInit) ToStartSession(roomName livekit.RoomName, connectionI
 		AutoSubscribe:           pi.AutoSubscribe,
 		Client:                  pi.Client,
 		GrantsJson:              string(claims),
+		TokenExpiresAt:          tokenExpiresAt,
 		AdaptiveStream:          pi.AdaptiveStream,
 		ParticipantId:           string(pi.ID),
 		DisableIceLite:          pi.DisableICELite,
@@ -291,6 +301,10 @@ func ParticipantInitFromStartSession(ss *livekit.StartSession, region string) (*
 	if err := json.Unmarshal([]byte(ss.GrantsJson), claims); err != nil {
 		return nil, err
 	}
+	var tokenExpiresAt time.Time
+	if ss.TokenExpiresAt > 0 {
+		tokenExpiresAt = time.Unix(ss.TokenExpiresAt, 0)
+	}
 
 	pi := &ParticipantInit{
 		Identity:                livekit.ParticipantIdentity(ss.Identity),
@@ -300,6 +314,7 @@ func ParticipantInitFromStartSession(ss *livekit.StartSession, region string) (*
 		Client:                  ss.Client,
 		AutoSubscribe:           ss.AutoSubscribe,
 		Grants:                  claims,
+		TokenExpiresAt:          tokenExpiresAt,
 		Region:                  region,
 		AdaptiveStream:          ss.AdaptiveStream,
 		ID:                      livekit.ParticipantID(ss.ParticipantId),

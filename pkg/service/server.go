@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	_ "net/http/pprof"
+	httppprof "net/http/pprof"
 	"runtime"
 	"runtime/pprof"
 	"strconv"
@@ -54,6 +54,7 @@ type LivekitServer struct {
 	agentService *AgentService
 	httpServer   *http.Server
 	promServer   *http.Server
+	debugServer  *http.Server
 	router       routing.Router
 	roomManager  *RoomManager
 	signalServer *SignalServer
@@ -177,6 +178,20 @@ func NewLivekitServer(conf *config.Config,
 		}
 	}
 
+	if conf.DebugHandler.Port > 0 {
+		debugMux := http.NewServeMux()
+		debugMux.HandleFunc("/debug/pprof/", httppprof.Index)
+		debugMux.HandleFunc("/debug/pprof/cmdline", httppprof.Cmdline)
+		debugMux.HandleFunc("/debug/pprof/profile", httppprof.Profile)
+		debugMux.HandleFunc("/debug/pprof/symbol", httppprof.Symbol)
+		debugMux.HandleFunc("/debug/pprof/trace", httppprof.Trace)
+		debugMux.HandleFunc("/debug/goroutine", s.debugGoroutines)
+		debugMux.HandleFunc("/debug/rooms", s.debugInfo)
+		s.debugServer = &http.Server{
+			Handler: http.Handler(debugMux),
+		}
+	}
+
 	// BEGIN OPENVIDU BLOCK
 	// Clean dead nodes after the AvailableSeconds time has elapsed
 	// This ensures that a restarted node will always autoclean itself
@@ -247,6 +262,7 @@ func (s *LivekitServer) Start() error {
 	// ensure we could listen
 	listeners := make([]net.Listener, 0)
 	promListeners := make([]net.Listener, 0)
+	debugListeners := make([]net.Listener, 0)
 	for _, addr := range addresses {
 		ln, err := net.Listen("tcp", net.JoinHostPort(addr, strconv.Itoa(int(s.config.Port))))
 		if err != nil {
@@ -260,6 +276,14 @@ func (s *LivekitServer) Start() error {
 				return err
 			}
 			promListeners = append(promListeners, ln)
+		}
+
+		if s.debugServer != nil {
+			ln, err = net.Listen("tcp", net.JoinHostPort(addr, strconv.Itoa(int(s.config.DebugHandler.Port))))
+			if err != nil {
+				return err
+			}
+			debugListeners = append(debugListeners, ln)
 		}
 	}
 
@@ -285,6 +309,9 @@ func (s *LivekitServer) Start() error {
 	if s.config.Prometheus.Port != 0 {
 		values = append(values, "portPrometheus", s.config.Prometheus.Port)
 	}
+	if s.config.DebugHandler.Port != 0 {
+		values = append(values, "portDebugHandler", s.config.DebugHandler.Port)
+	}
 	if s.config.Region != "" {
 		values = append(values, "region", s.config.Region)
 	}
@@ -295,6 +322,10 @@ func (s *LivekitServer) Start() error {
 
 	for _, promLn := range promListeners {
 		go s.promServer.Serve(promLn)
+	}
+
+	for _, debugLn := range debugListeners {
+		go s.debugServer.Serve(debugLn)
 	}
 
 	if err := s.signalServer.Start(); err != nil {
@@ -328,6 +359,9 @@ func (s *LivekitServer) Start() error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 	_ = s.httpServer.Shutdown(ctx)
+	if s.debugServer != nil {
+		_ = s.debugServer.Shutdown(ctx)
+	}
 
 	if s.turnServer != nil {
 		_ = s.turnServer.Close()

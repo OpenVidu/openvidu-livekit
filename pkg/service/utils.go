@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ua-parser/uap-go/uaparser"
 	"gopkg.in/yaml.v3"
@@ -246,6 +247,10 @@ func getUserAgentParser() *uaparser.Parser {
 }
 
 func AugmentClientInfo(ci *livekit.ClientInfo, req *http.Request) {
+	if ci == nil {
+		return
+	}
+
 	// get real address (forwarded http header) - check Cloudflare headers first, fall back to X-Forwarded-For
 	ci.Address = GetClientIP(req)
 
@@ -285,6 +290,7 @@ type ValidateConnectRequestParams struct {
 type ValidateConnectRequestResult struct {
 	roomName          livekit.RoomName
 	grants            *auth.ClaimGrants
+	tokenExpiresAt    time.Time
 	region            string
 	createRoomRequest *livekit.CreateRoomRequest
 }
@@ -398,6 +404,7 @@ func ValidateConnectRequest(
 	}
 
 	res.grants = claims
+	res.tokenExpiresAt = GetTokenExpiresAt(r.Context())
 	return res, http.StatusOK, nil
 }
 
