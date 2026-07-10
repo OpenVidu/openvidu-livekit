@@ -28,9 +28,6 @@ import (
 	"sync"
 	"time"
 
-	// BEGIN OPENVIDU BLOCK
-	"github.com/pion/webrtc/v4"
-	// END OPENVIDU BLOCK
 	"github.com/pkg/errors"
 
 	"github.com/livekit/mediatransportutil/pkg/rtcconfig"
@@ -166,7 +163,7 @@ func NewLocalRoomManager(
 		for _, lip := range localIPs {
 			hostCandidateIPs = append(hostCandidateIPs, lip+"/"+lip)
 		}
-		if err := rtcconfig.SetNAT1To1AddressRewriteRules(&rtcConf.SettingEngine, hostCandidateIPs, webrtc.ICECandidateTypeHost); err != nil {
+		if err := rtcconfig.SetNAT1To1AddressRewriteRules(&rtcConf.SettingEngine, hostCandidateIPs, false); err != nil {
 			return nil, errors.Wrap(err, "failed to set ICE address rewrite rules for local IPs")
 		}
 		rtcConf.NAT1To1IPs = hostCandidateIPs
