@@ -11,6 +11,7 @@
 package service
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"net"
 	"testing"
@@ -314,6 +315,25 @@ func TestTURNAuth_CredentialWithoutExpiryRejected(t *testing.T) {
 	client := dialTURNClient(t, udpPort, username, password)
 	_, err = client.Allocate()
 	require.Error(t, err, "credential without expiry must be rejected")
+}
+
+// The 3-part apiKey|pID|expiry username is the only accepted form since
+// livekit 1.13 (livekit#4539). Credentials are built from raw primitives
+// rather than the handler's helpers so the on-the-wire format itself is
+// pinned: base62("apiKey|pID|expiry") authenticated against
+// sha256("secret|pID|expiry").
+func TestTURNAuth_ThreePartCredentialAllocates(t *testing.T) {
+	udpPort, _ := startAuthTestTurnServer(t)
+
+	expiry := time.Now().Add(time.Hour).Unix()
+	username := base62.EncodeToString(fmt.Appendf(nil, "%s|%s|%d", turnTestAPIKey, turnTestPID, expiry))
+	sum := sha256.Sum256(fmt.Appendf(nil, "%s|%s|%d", turnTestAPISecret, turnTestPID, expiry))
+	password := base62.EncodeToString(sum[:])
+
+	client := dialTURNClient(t, udpPort, username, password)
+	relay, err := client.Allocate()
+	require.NoError(t, err, "3-part credential with future expiry must allocate")
+	_ = relay.Close()
 }
 
 // The TTL is enforced only on the initial Allocate: a long-running session can
