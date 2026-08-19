@@ -44,6 +44,7 @@ import (
 	"github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/livekit-server/pkg/routing"
 	"github.com/livekit/livekit-server/version"
+	"github.com/openvidu/openvidu-livekit/openvidu/openviduversion"
 )
 
 type LivekitServer struct {
@@ -144,6 +145,7 @@ func NewLivekitServer(conf *config.Config,
 	// BEGIN OPENVIDU BLOCK
 	mux.HandleFunc("/twirp/health", s.healthCheck)
 	mux.HandleFunc("/twirp/debug", s.debugRooms)
+	mux.HandleFunc("/twirp/info", s.gatherInfo)
 	// END OPENVIDU BLOCK
 
 	xtwirp.RegisterServer(mux, roomServer)
@@ -476,6 +478,16 @@ func (s *LivekitServer) writeDebugJSON(w http.ResponseWriter, v any) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(b)
+}
+
+// return server information
+func (s *LivekitServer) gatherInfo(w http.ResponseWriter, r *http.Request) {
+	if err := EnsureListPermission(r.Context()); err != nil {
+		HandleError(w, r, http.StatusUnauthorized, twirpAuthError(err))
+		return
+	}
+
+	s.writeDebugJSON(w, openviduversion.ServerInfo)
 }
 
 // END OPENVIDU BLOCK
