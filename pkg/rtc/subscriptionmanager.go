@@ -1214,7 +1214,7 @@ func (m *SubscriptionManager) unmarkSubscribedTo(publisherID livekit.Participant
 	}
 	m.lock.Unlock()
 	if changedCB != nil && lastSubscription {
-		go changedCB(publisherID, false)
+		changedCB(publisherID, false)
 	}
 }
 

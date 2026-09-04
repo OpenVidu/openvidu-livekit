@@ -113,7 +113,9 @@ func TestSubscribe(t *testing.T) {
 		require.Eventually(t, func() bool {
 			return numParticipantSubscribed.Load() == 2
 		}, subSettleTimeout, subCheckInterval, "participant subscribe status was not updated twice")
-		require.Equal(t, int32(1), numParticipantUnsubscribed.Load())
+		require.Eventually(t, func() bool {
+			return numParticipantUnsubscribed.Load() == 1
+		}, subSettleTimeout, subCheckInterval, "participant unsubscribe status was not updated")
 	})
 
 	t.Run("no track permission", func(t *testing.T) {
