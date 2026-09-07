@@ -21,7 +21,7 @@ import (
 	"github.com/livekit/livekit-server/pkg/service"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
-	"github.com/openvidu/openvidu-livekit/openvidu/goutil"
+	"github.com/livekit/livekit-server/openvidu/goutil"
 )
 
 type LivekitHelper struct {

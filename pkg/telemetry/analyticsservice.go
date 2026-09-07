@@ -30,7 +30,7 @@ import (
 	"github.com/livekit/livekit-server/pkg/routing"
 
 	// BEGIN OPENVIDU BLOCK
-	"github.com/openvidu/openvidu-livekit/openvidu/analytics"
+	"github.com/livekit/livekit-server/openvidu/analytics"
 	// END OPENVIDU BLOCK
 )
 

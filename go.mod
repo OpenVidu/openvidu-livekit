@@ -1,10 +1,6 @@
-module github.com/openvidu/openvidu-livekit
+module github.com/livekit/livekit-server
 
 go 1.26
-
-require github.com/livekit/livekit-server v0.0.0-00010101000000-000000000000
-
-replace github.com/livekit/livekit-server => ./
 
 require (
 	github.com/OpenVidu/openvidu-golang-utils v1.0.0

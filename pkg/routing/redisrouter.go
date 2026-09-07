@@ -32,7 +32,7 @@ import (
 	"github.com/livekit/livekit-server/pkg/routing/selector"
 
 	// BEGIN OPENVIDU BLOCK
-	"github.com/openvidu/openvidu-livekit/openvidu/customrouting"
+	"github.com/livekit/livekit-server/openvidu/customrouting"
 	// END OPENVIDU BLOCK
 )
 

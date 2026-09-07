@@ -30,9 +30,9 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/openvidu/openvidu-livekit/openvidu/livekithelper/livekithelperinterface"
-	"github.com/openvidu/openvidu-livekit/openvidu/openviduconfig"
-	"github.com/openvidu/openvidu-livekit/openvidu/queue"
+	"github.com/livekit/livekit-server/openvidu/livekithelper/livekithelperinterface"
+	"github.com/livekit/livekit-server/openvidu/openviduconfig"
+	"github.com/livekit/livekit-server/openvidu/queue"
 )
 
 const dbLockName = "analytics-db-operations-lock"

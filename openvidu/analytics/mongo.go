@@ -28,9 +28,9 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
-	"github.com/openvidu/openvidu-livekit/openvidu/livekithelper/livekithelperinterface"
-	"github.com/openvidu/openvidu-livekit/openvidu/openviduconfig"
-	"github.com/openvidu/openvidu-livekit/openvidu/queue"
+	"github.com/livekit/livekit-server/openvidu/livekithelper/livekithelperinterface"
+	"github.com/livekit/livekit-server/openvidu/openviduconfig"
+	"github.com/livekit/livekit-server/openvidu/queue"
 )
 
 type MongoDatabaseClient struct {

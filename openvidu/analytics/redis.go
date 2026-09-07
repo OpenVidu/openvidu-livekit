@@ -24,9 +24,9 @@ import (
 	redisLiveKit "github.com/livekit/protocol/redis"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/openvidu/openvidu-livekit/openvidu/livekithelper/livekithelperinterface"
-	"github.com/openvidu/openvidu-livekit/openvidu/openviduconfig"
-	"github.com/openvidu/openvidu-livekit/openvidu/queue"
+	"github.com/livekit/livekit-server/openvidu/livekithelper/livekithelperinterface"
+	"github.com/livekit/livekit-server/openvidu/openviduconfig"
+	"github.com/livekit/livekit-server/openvidu/queue"
 )
 
 type RedisDatabaseClient struct {

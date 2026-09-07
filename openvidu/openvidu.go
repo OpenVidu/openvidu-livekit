@@ -23,8 +23,8 @@ import (
 	"github.com/livekit/protocol/logger"
 
 	"github.com/OpenVidu/openvidu-golang-utils/monitor"
-	"github.com/openvidu/openvidu-livekit/openvidu/analytics"
-	"github.com/openvidu/openvidu-livekit/openvidu/livekithelper"
+	"github.com/livekit/livekit-server/openvidu/analytics"
+	"github.com/livekit/livekit-server/openvidu/livekithelper"
 )
 
 func Start(conf *config.Config, server *service.LivekitServer) {

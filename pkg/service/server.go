@@ -27,7 +27,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/openvidu/openvidu-livekit/pkg/routing/selector"
 	"github.com/pion/turn/v5"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/cors"
@@ -44,7 +43,11 @@ import (
 	"github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/livekit-server/pkg/routing"
 	"github.com/livekit/livekit-server/version"
-	"github.com/openvidu/openvidu-livekit/openvidu/openviduversion"
+
+	// BEGIN OPENVIDU BLOCK
+	"github.com/livekit/livekit-server/openvidu/openviduversion"
+	"github.com/livekit/livekit-server/pkg/routing/selector"
+	// END OPENVIDU BLOCK
 )
 
 type LivekitServer struct {

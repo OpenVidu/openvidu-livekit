@@ -30,7 +30,7 @@ import (
 	// BEGIN OPENVIDU BLOCK
 	"sync"
 
-	"github.com/openvidu/openvidu-livekit/openvidu/openviduconfig"
+	"github.com/livekit/livekit-server/openvidu/openviduconfig"
 
 	// END OPENVIDU BLOCK
 
