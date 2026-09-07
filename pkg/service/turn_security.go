@@ -65,9 +65,10 @@ type TURNSecurity struct {
 	localIPs map[string]struct{} // this machine's IPs — always checked first
 	allowed  map[string]struct{} // static set for no-Redis mode (NodeIP + RelayAddress)
 
-	// Parsed CIDR rules from the TURN config. These mirror the
-	// AllowRestrictedPeerCIDRs / DenyPeerCIDRs fields and are enforced
-	// inside handlePermission so that the OpenVidu cluster-node allow
+	// CIDR rules from the TURN config (AllowRestrictedPeerCIDRs /
+	// DenyPeerCIDRs), already compiled by NewTurnServer with parsePeerCIDRs
+	// so a malformed entry fails startup instead of being skipped. They are
+	// enforced inside handlePermission so that the OpenVidu cluster-node allow
 	// logic never overrides the configured deny/allow policy.
 	allowNets []*net.IPNet
 	denyNets  []*net.IPNet
@@ -83,19 +84,15 @@ type TURNSecurity struct {
 // Local IPs are always discovered at startup.
 // When rc is non-nil, remote cluster node IPs are queried from Redis.
 // When rc is nil, only local IPs and the configured NodeIP/RelayAddress are used.
-func NewTURNSecurity(conf *config.Config, rc redis.UniversalClient) *TURNSecurity {
-	s := &TURNSecurity{rc: rc, cacheTTL: defaultTURNCacheTTL}
-
-	// Parse CIDR allow/deny rules so handlePermission can enforce them.
-	for _, cidr := range conf.TURN.AllowRestrictedPeerCIDRs {
-		if _, ipnet, err := net.ParseCIDR(cidr); err == nil {
-			s.allowNets = append(s.allowNets, ipnet)
-		}
-	}
-	for _, cidr := range conf.TURN.DenyPeerCIDRs {
-		if _, ipnet, err := net.ParseCIDR(cidr); err == nil {
-			s.denyNets = append(s.denyNets, ipnet)
-		}
+// allowNets / denyNets are conf.TURN.AllowRestrictedPeerCIDRs / DenyPeerCIDRs as
+// compiled by parsePeerCIDRs (NewTurnServer rejects malformed entries before
+// getting here).
+func NewTURNSecurity(conf *config.Config, rc redis.UniversalClient, allowNets, denyNets []*net.IPNet) *TURNSecurity {
+	s := &TURNSecurity{
+		rc:        rc,
+		cacheTTL:  defaultTURNCacheTTL,
+		allowNets: allowNets,
+		denyNets:  denyNets,
 	}
 
 	// Always discover this machine's local IPs.

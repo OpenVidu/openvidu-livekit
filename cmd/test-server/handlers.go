@@ -17,15 +17,17 @@ package main
 import (
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/utils/protojson"
+	"github.com/livekit/protocol/utils/xtwirp"
 )
 
 // apiSpec captures the request and response message types for one Twirp method,
@@ -104,7 +106,7 @@ func init() {
 	reg[livekit.ListSIPDispatchRuleRequest, livekit.ListSIPDispatchRuleResponse]("livekit.SIP/ListSIPDispatchRule")
 	reg[livekit.DeleteSIPDispatchRuleRequest, livekit.SIPDispatchRuleInfo]("livekit.SIP/DeleteSIPDispatchRule")
 	reg[livekit.CreateSIPParticipantRequest, livekit.SIPParticipantInfo]("livekit.SIP/CreateSIPParticipant")
-	reg[livekit.TransferSIPParticipantRequest, emptypb.Empty]("livekit.SIP/TransferSIPParticipant")
+	reg[livekit.TransferSIPParticipantRequest, livekit.TransferSIPParticipantResponse]("livekit.SIP/TransferSIPParticipant")
 
 	// Connector
 	reg[livekit.DialWhatsAppCallRequest, livekit.DialWhatsAppCallResponse]("livekit.Connector/DialWhatsAppCall")
@@ -135,25 +137,103 @@ func (h *mockHandler) serveAPI(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	cfg := parseMockConfig(r)
+
 	// Permission enforcement comes first, mirroring the real server.
-	if status, code := h.authorize(key, r, req); status != 0 {
+	if status, code := h.authorize(key, r, &cfg, req); status != 0 {
 		writeTwirpErrorCode(w, status, code, "mock: "+code)
 		return
 	}
 
-	if h.shouldFail(r) {
-		h.fail(w, r)
+	// A project pinned to other regions is turned away by cloud middleware up front
+	// — before the request is served and with no latency — when it reaches a region
+	// it isn't pinned to. The check is by region name, as it is on the real server.
+	if len(cfg.PinnedRegions) > 0 && !slices.Contains(cfg.PinnedRegions, h.regionName()) {
+		h.failRegionPin(w)
 		return
 	}
 
-	h.writeAPIResponse(w, r, json, known, req, spec)
+	// Delay before responding (success or failure). An explicit delayMs overrides
+	// the method's natural latency — e.g. CreateSIPParticipant blocking until the
+	// callee answers.
+	delay := methodLatency(key, req)
+	if cfg.DelayMs != nil {
+		delay = time.Duration(*cfg.DelayMs) * time.Millisecond
+	}
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+
+	// A SIP dial that fails carries a SIP status; the Twirp code and metadata are
+	// derived from it exactly as the real server does.
+	if cfg.SIPStatus != nil && isSIPDialMethod(key) {
+		h.failSIP(w, &cfg)
+		return
+	}
+
+	if h.shouldFail(&cfg) {
+		h.fail(w, &cfg)
+		return
+	}
+
+	h.writeAPIResponse(w, json, known, req, spec, &cfg)
+}
+
+// methodLatency returns the realistic time a method blocks before responding, so
+// the mock approximates the real server's behavior. CreateSIPParticipant blocks
+// until the callee answers when wait_until_answered is set; TransferSIPParticipant
+// always blocks until the transfer (REFER) completes.
+func methodLatency(key string, req proto.Message) time.Duration {
+	switch key {
+	case "livekit.SIP/CreateSIPParticipant":
+		if requestBool(req, "wait_until_answered") {
+			return sipAnswerLatency
+		}
+	case "livekit.SIP/TransferSIPParticipant":
+		return sipAnswerLatency
+	}
+	return 0
+}
+
+// sipAnswerLatency is how long a SIP call takes to be answered/transferred in the
+// mock — long enough to exercise client-side timeouts around these calls.
+const sipAnswerLatency = 11 * time.Second
+
+// isSIPDialMethod reports whether key places a call that can fail with a SIP status.
+func isSIPDialMethod(key string) bool {
+	switch key {
+	case "livekit.SIP/CreateSIPParticipant", "livekit.SIP/TransferSIPParticipant":
+		return true
+	}
+	return false
+}
+
+// failSIP fails the request with the configured SIP status, mirroring the real
+// server: the status maps to a Twirp error code and attaches sip_status_code,
+// sip_status, and error_details metadata via xtwirp.
+func (h *mockHandler) failSIP(w http.ResponseWriter, cfg *mockConfig) {
+	st := &livekit.SIPStatus{
+		Code:   livekit.SIPStatusCode(cfg.SIPStatus.Code),
+		Status: cfg.SIPStatus.Status,
+	}
+	writeTwirpErr(w, xtwirp.ToError(st))
+}
+
+// failRegionPin rejects the request with HTTP 451, mirroring cloud middleware
+// turning away an API call from a project pinned to a different region. The body
+// is the middleware's plain-text message (not a Twirp error): clients key off the
+// 451 status to rediscover regions and retry against an allowed one.
+func (h *mockHandler) failRegionPin(w http.ResponseWriter) {
+	w.Header().Set(headerRegion, "")
+	w.WriteHeader(regionPinStatus)
+	_, _ = w.Write([]byte(regionPinMessage))
 }
 
 // writeAPIResponse serves a populated, type-correct response for a known API
-// method. The response is the reflection-populated default unless the request
-// carries an X-Lk-Mock-Response header (protojson), which overrides it
-// entirely. Content type (protobuf vs JSON) mirrors the request.
-func (h *mockHandler) writeAPIResponse(w http.ResponseWriter, r *http.Request, json, known bool, req proto.Message, spec apiSpec) {
+// method. The response is the reflection-populated default unless the mock
+// config carries a `response` (protojson), which overrides it entirely. Content
+// type (protobuf vs JSON) mirrors the request.
+func (h *mockHandler) writeAPIResponse(w http.ResponseWriter, json, known bool, req proto.Message, spec apiSpec, cfg *mockConfig) {
 	w.Header().Set(headerRegion, strconv.Itoa(h.regionIndex))
 
 	if !known {
@@ -164,8 +244,8 @@ func (h *mockHandler) writeAPIResponse(w http.ResponseWriter, r *http.Request, j
 	}
 
 	resp := spec.newResp()
-	if override := r.Header.Get(headerResponse); override != "" {
-		if err := protojson.Unmarshal([]byte(override), resp); err != nil {
+	if len(cfg.Response) > 0 {
+		if err := protojson.Unmarshal(cfg.Response, resp); err != nil {
 			// Malformed override: fall back to the populated default.
 			resp = spec.newResp()
 			populateMessage(resp.ProtoReflect(), req.ProtoReflect(), 1)

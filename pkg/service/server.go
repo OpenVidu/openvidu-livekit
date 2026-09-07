@@ -113,6 +113,8 @@ func NewLivekitServer(conf *config.Config,
 			MaxAge: 86400,
 		}),
 		negroni.HandlerFunc(RemoveDoubleSlashes),
+		// limit request body size so large messages cannot exhaust memory
+		NewRequestBodyLimiter(conf.Limit.MaxAPIRequestBodySize),
 	}
 	if keyProvider != nil {
 		middlewares = append(middlewares, NewAPIKeyAuthMiddleware(keyProvider))
@@ -163,7 +165,7 @@ func NewLivekitServer(conf *config.Config,
 	}
 
 	if conf.PrometheusPort > 0 {
-		logger.Warnw("prometheus_port is deprecated, please switch prometheus.port instead", nil)
+		logger.Warnw("prometheus_port is deprecated, please switch to prometheus.port instead", nil)
 		conf.Prometheus.Port = conf.PrometheusPort
 	}
 
@@ -174,6 +176,10 @@ func NewLivekitServer(conf *config.Config,
 			protectedHandler.Use(negroni.HandlerFunc(GenBasicAuthMiddleware(conf.Prometheus.Username, conf.Prometheus.Password)))
 			protectedHandler.UseHandler(promHandler)
 			promHandler = protectedHandler
+		} else if conf.Prometheus.Username != "" || conf.Prometheus.Password != "" {
+			logger.Warnw("prometheus username or password is set but not both, set both or nothing for unauthenticated access", nil)
+			err = errors.New("prometheus username or password is set but not both, set both or nothing for unauthenticated access")
+			return
 		}
 		s.promServer = &http.Server{
 			Handler: promHandler,

@@ -44,6 +44,18 @@ func setNode(t *testing.T, mr *miniredis.Miniredis, nodeID, nodeIP, relayAddr st
 	mr.HSet(customrouting.NodesOpenViduKey, nodeID, string(b))
 }
 
+// newTestTURNSecurity builds a TURNSecurity the way NewTurnServer does: the peer
+// CIDR policies in conf are compiled with parsePeerCIDRs first (a malformed entry
+// fails the test) and handed to NewTURNSecurity already parsed.
+func newTestTURNSecurity(t *testing.T, conf *config.Config, rc redis.UniversalClient) *TURNSecurity {
+	t.Helper()
+	allowNets, err := parsePeerCIDRs("turn.allow_restricted_peer_cidrs", conf.TURN.AllowRestrictedPeerCIDRs)
+	require.NoError(t, err)
+	denyNets, err := parsePeerCIDRs("turn.deny_peer_cidrs", conf.TURN.DenyPeerCIDRs)
+	require.NoError(t, err)
+	return NewTURNSecurity(conf, rc, allowNets, denyNets)
+}
+
 func checkPermission(handler func(net.Addr, net.IP) bool, ip string) bool {
 	return handler(nil, net.ParseIP(ip))
 }
@@ -57,7 +69,7 @@ func TestTURNSecurity_Static_AllowsNodeIP(t *testing.T) {
 	conf.RTC.NodeIP = rtcconfig.NodeIP{V4: "10.0.0.1"}
 	conf.ResolvedRelayAddress = "192.168.1.1"
 
-	s := NewTURNSecurity(conf, nil)
+	s := newTestTURNSecurity(t, conf, nil)
 	handler := s.PermissionHandler()
 
 	require.True(t, checkPermission(handler, "10.0.0.1"))
@@ -68,7 +80,7 @@ func TestTURNSecurity_Static_AllowsRelayAddress(t *testing.T) {
 	conf.RTC.NodeIP = rtcconfig.NodeIP{V4: "10.0.0.1"}
 	conf.ResolvedRelayAddress = "192.168.1.1"
 
-	s := NewTURNSecurity(conf, nil)
+	s := newTestTURNSecurity(t, conf, nil)
 	handler := s.PermissionHandler()
 
 	require.True(t, checkPermission(handler, "192.168.1.1"))
@@ -79,7 +91,7 @@ func TestTURNSecurity_Static_DeniesUnknownIP(t *testing.T) {
 	conf.RTC.NodeIP = rtcconfig.NodeIP{V4: "10.0.0.1"}
 	conf.ResolvedRelayAddress = "192.168.1.1"
 
-	s := NewTURNSecurity(conf, nil)
+	s := newTestTURNSecurity(t, conf, nil)
 	handler := s.PermissionHandler()
 
 	require.False(t, checkPermission(handler, "172.16.0.99"))
@@ -88,7 +100,7 @@ func TestTURNSecurity_Static_DeniesUnknownIP(t *testing.T) {
 func TestTURNSecurity_Static_EmptyConfig(t *testing.T) {
 	conf := &config.Config{}
 
-	s := NewTURNSecurity(conf, nil)
+	s := newTestTURNSecurity(t, conf, nil)
 	handler := s.PermissionHandler()
 
 	require.False(t, checkPermission(handler, "10.0.0.1"))
@@ -100,7 +112,7 @@ func TestTURNSecurity_Static_SameNodeIPAndRelay(t *testing.T) {
 	conf.RTC.NodeIP = rtcconfig.NodeIP{V4: "10.0.0.1"}
 	conf.ResolvedRelayAddress = "10.0.0.1"
 
-	s := NewTURNSecurity(conf, nil)
+	s := newTestTURNSecurity(t, conf, nil)
 	handler := s.PermissionHandler()
 
 	require.True(t, checkPermission(handler, "10.0.0.1"))
@@ -112,7 +124,7 @@ func TestTURNSecurity_Static_IPv6(t *testing.T) {
 	conf.RTC.NodeIP = rtcconfig.NodeIP{V6: "::1"}
 	conf.ResolvedRelayAddress = "fd00::1"
 
-	s := NewTURNSecurity(conf, nil)
+	s := newTestTURNSecurity(t, conf, nil)
 	handler := s.PermissionHandler()
 
 	require.True(t, checkPermission(handler, "::1"))
@@ -124,7 +136,7 @@ func TestTURNSecurity_Static_IPv4MappedIPv6(t *testing.T) {
 	conf := &config.Config{}
 	conf.RTC.NodeIP = rtcconfig.NodeIP{V4: "10.0.0.1"}
 
-	s := NewTURNSecurity(conf, nil)
+	s := newTestTURNSecurity(t, conf, nil)
 	handler := s.PermissionHandler()
 
 	// Go normalizes ::ffff:10.0.0.1 to "10.0.0.1".
@@ -140,7 +152,7 @@ func TestTURNSecurity_Redis_AllowsRegisteredNodeIP(t *testing.T) {
 	mr, rc := newMiniredis(t)
 	setNode(t, mr, "node-1", "10.0.0.1", "10.0.0.1")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	handler := s.PermissionHandler()
 
 	require.True(t, checkPermission(handler, "10.0.0.1"))
@@ -150,7 +162,7 @@ func TestTURNSecurity_Redis_AllowsRegisteredRelayAddress(t *testing.T) {
 	mr, rc := newMiniredis(t)
 	setNode(t, mr, "node-1", "10.0.0.1", "192.168.1.1")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	handler := s.PermissionHandler()
 
 	require.True(t, checkPermission(handler, "192.168.1.1"))
@@ -160,7 +172,7 @@ func TestTURNSecurity_Redis_DeniesUnknownIP(t *testing.T) {
 	mr, rc := newMiniredis(t)
 	setNode(t, mr, "node-1", "10.0.0.1", "10.0.0.1")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	handler := s.PermissionHandler()
 
 	require.False(t, checkPermission(handler, "172.16.0.99"))
@@ -172,7 +184,7 @@ func TestTURNSecurity_Redis_MultipleNodes(t *testing.T) {
 	setNode(t, mr, "node-2", "10.0.0.2", "10.0.0.2")
 	setNode(t, mr, "node-3", "10.0.0.3", "192.168.1.3")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	handler := s.PermissionHandler()
 
 	require.True(t, checkPermission(handler, "10.0.0.1"))
@@ -185,7 +197,7 @@ func TestTURNSecurity_Redis_MultipleNodes(t *testing.T) {
 func TestTURNSecurity_Redis_EmptyHash(t *testing.T) {
 	_, rc := newMiniredis(t)
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	handler := s.PermissionHandler()
 
 	require.False(t, checkPermission(handler, "10.0.0.1"))
@@ -195,7 +207,7 @@ func TestTURNSecurity_Redis_DifferentNodeIPAndRelay(t *testing.T) {
 	mr, rc := newMiniredis(t)
 	setNode(t, mr, "node-1", "10.0.0.1", "192.168.1.100")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	handler := s.PermissionHandler()
 
 	require.True(t, checkPermission(handler, "10.0.0.1"))
@@ -207,7 +219,7 @@ func TestTURNSecurity_Redis_IPv4MappedIPv6(t *testing.T) {
 	mr, rc := newMiniredis(t)
 	setNode(t, mr, "node-1", "10.0.0.1", "10.0.0.1")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	handler := s.PermissionHandler()
 
 	mapped := net.ParseIP("::ffff:10.0.0.1")
@@ -225,7 +237,7 @@ func TestTURNSecurity_Redis_AllowsLocalMachineIPs(t *testing.T) {
 	mr, rc := newMiniredis(t)
 	setNode(t, mr, "node-1", "10.0.0.1", "10.0.0.1")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	handler := s.PermissionHandler()
 
 	localIPs, err := rtcconfig.GetLocalIPAddresses(false, false, nil, nil)
@@ -247,7 +259,7 @@ func TestTURNSecurity_Static_AllowsLocalMachineIPs(t *testing.T) {
 	conf.RTC.NodeIP = rtcconfig.NodeIP{V4: "10.0.0.1"}
 	conf.ResolvedRelayAddress = "192.168.1.1"
 
-	s := NewTURNSecurity(conf, nil)
+	s := newTestTURNSecurity(t, conf, nil)
 	handler := s.PermissionHandler()
 
 	localIPs, err := rtcconfig.GetLocalIPAddresses(false, false, nil, nil)
@@ -270,7 +282,7 @@ func TestTURNSecurity_LocalIPs_NotExposedToRemoteNodes(t *testing.T) {
 	mr, rc := newMiniredis(t)
 	setNode(t, mr, "remote-node", "10.0.0.99", "10.0.0.99")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 
 	// The allowed set from Redis should only contain the registered IPs.
 	allowed, err := s.fetchAllowedIPs()
@@ -288,7 +300,7 @@ func TestTURNSecurity_Redis_NewNodeImmediatelyAllowed(t *testing.T) {
 	mr, rc := newMiniredis(t)
 	setNode(t, mr, "node-1", "10.0.0.1", "10.0.0.1")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	handler := s.PermissionHandler()
 
 	require.False(t, checkPermission(handler, "10.0.0.2"))
@@ -303,7 +315,7 @@ func TestTURNSecurity_Redis_RemovedNodeCachedUntilRefresh(t *testing.T) {
 	setNode(t, mr, "node-1", "10.0.0.1", "10.0.0.1")
 	setNode(t, mr, "node-2", "10.0.0.2", "10.0.0.2")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	handler := s.PermissionHandler()
 
 	require.True(t, checkPermission(handler, "10.0.0.1"))
@@ -325,7 +337,7 @@ func TestTURNSecurity_Redis_NodeIPChangeImmediatelyReflected(t *testing.T) {
 	mr, rc := newMiniredis(t)
 	setNode(t, mr, "node-1", "10.0.0.1", "10.0.0.1")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	handler := s.PermissionHandler()
 
 	require.True(t, checkPermission(handler, "10.0.0.1"))
@@ -344,7 +356,7 @@ func TestTURNSecurity_Redis_CachedIPsSurviveRedisError(t *testing.T) {
 	mr, rc := newMiniredis(t)
 	setNode(t, mr, "node-1", "10.0.0.1", "10.0.0.1")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	handler := s.PermissionHandler()
 
 	// Populate cache.
@@ -374,7 +386,7 @@ func TestTURNSecurity_Redis_MalformedJSONSkipped(t *testing.T) {
 	setNode(t, mr, "node-1", "10.0.0.1", "10.0.0.1")
 	mr.HSet(customrouting.NodesOpenViduKey, "node-bad", "not-valid-json")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	handler := s.PermissionHandler()
 
 	require.True(t, checkPermission(handler, "10.0.0.1"))
@@ -387,7 +399,7 @@ func TestTURNSecurity_Redis_NodeWithEmptyIPs(t *testing.T) {
 	setNode(t, mr, "node-empty", "", "")
 	setNode(t, mr, "node-1", "10.0.0.1", "")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	handler := s.PermissionHandler()
 
 	require.True(t, checkPermission(handler, "10.0.0.1"))
@@ -403,7 +415,7 @@ func TestTURNSecurity_Redis_OverlappingIPsAcrossNodes(t *testing.T) {
 	setNode(t, mr, "node-1", "10.0.0.1", "192.168.1.1")
 	setNode(t, mr, "node-2", "10.0.0.1", "192.168.1.2")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	handler := s.PermissionHandler()
 
 	require.True(t, checkPermission(handler, "10.0.0.1"))
@@ -435,7 +447,7 @@ func TestTURNSecurity_Redis_ConcurrentAccess(t *testing.T) {
 		setNode(t, mr, fmt.Sprintf("node-%d", i), fmt.Sprintf("10.0.0.%d", i+1), fmt.Sprintf("10.0.0.%d", i+1))
 	}
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	handler := s.PermissionHandler()
 
 	var wg sync.WaitGroup
@@ -458,7 +470,7 @@ func TestTURNSecurity_Static_ConcurrentAccess(t *testing.T) {
 	conf.RTC.NodeIP = rtcconfig.NodeIP{V4: "10.0.0.1"}
 	conf.ResolvedRelayAddress = "192.168.1.1"
 
-	s := NewTURNSecurity(conf, nil)
+	s := newTestTURNSecurity(t, conf, nil)
 	handler := s.PermissionHandler()
 
 	var wg sync.WaitGroup
@@ -489,7 +501,7 @@ func TestTURNSecurity_Redis_LargeCluster(t *testing.T) {
 		setNode(t, mr, fmt.Sprintf("node-%d", i), ip, relay)
 	}
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	handler := s.PermissionHandler()
 
 	// Spot-check first, last, and middle nodes.
@@ -508,7 +520,7 @@ func TestTURNSecurity_Redis_LargeClusterNodeAddedAndRemoved(t *testing.T) {
 		setNode(t, mr, fmt.Sprintf("node-%d", i), fmt.Sprintf("10.0.%d.%d", (i/256)%256, i%256), fmt.Sprintf("10.0.%d.%d", (i/256)%256, i%256))
 	}
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	handler := s.PermissionHandler()
 
 	// All original nodes allowed.
@@ -542,7 +554,7 @@ func TestTURNSecurity_Redis_ExpiredCacheServedStaleDuringRedisOutage(t *testing.
 	mr, rc := newMiniredis(t)
 	setNode(t, mr, "node-1", "10.0.0.1", "10.0.0.1")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	handler := s.PermissionHandler()
 
 	// Populate cache.
@@ -578,7 +590,7 @@ func TestTURNSecurity_Redis_MissWithRedisErrorPreservesCache(t *testing.T) {
 	mr, rc := newMiniredis(t)
 	setNode(t, mr, "node-1", "10.0.0.1", "10.0.0.1")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	handler := s.PermissionHandler()
 
 	// Populate cache.
@@ -598,7 +610,7 @@ func TestTURNSecurity_Redis_TTLExpiryRefreshesKnownIP(t *testing.T) {
 	mr, rc := newMiniredis(t)
 	setNode(t, mr, "node-1", "10.0.0.1", "10.0.0.1")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	handler := s.PermissionHandler()
 
 	// Populate cache.
@@ -626,7 +638,7 @@ func TestTURNSecurity_Redis_SequentialMissesRefreshCache(t *testing.T) {
 	mr, rc := newMiniredis(t)
 	setNode(t, mr, "node-1", "10.0.0.1", "10.0.0.1")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	handler := s.PermissionHandler()
 
 	// Populate cache with node-1 only.
@@ -654,7 +666,7 @@ func TestTURNSecurity_Redis_ConcurrentMissAllGetCorrectResult(t *testing.T) {
 		setNode(t, mr, fmt.Sprintf("node-%d", i), fmt.Sprintf("10.0.0.%d", i+1), fmt.Sprintf("10.0.0.%d", i+1))
 	}
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	handler := s.PermissionHandler()
 
 	// Populate cache.
@@ -688,7 +700,7 @@ func TestTURNSecurity_Redis_ConcurrentMissDeniedIPStaysDenied(t *testing.T) {
 	mr, rc := newMiniredis(t)
 	setNode(t, mr, "node-1", "10.0.0.1", "10.0.0.1")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	handler := s.PermissionHandler()
 
 	require.True(t, checkPermission(handler, "10.0.0.1"))
@@ -717,7 +729,7 @@ func TestTURNSecurity_Redis_AllNodesRemovedAfterTTL(t *testing.T) {
 	setNode(t, mr, "node-1", "10.0.0.1", "10.0.0.1")
 	setNode(t, mr, "node-2", "10.0.0.2", "10.0.0.2")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	handler := s.PermissionHandler()
 
 	require.True(t, checkPermission(handler, "10.0.0.1"))
@@ -746,7 +758,7 @@ func TestTURNSecurity_Redis_ColdStartWithRedisDown(t *testing.T) {
 	mr, rc := newMiniredis(t)
 	setNode(t, mr, "node-1", "10.0.0.1", "10.0.0.1")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	handler := s.PermissionHandler()
 
 	// Break Redis before any cache is populated.
@@ -762,7 +774,7 @@ func TestTURNSecurity_Redis_ColdStartWithRedisDown(t *testing.T) {
 func TestTURNSecurity_DefaultCacheTTL(t *testing.T) {
 	require.Equal(t, time.Minute, defaultTURNCacheTTL)
 
-	s := NewTURNSecurity(&config.Config{}, nil)
+	s := newTestTURNSecurity(t, &config.Config{}, nil)
 	require.Equal(t, time.Minute, s.cacheTTL)
 }
 
@@ -772,7 +784,7 @@ func TestTURNSecurity_Redis_RealTTLExpiry(t *testing.T) {
 	mr, rc := newMiniredis(t)
 	setNode(t, mr, "node-1", "10.0.0.1", "10.0.0.1")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 	s.cacheTTL = 10 * time.Millisecond
 	handler := s.PermissionHandler()
 
@@ -798,7 +810,7 @@ func TestTURNSecurity_Redis_RealTTLExpiry(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestTURNSecurity_PermissionHandlerReturnsNonNil(t *testing.T) {
-	s := NewTURNSecurity(&config.Config{}, nil)
+	s := newTestTURNSecurity(t, &config.Config{}, nil)
 	require.NotNil(t, s.PermissionHandler())
 }
 
@@ -1159,7 +1171,7 @@ func TestTURNSecurity_DenyCIDR_OverridesClusterNode(t *testing.T) {
 	conf := &config.Config{}
 	conf.TURN.DenyPeerCIDRs = []string{"10.0.0.0/8"}
 
-	h := NewTURNSecurity(conf, rc).PermissionHandler()
+	h := newTestTURNSecurity(t, conf, rc).PermissionHandler()
 
 	require.False(t, checkPermission(h, "10.0.0.5"),
 		"deny CIDR must override a registered cluster-node IP")
@@ -1175,7 +1187,7 @@ func TestTURNSecurity_DenyCIDR_OverridesLocalIP(t *testing.T) {
 	conf := &config.Config{}
 	conf.TURN.DenyPeerCIDRs = []string{"0.0.0.0/0"} // deny every IPv4
 
-	h := NewTURNSecurity(conf, rc).PermissionHandler()
+	h := newTestTURNSecurity(t, conf, rc).PermissionHandler()
 
 	require.False(t, checkPermission(h, v4),
 		"deny CIDR must override the always-allow local-IP fast path")
@@ -1190,7 +1202,7 @@ func TestTURNSecurity_DenyCIDR_TakesPrecedenceOverAllow(t *testing.T) {
 	conf.TURN.AllowRestrictedPeerCIDRs = []string{"10.0.0.0/8"}
 	conf.TURN.DenyPeerCIDRs = []string{"10.0.0.0/8"}
 
-	h := NewTURNSecurity(conf, rc).PermissionHandler()
+	h := newTestTURNSecurity(t, conf, rc).PermissionHandler()
 
 	require.False(t, checkPermission(h, "10.1.2.3"),
 		"deny list must take precedence over allow list")
@@ -1203,7 +1215,7 @@ func TestTURNSecurity_AllowCIDR_GrantsListedPublicIP(t *testing.T) {
 	conf := &config.Config{}
 	conf.TURN.AllowRestrictedPeerCIDRs = []string{"1.1.1.0/24"}
 
-	h := NewTURNSecurity(conf, rc).PermissionHandler()
+	h := newTestTURNSecurity(t, conf, rc).PermissionHandler()
 
 	require.True(t, checkPermission(h, "1.1.1.1"),
 		"a public IP explicitly listed in the allow CIDRs must be permitted")
@@ -1218,7 +1230,7 @@ func TestTURNSecurity_AllowCIDR_GrantsListedPrivateNonClusterIP(t *testing.T) {
 	conf := &config.Config{}
 	conf.TURN.AllowRestrictedPeerCIDRs = []string{"10.0.0.0/8"}
 
-	h := NewTURNSecurity(conf, rc).PermissionHandler()
+	h := newTestTURNSecurity(t, conf, rc).PermissionHandler()
 
 	require.True(t, checkPermission(h, "10.1.2.3"),
 		"a listed private IP must be permitted even if it is not a cluster node")
@@ -1235,7 +1247,7 @@ func TestTURNSecurity_AllowCIDR_AllowsClusterNodeInRange(t *testing.T) {
 	conf := &config.Config{}
 	conf.TURN.AllowRestrictedPeerCIDRs = []string{"10.0.0.0/8"}
 
-	h := NewTURNSecurity(conf, rc).PermissionHandler()
+	h := newTestTURNSecurity(t, conf, rc).PermissionHandler()
 
 	require.True(t, checkPermission(h, "10.1.2.3"),
 		"restricted cluster node inside an allow CIDR must be permitted")
@@ -1251,7 +1263,7 @@ func TestTURNSecurity_AllowCIDR_DeniesClusterNodeOutOfRange(t *testing.T) {
 	conf := &config.Config{}
 	conf.TURN.AllowRestrictedPeerCIDRs = []string{"10.0.0.0/8"}
 
-	h := NewTURNSecurity(conf, rc).PermissionHandler()
+	h := newTestTURNSecurity(t, conf, rc).PermissionHandler()
 
 	require.False(t, checkPermission(h, "192.168.1.5"),
 		"restricted cluster node outside the allow CIDRs must be denied")
@@ -1268,7 +1280,7 @@ func TestTURNSecurity_AllowCIDR_MultipleRanges(t *testing.T) {
 	conf := &config.Config{}
 	conf.TURN.AllowRestrictedPeerCIDRs = []string{"10.0.0.0/8", "192.168.0.0/16"}
 
-	h := NewTURNSecurity(conf, rc).PermissionHandler()
+	h := newTestTURNSecurity(t, conf, rc).PermissionHandler()
 
 	require.True(t, checkPermission(h, "10.1.2.3"))
 	require.True(t, checkPermission(h, "192.168.50.7"))
@@ -1285,7 +1297,7 @@ func TestTURNSecurity_AllowCIDR_DeniesUnlistedLocalIP(t *testing.T) {
 	_, rc := newMiniredis(t)
 	conf := &config.Config{}
 	conf.TURN.AllowRestrictedPeerCIDRs = []string{"203.0.113.0/24"} // public range; excludes the local IP
-	h := NewTURNSecurity(conf, rc).PermissionHandler()
+	h := newTestTURNSecurity(t, conf, rc).PermissionHandler()
 
 	require.False(t, checkPermission(h, localIP),
 		"local restricted IP not in the allow list is denied (allow gate precedes the local fast path)")
@@ -1298,7 +1310,7 @@ func TestTURNSecurity_AllowCIDR_AllowsListedLocalIP(t *testing.T) {
 	_, rc := newMiniredis(t)
 	conf := &config.Config{}
 	conf.TURN.AllowRestrictedPeerCIDRs = []string{fmt.Sprintf("%s/32", localIP)}
-	h := NewTURNSecurity(conf, rc).PermissionHandler()
+	h := newTestTURNSecurity(t, conf, rc).PermissionHandler()
 
 	require.True(t, checkPermission(h, localIP),
 		"local IP included in the allow list is permitted")
@@ -1312,7 +1324,7 @@ func TestTURNSecurity_AllowCIDR_DoesNotBlockPublicClusterNode(t *testing.T) {
 	conf := &config.Config{}
 	conf.TURN.AllowRestrictedPeerCIDRs = []string{"10.0.0.0/8"} // does not cover the public node
 
-	h := NewTURNSecurity(conf, rc).PermissionHandler()
+	h := newTestTURNSecurity(t, conf, rc).PermissionHandler()
 
 	require.True(t, checkPermission(h, "203.0.113.50"),
 		"public cluster node not in the allow list is still allowed (gate only narrows restricted IPs)")
@@ -1327,7 +1339,7 @@ func TestTURNSecurity_Static_AllowCIDR_Grants(t *testing.T) {
 	conf.ResolvedRelayAddress = "10.0.0.1"
 	conf.TURN.AllowRestrictedPeerCIDRs = []string{"10.0.0.0/8"}
 
-	h := NewTURNSecurity(conf, nil).PermissionHandler() // static mode
+	h := newTestTURNSecurity(t, conf, nil).PermissionHandler() // static mode
 
 	require.True(t, checkPermission(h, "10.0.0.1"), "node IP within allow list permitted")
 	require.True(t, checkPermission(h, "10.5.5.5"), "any listed IP permitted (even a non-node) in static mode")
@@ -1341,7 +1353,7 @@ func TestTURNSecurity_Static_DenyCIDR_OverridesNodeIP(t *testing.T) {
 	conf.ResolvedRelayAddress = "10.0.0.1"
 	conf.TURN.DenyPeerCIDRs = []string{"10.0.0.0/8"}
 
-	h := NewTURNSecurity(conf, nil).PermissionHandler()
+	h := newTestTURNSecurity(t, conf, nil).PermissionHandler()
 
 	require.False(t, checkPermission(h, "10.0.0.1"),
 		"deny CIDR overrides the configured node/relay IP in static mode")
@@ -1353,7 +1365,7 @@ func TestTURNSecurity_NoCIDRs_DefaultRestrictedHandling(t *testing.T) {
 	mr, rc := newMiniredis(t)
 	setNode(t, mr, "node-1", "10.1.2.3", "10.1.2.3")
 
-	h := NewTURNSecurity(&config.Config{}, rc).PermissionHandler()
+	h := newTestTURNSecurity(t, &config.Config{}, rc).PermissionHandler()
 
 	require.True(t, checkPermission(h, "10.1.2.3"), "restricted cluster node allowed")
 	require.False(t, checkPermission(h, "192.168.9.9"), "restricted non-cluster IP denied")
@@ -1366,7 +1378,7 @@ func TestTURNSecurity_AllowCIDR_IPv6Grant(t *testing.T) {
 	conf := &config.Config{}
 	conf.TURN.AllowRestrictedPeerCIDRs = []string{"2001:db8::/32"}
 
-	h := NewTURNSecurity(conf, rc).PermissionHandler()
+	h := newTestTURNSecurity(t, conf, rc).PermissionHandler()
 
 	require.True(t, checkPermission(h, "2001:db8::1"), "listed IPv6 peer permitted")
 	require.False(t, checkPermission(h, "2001:dead::1"), "unlisted public IPv6 peer denied")
@@ -1384,7 +1396,7 @@ func TestTURNSecurity_Redis_RefreshRevalidatesNegativeDedup(t *testing.T) {
 	mr, rc := newMiniredis(t)
 	setNode(t, mr, "node-1", "10.0.0.1", "10.0.0.1")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 
 	s.cacheMu.Lock()
 	s.cachedIPs = map[string]struct{}{"10.0.0.2": {}} // poisoned: missing 10.0.0.1
@@ -1406,7 +1418,7 @@ func TestTURNSecurity_Redis_PositiveDedupSkipsRefetch(t *testing.T) {
 	mr, rc := newMiniredis(t)
 	setNode(t, mr, "node-1", "10.0.0.1", "10.0.0.1")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 
 	s.cacheMu.Lock()
 	s.cachedIPs = map[string]struct{}{"10.0.0.1": {}}
@@ -1428,7 +1440,7 @@ func TestTURNSecurity_Redis_RefreshNegativeDedupStillDeniesAbsentIP(t *testing.T
 	mr, rc := newMiniredis(t)
 	setNode(t, mr, "node-1", "10.0.0.1", "10.0.0.1")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 
 	s.cacheMu.Lock()
 	s.cachedIPs = map[string]struct{}{"10.0.0.1": {}}
@@ -1450,7 +1462,7 @@ func TestTURNSecurity_Redis_NegativeDedupRateLimitedWhenFresh(t *testing.T) {
 	mr, rc := newMiniredis(t)
 	setNode(t, mr, "node-1", "10.0.0.1", "10.0.0.1")
 
-	s := NewTURNSecurity(&config.Config{}, rc)
+	s := newTestTURNSecurity(t, &config.Config{}, rc)
 
 	fresh := time.Now()
 	s.cacheMu.Lock()

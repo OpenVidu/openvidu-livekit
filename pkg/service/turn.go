@@ -52,6 +52,20 @@ const (
 
 var ErrExpired = errors.New("expired")
 
+// parsePeerCIDRs compiles a list of CIDR strings, failing with a field-specific
+// error on any invalid entry so a malformed peer policy is never silently ignored.
+func parsePeerCIDRs(field string, cidrs []string) ([]*net.IPNet, error) {
+	parsed := make([]*net.IPNet, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		_, ipnet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid CIDR %q in %s: %w", cidr, field, err)
+		}
+		parsed = append(parsed, ipnet)
+	}
+	return parsed, nil
+}
+
 // BEGIN OPENVIDU BLOCK — added rc parameter for TURNSecurity
 func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone bool, rc redis.UniversalClient) (*turn.Server, error) {
 	// END OPENVIDU BLOCK
@@ -99,24 +113,44 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 	}
 	// END OPENVIDU BLOCK
 
+	// parse peer CIDR policies once at startup so a malformed entry fails loudly
+	// instead of being silently skipped on every permission decision (fail-open)
+	allowRestrictedPeerCIDRs, err := parsePeerCIDRs("turn.allow_restricted_peer_cidrs", turnConf.AllowRestrictedPeerCIDRs)
+	if err != nil {
+		return nil, err
+	}
+	denyPeerCIDRs, err := parsePeerCIDRs("turn.deny_peer_cidrs", turnConf.DenyPeerCIDRs)
+	if err != nil {
+		return nil, err
+	}
+
 	serverConfig := turn.ServerConfig{
 		Realm:         LivekitRealm,
 		AuthHandler:   authHandler,
 		LoggerFactory: pionlogger.NewLoggerFactory(logger.GetLogger()),
 	}
 
+	// cap concurrent relay allocations per participant so one credential cannot
+	// exhaust the shared relay-port range (a value <= 0 disables the quota)
+	if turnConf.PerUserRelayAllocationLimit > 0 {
+		quota := newTURNAllocationQuota(turnConf.PerUserRelayAllocationLimit)
+		serverConfig.QuotaHandler = quota.Allow
+		serverConfig.EventHandler = quota.eventHandler()
+	}
+
 	var logValues []any
 	logValues = append(logValues, "turn.relay_range_start", turnConf.RelayPortRangeStart)
 	logValues = append(logValues, "turn.relay_range_end", turnConf.RelayPortRangeEnd)
+	logValues = append(logValues, "turn.per_user_relay_allocation_limit", turnConf.PerUserRelayAllocationLimit)
 
 	// BEGIN OPENVIDU BLOCK
 	// Restrict TURN relay peers to this machine's local IPs and the registered
 	// cluster-node IPs (Redis nodes_openvidu). Without this the embedded relay
 	// is an open proxy to any public IP for anyone holding valid TURN
-	// credentials. TURNSecurity also enforces the configured
-	// AllowRestrictedPeerCIDRs / DenyPeerCIDRs rules, superseding the previous
-	// inline permission handler. Built once and shared across bind addresses.
-	turnSecurity := NewTURNSecurity(conf, rc)
+	// credentials. TURNSecurity also enforces the AllowRestrictedPeerCIDRs /
+	// DenyPeerCIDRs rules parsed above, superseding the inline permission
+	// handler. Built once and shared across bind addresses.
+	turnSecurity := NewTURNSecurity(conf, rc, allowRestrictedPeerCIDRs, denyPeerCIDRs)
 	// END OPENVIDU BLOCK
 
 	for _, addr := range turnConf.BindAddresses {
@@ -275,6 +309,8 @@ func NewTURNAuthHandler(keyProvider auth.KeyProvider) *TURNAuthHandler {
 }
 
 func (h *TURNAuthHandler) CreateUsername(apiKey string, pID livekit.ParticipantID, ttlSeconds int) (string, int64) {
+	// clamp defensively: non-positive TTLs fall back to the default and overflowing ones are capped
+	ttlSeconds, _ = config.ClampTURNTTLSeconds(ttlSeconds)
 	expiry := time.Now().Add(time.Duration(ttlSeconds) * time.Second).Unix()
 	return base62.EncodeToString(fmt.Appendf(nil, "%s|%s|%d", apiKey, pID, expiry)), expiry
 }

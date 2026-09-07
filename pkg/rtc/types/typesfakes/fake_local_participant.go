@@ -774,6 +774,16 @@ type FakeLocalParticipant struct {
 	hasConnectedReturnsOnCall map[int]struct {
 		result1 bool
 	}
+	HasICEConnectedStub        func() bool
+	hasICEConnectedMutex       sync.RWMutex
+	hasICEConnectedArgsForCall []struct {
+	}
+	hasICEConnectedReturns struct {
+		result1 bool
+	}
+	hasICEConnectedReturnsOnCall map[int]struct {
+		result1 bool
+	}
 	HasPermissionStub        func(livekit.TrackID, livekit.ParticipantIdentity) bool
 	hasPermissionMutex       sync.RWMutex
 	hasPermissionArgsForCall []struct {
@@ -841,6 +851,17 @@ type FakeLocalParticipant struct {
 	isClosedReturnsOnCall map[int]struct {
 		result1 bool
 	}
+	IsConnectionCanceledStub        func(types.ParticipantCloseReason) bool
+	isConnectionCanceledMutex       sync.RWMutex
+	isConnectionCanceledArgsForCall []struct {
+		arg1 types.ParticipantCloseReason
+	}
+	isConnectionCanceledReturns struct {
+		result1 bool
+	}
+	isConnectionCanceledReturnsOnCall map[int]struct {
+		result1 bool
+	}
 	IsDependentStub        func() bool
 	isDependentMutex       sync.RWMutex
 	isDependentArgsForCall []struct {
@@ -869,6 +890,16 @@ type FakeLocalParticipant struct {
 		result1 bool
 	}
 	isIdleReturnsOnCall map[int]struct {
+		result1 bool
+	}
+	IsMigrationStub        func() bool
+	isMigrationMutex       sync.RWMutex
+	isMigrationArgsForCall []struct {
+	}
+	isMigrationReturns struct {
+		result1 bool
+	}
+	isMigrationReturnsOnCall map[int]struct {
 		result1 bool
 	}
 	IsPublisherStub        func() bool
@@ -942,6 +973,16 @@ type FakeLocalParticipant struct {
 		result1 bool
 	}
 	isUsingSinglePeerConnectionReturnsOnCall map[int]struct {
+		result1 bool
+	}
+	IsWarpEnabledStub        func() bool
+	isWarpEnabledMutex       sync.RWMutex
+	isWarpEnabledArgsForCall []struct {
+	}
+	isWarpEnabledReturns struct {
+		result1 bool
+	}
+	isWarpEnabledReturnsOnCall map[int]struct {
 		result1 bool
 	}
 	IssueFullReconnectStub        func(types.ParticipantCloseReason)
@@ -5587,6 +5628,59 @@ func (fake *FakeLocalParticipant) HasConnectedReturnsOnCall(i int, result1 bool)
 	}{result1}
 }
 
+func (fake *FakeLocalParticipant) HasICEConnected() bool {
+	fake.hasICEConnectedMutex.Lock()
+	ret, specificReturn := fake.hasICEConnectedReturnsOnCall[len(fake.hasICEConnectedArgsForCall)]
+	fake.hasICEConnectedArgsForCall = append(fake.hasICEConnectedArgsForCall, struct {
+	}{})
+	stub := fake.HasICEConnectedStub
+	fakeReturns := fake.hasICEConnectedReturns
+	fake.recordInvocation("HasICEConnected", []interface{}{})
+	fake.hasICEConnectedMutex.Unlock()
+	if stub != nil {
+		return stub()
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *FakeLocalParticipant) HasICEConnectedCallCount() int {
+	fake.hasICEConnectedMutex.RLock()
+	defer fake.hasICEConnectedMutex.RUnlock()
+	return len(fake.hasICEConnectedArgsForCall)
+}
+
+func (fake *FakeLocalParticipant) HasICEConnectedCalls(stub func() bool) {
+	fake.hasICEConnectedMutex.Lock()
+	defer fake.hasICEConnectedMutex.Unlock()
+	fake.HasICEConnectedStub = stub
+}
+
+func (fake *FakeLocalParticipant) HasICEConnectedReturns(result1 bool) {
+	fake.hasICEConnectedMutex.Lock()
+	defer fake.hasICEConnectedMutex.Unlock()
+	fake.HasICEConnectedStub = nil
+	fake.hasICEConnectedReturns = struct {
+		result1 bool
+	}{result1}
+}
+
+func (fake *FakeLocalParticipant) HasICEConnectedReturnsOnCall(i int, result1 bool) {
+	fake.hasICEConnectedMutex.Lock()
+	defer fake.hasICEConnectedMutex.Unlock()
+	fake.HasICEConnectedStub = nil
+	if fake.hasICEConnectedReturnsOnCall == nil {
+		fake.hasICEConnectedReturnsOnCall = make(map[int]struct {
+			result1 bool
+		})
+	}
+	fake.hasICEConnectedReturnsOnCall[i] = struct {
+		result1 bool
+	}{result1}
+}
+
 func (fake *FakeLocalParticipant) HasPermission(arg1 livekit.TrackID, arg2 livekit.ParticipantIdentity) bool {
 	fake.hasPermissionMutex.Lock()
 	ret, specificReturn := fake.hasPermissionReturnsOnCall[len(fake.hasPermissionArgsForCall)]
@@ -5946,6 +6040,67 @@ func (fake *FakeLocalParticipant) IsClosedReturnsOnCall(i int, result1 bool) {
 	}{result1}
 }
 
+func (fake *FakeLocalParticipant) IsConnectionCanceled(arg1 types.ParticipantCloseReason) bool {
+	fake.isConnectionCanceledMutex.Lock()
+	ret, specificReturn := fake.isConnectionCanceledReturnsOnCall[len(fake.isConnectionCanceledArgsForCall)]
+	fake.isConnectionCanceledArgsForCall = append(fake.isConnectionCanceledArgsForCall, struct {
+		arg1 types.ParticipantCloseReason
+	}{arg1})
+	stub := fake.IsConnectionCanceledStub
+	fakeReturns := fake.isConnectionCanceledReturns
+	fake.recordInvocation("IsConnectionCanceled", []interface{}{arg1})
+	fake.isConnectionCanceledMutex.Unlock()
+	if stub != nil {
+		return stub(arg1)
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *FakeLocalParticipant) IsConnectionCanceledCallCount() int {
+	fake.isConnectionCanceledMutex.RLock()
+	defer fake.isConnectionCanceledMutex.RUnlock()
+	return len(fake.isConnectionCanceledArgsForCall)
+}
+
+func (fake *FakeLocalParticipant) IsConnectionCanceledCalls(stub func(types.ParticipantCloseReason) bool) {
+	fake.isConnectionCanceledMutex.Lock()
+	defer fake.isConnectionCanceledMutex.Unlock()
+	fake.IsConnectionCanceledStub = stub
+}
+
+func (fake *FakeLocalParticipant) IsConnectionCanceledArgsForCall(i int) types.ParticipantCloseReason {
+	fake.isConnectionCanceledMutex.RLock()
+	defer fake.isConnectionCanceledMutex.RUnlock()
+	argsForCall := fake.isConnectionCanceledArgsForCall[i]
+	return argsForCall.arg1
+}
+
+func (fake *FakeLocalParticipant) IsConnectionCanceledReturns(result1 bool) {
+	fake.isConnectionCanceledMutex.Lock()
+	defer fake.isConnectionCanceledMutex.Unlock()
+	fake.IsConnectionCanceledStub = nil
+	fake.isConnectionCanceledReturns = struct {
+		result1 bool
+	}{result1}
+}
+
+func (fake *FakeLocalParticipant) IsConnectionCanceledReturnsOnCall(i int, result1 bool) {
+	fake.isConnectionCanceledMutex.Lock()
+	defer fake.isConnectionCanceledMutex.Unlock()
+	fake.IsConnectionCanceledStub = nil
+	if fake.isConnectionCanceledReturnsOnCall == nil {
+		fake.isConnectionCanceledReturnsOnCall = make(map[int]struct {
+			result1 bool
+		})
+	}
+	fake.isConnectionCanceledReturnsOnCall[i] = struct {
+		result1 bool
+	}{result1}
+}
+
 func (fake *FakeLocalParticipant) IsDependent() bool {
 	fake.isDependentMutex.Lock()
 	ret, specificReturn := fake.isDependentReturnsOnCall[len(fake.isDependentArgsForCall)]
@@ -6101,6 +6256,59 @@ func (fake *FakeLocalParticipant) IsIdleReturnsOnCall(i int, result1 bool) {
 		})
 	}
 	fake.isIdleReturnsOnCall[i] = struct {
+		result1 bool
+	}{result1}
+}
+
+func (fake *FakeLocalParticipant) IsMigration() bool {
+	fake.isMigrationMutex.Lock()
+	ret, specificReturn := fake.isMigrationReturnsOnCall[len(fake.isMigrationArgsForCall)]
+	fake.isMigrationArgsForCall = append(fake.isMigrationArgsForCall, struct {
+	}{})
+	stub := fake.IsMigrationStub
+	fakeReturns := fake.isMigrationReturns
+	fake.recordInvocation("IsMigration", []interface{}{})
+	fake.isMigrationMutex.Unlock()
+	if stub != nil {
+		return stub()
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *FakeLocalParticipant) IsMigrationCallCount() int {
+	fake.isMigrationMutex.RLock()
+	defer fake.isMigrationMutex.RUnlock()
+	return len(fake.isMigrationArgsForCall)
+}
+
+func (fake *FakeLocalParticipant) IsMigrationCalls(stub func() bool) {
+	fake.isMigrationMutex.Lock()
+	defer fake.isMigrationMutex.Unlock()
+	fake.IsMigrationStub = stub
+}
+
+func (fake *FakeLocalParticipant) IsMigrationReturns(result1 bool) {
+	fake.isMigrationMutex.Lock()
+	defer fake.isMigrationMutex.Unlock()
+	fake.IsMigrationStub = nil
+	fake.isMigrationReturns = struct {
+		result1 bool
+	}{result1}
+}
+
+func (fake *FakeLocalParticipant) IsMigrationReturnsOnCall(i int, result1 bool) {
+	fake.isMigrationMutex.Lock()
+	defer fake.isMigrationMutex.Unlock()
+	fake.IsMigrationStub = nil
+	if fake.isMigrationReturnsOnCall == nil {
+		fake.isMigrationReturnsOnCall = make(map[int]struct {
+			result1 bool
+		})
+	}
+	fake.isMigrationReturnsOnCall[i] = struct {
 		result1 bool
 	}{result1}
 }
@@ -6489,6 +6697,59 @@ func (fake *FakeLocalParticipant) IsUsingSinglePeerConnectionReturnsOnCall(i int
 		})
 	}
 	fake.isUsingSinglePeerConnectionReturnsOnCall[i] = struct {
+		result1 bool
+	}{result1}
+}
+
+func (fake *FakeLocalParticipant) IsWarpEnabled() bool {
+	fake.isWarpEnabledMutex.Lock()
+	ret, specificReturn := fake.isWarpEnabledReturnsOnCall[len(fake.isWarpEnabledArgsForCall)]
+	fake.isWarpEnabledArgsForCall = append(fake.isWarpEnabledArgsForCall, struct {
+	}{})
+	stub := fake.IsWarpEnabledStub
+	fakeReturns := fake.isWarpEnabledReturns
+	fake.recordInvocation("IsWarpEnabled", []interface{}{})
+	fake.isWarpEnabledMutex.Unlock()
+	if stub != nil {
+		return stub()
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *FakeLocalParticipant) IsWarpEnabledCallCount() int {
+	fake.isWarpEnabledMutex.RLock()
+	defer fake.isWarpEnabledMutex.RUnlock()
+	return len(fake.isWarpEnabledArgsForCall)
+}
+
+func (fake *FakeLocalParticipant) IsWarpEnabledCalls(stub func() bool) {
+	fake.isWarpEnabledMutex.Lock()
+	defer fake.isWarpEnabledMutex.Unlock()
+	fake.IsWarpEnabledStub = stub
+}
+
+func (fake *FakeLocalParticipant) IsWarpEnabledReturns(result1 bool) {
+	fake.isWarpEnabledMutex.Lock()
+	defer fake.isWarpEnabledMutex.Unlock()
+	fake.IsWarpEnabledStub = nil
+	fake.isWarpEnabledReturns = struct {
+		result1 bool
+	}{result1}
+}
+
+func (fake *FakeLocalParticipant) IsWarpEnabledReturnsOnCall(i int, result1 bool) {
+	fake.isWarpEnabledMutex.Lock()
+	defer fake.isWarpEnabledMutex.Unlock()
+	fake.IsWarpEnabledStub = nil
+	if fake.isWarpEnabledReturnsOnCall == nil {
+		fake.isWarpEnabledReturnsOnCall = make(map[int]struct {
+			result1 bool
+		})
+	}
+	fake.isWarpEnabledReturnsOnCall[i] = struct {
 		result1 bool
 	}{result1}
 }

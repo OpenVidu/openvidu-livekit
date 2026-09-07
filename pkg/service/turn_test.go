@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/jxskiss/base62"
 	"github.com/pion/stun/v3"
@@ -27,8 +28,9 @@ import (
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 
-	// BEGIN OPENVIDU BLOCK
 	"github.com/livekit/livekit-server/pkg/config"
+
+	// BEGIN OPENVIDU BLOCK
 	"github.com/livekit/mediatransportutil/pkg/rtcconfig"
 	// END OPENVIDU BLOCK
 )
@@ -80,7 +82,8 @@ func TestTURNAuthHandler_HandleAuth_ExpiredAllocateRejected(t *testing.T) {
 	h := newTestTurnAuthHandler()
 	pID := livekit.ParticipantID("PA_expired_alloc")
 
-	username, _ := h.CreateUsername(turnTestAPIKey, pID, -60)
+	expiry := time.Now().Add(-time.Minute).Unix()
+	username := base62.EncodeToString(fmt.Appendf(nil, "%s|%s|%d", turnTestAPIKey, pID, expiry))
 	_, _, ok := h.HandleAuth(&turn.RequestAttributes{
 		Username: username,
 		Realm:    LivekitRealm,
@@ -94,7 +97,8 @@ func TestTURNAuthHandler_HandleAuth_ExpiredNonAllocateAllowed(t *testing.T) {
 	h := newTestTurnAuthHandler()
 	pID := livekit.ParticipantID("PA_expired_refresh")
 
-	username, expiry := h.CreateUsername(turnTestAPIKey, pID, -60)
+	expiry := time.Now().Add(-time.Minute).Unix()
+	username := base62.EncodeToString(fmt.Appendf(nil, "%s|%s|%d", turnTestAPIKey, pID, expiry))
 
 	// CreatePassword still enforces ErrExpired on its own, but the server hands
 	// the same key it generated at allocation time — reproduce that by directly
@@ -315,3 +319,70 @@ func TestExtractPort_FallbackAddr_InvalidPort(t *testing.T) {
 }
 
 // END OPENVIDU BLOCK
+
+func TestParsePeerCIDRs(t *testing.T) {
+	t.Run("valid entries are compiled", func(t *testing.T) {
+		nets, err := parsePeerCIDRs("turn.deny_peer_cidrs", []string{"203.0.113.0/24", "10.0.0.0/8"})
+		require.NoError(t, err)
+		require.Len(t, nets, 2)
+		require.True(t, nets[0].Contains(net.ParseIP("203.0.113.5")))
+		require.False(t, nets[0].Contains(net.ParseIP("203.0.114.5")))
+	})
+
+	t.Run("empty list is fine", func(t *testing.T) {
+		nets, err := parsePeerCIDRs("turn.deny_peer_cidrs", nil)
+		require.NoError(t, err)
+		require.Empty(t, nets)
+	})
+
+	t.Run("invalid entry is rejected with field context", func(t *testing.T) {
+		_, err := parsePeerCIDRs("turn.deny_peer_cidrs", []string{"203.0.113.0/33"})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "turn.deny_peer_cidrs")
+		require.Contains(t, err.Error(), "203.0.113.0/33")
+	})
+}
+
+func TestNewTurnServer_InvalidPeerCIDRFailsStartup(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		mutID func(c *config.Config)
+		field string
+	}{
+		{
+			name:  "invalid deny cidr",
+			mutID: func(c *config.Config) { c.TURN.DenyPeerCIDRs = []string{"203.0.113.0/33"} },
+			field: "turn.deny_peer_cidrs",
+		},
+		{
+			name:  "invalid allow cidr",
+			mutID: func(c *config.Config) { c.TURN.AllowRestrictedPeerCIDRs = []string{"not-a-cidr"} },
+			field: "turn.allow_restricted_peer_cidrs",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conf := &config.Config{}
+			conf.TURN.Enabled = true
+			conf.TURN.UDPPort = 3478
+			tc.mutID(conf)
+
+			_, err := NewTurnServer(conf, nil, false, nil)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.field)
+		})
+	}
+}
+
+func TestTURNAuthHandler_CreateUsername_TTLClamped(t *testing.T) {
+	h := newTestTurnAuthHandler()
+	pID := livekit.ParticipantID("PA_ttl_clamp")
+
+	// An overflowing TTL must not wrap into a past expiry; it clamps to the max.
+	_, overflowExpiry := h.CreateUsername(turnTestAPIKey, pID, 1<<62+1)
+	require.Greater(t, overflowExpiry, time.Now().Unix())
+	require.LessOrEqual(t, overflowExpiry, time.Now().Unix()+int64(config.TURNMaxTTLSeconds)+1)
+
+	// A non-positive TTL falls back to the default rather than producing a past/wrapped expiry.
+	_, negativeExpiry := h.CreateUsername(turnTestAPIKey, pID, -1<<40)
+	require.InDelta(t, time.Now().Unix()+int64(config.DefaultTURNTTLSeconds), negativeExpiry, 2)
+}

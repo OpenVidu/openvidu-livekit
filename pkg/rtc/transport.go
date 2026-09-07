@@ -223,14 +223,14 @@ type PCTransport struct {
 	dataTrackDC             *datachannel.DataChannelWriter[*webrtc.DataChannel]
 	unlabeledDataChannels   []*datachannel.DataChannelWriter[*webrtc.DataChannel]
 
-	iceStartedAt               time.Time
-	iceConnectedAt             time.Time
-	firstConnectedAt           time.Time
-	connectedAt                time.Time
-	tcpICETimer                *time.Timer
-	connectAfterICETimer       *time.Timer // timer to wait for pc to connect after ice connected
-	resetShortConnOnICERestart atomic.Bool
-	signalingRTT               atomic.Uint32 // milliseconds
+	iceFirstStartedAt              time.Time
+	iceFirstConnectedAt            time.Time
+	peerConnectionFirstConnectedAt time.Time
+	peerConnectionLastconnectedAt  time.Time
+	tcpICETimer                    *time.Timer
+	connectAfterICETimer           *time.Timer // timer to wait for pc to connect after ice connected
+	resetShortConnOnICERestart     atomic.Bool
+	signalingRTT                   atomic.Uint32 // milliseconds
 
 	hasFullyEstablishedRecorded bool
 
@@ -303,31 +303,34 @@ type PCTransport struct {
 }
 
 type TransportParams struct {
-	Handler                       transport.Handler
-	ProtocolVersion               types.ProtocolVersion
-	Config                        *WebRTCConfig
-	Twcc                          *lktwcc.Responder
-	DirectionConfig               DirectionConfig
-	CongestionControlConfig       config.CongestionControlConfig
-	EnabledPublishCodecs          []*livekit.Codec
-	EnabledSubscribeCodecs        []*livekit.Codec
-	Logger                        logger.Logger
-	Transport                     livekit.SignalTarget
-	SimTracks                     map[uint32]sfuinterceptor.SimulcastTrackInfo
-	ClientInfo                    ClientInfo
-	IsOfferer                     bool
-	IsSendSide                    bool
-	AllowPlayoutDelay             bool
-	UseOneShotSignallingMode      bool
-	FireOnTrackBySdp              bool
-	DataChannelMaxBufferedAmount  uint64
-	DatachannelSlowThreshold      int
-	DatachannelLossyTargetLatency time.Duration
+	Handler                           transport.Handler
+	ProtocolVersion                   types.ProtocolVersion
+	Config                            *WebRTCConfig
+	Twcc                              *lktwcc.Responder
+	DirectionConfig                   DirectionConfig
+	CongestionControlConfig           config.CongestionControlConfig
+	EnabledPublishCodecs              []*livekit.Codec
+	EnabledSubscribeCodecs            []*livekit.Codec
+	Logger                            logger.Logger
+	Transport                         livekit.SignalTarget
+	SimTracks                         map[uint32]sfuinterceptor.SimulcastTrackInfo
+	ClientInfo                        ClientInfo
+	IsOfferer                         bool
+	IsSendSide                        bool
+	AllowPlayoutDelay                 bool
+	UseOneShotSignallingMode          bool
+	ExcludeIPv6LocalCandidates        bool
+	FireOnTrackBySdp                  bool
+	DataChannelMaxBufferedAmount      uint64
+	DatachannelSlowThreshold          int
+	DatachannelLossyTargetLatency     time.Duration
+	DatachannelDataTrackTargetLatency time.Duration
 
 	// for development test
 	DatachannelMaxReceiverBufferSize int
 
 	EnableDataTracks bool
+	EnableWarp       bool
 }
 
 func newPeerConnection(
@@ -378,6 +381,11 @@ func newPeerConnection(
 
 	if params.ClientInfo.SupportsSctpZeroChecksum() {
 		se.EnableSCTPZeroChecksum(true)
+	}
+
+	if params.EnableWarp {
+		se.EnableSped(true)
+		se.EnableSctpSnap(true)
 	}
 
 	//
@@ -536,6 +544,8 @@ func newPeerConnection(
 			params.Logger.Debugw("rtx pair found from extension", "repair", repair, "base", base, "rsid", rsid)
 			params.Config.BufferFactory.SetRTXPair(repair, base, rsid)
 		},
+		params.Config.BufferFactory,
+		params.SimTracks,
 		params.Logger,
 	)
 	// put rtx interceptor behind unhandle simulcast interceptor so it can get the correct mid & rid
@@ -676,8 +686,8 @@ func (t *PCTransport) SetSignalingRTT(rtt uint32) {
 
 func (t *PCTransport) setICEStartedAt(at time.Time) {
 	t.lock.Lock()
-	if t.iceStartedAt.IsZero() {
-		t.iceStartedAt = at
+	if t.iceFirstStartedAt.IsZero() {
+		t.iceFirstStartedAt = at
 
 		// checklist of ice agent will be cleared on ice failed, get stats before that
 		t.mayFailedICEStatsTimer = time.AfterFunc(iceFailedTimeoutTotal-time.Second, t.logMayFailedICEStats)
@@ -708,15 +718,15 @@ func (t *PCTransport) setICEStartedAt(at time.Time) {
 
 func (t *PCTransport) setICEConnectedAt(at time.Time) {
 	t.lock.Lock()
-	if t.iceConnectedAt.IsZero() {
+	if t.iceFirstConnectedAt.IsZero() {
 		//
 		// Record initial connection time.
-		// This prevents reset of connected at time if ICE goes `Connected` -> `Disconnected` -> `Connected`.
+		// This prevents reset of iceFirstConnectedAt if ICE goes `Connected` -> `Disconnected` -> `Connected`.
 		//
-		t.iceConnectedAt = at
+		t.iceFirstConnectedAt = at
 
 		// set failure timer for dtls handshake
-		iceDuration := at.Sub(t.iceStartedAt)
+		iceDuration := at.Sub(t.iceFirstStartedAt)
 		connTimeoutAfterICE := min(max(minConnectTimeoutAfterICE, 3*iceDuration), maxConnectTimeoutAfterICE)
 		t.params.Logger.Debugw("setting connection timer after ICE connected", "timeout", connTimeoutAfterICE, "iceDuration", iceDuration)
 		t.connectAfterICETimer = time.AfterFunc(connTimeoutAfterICE, func() {
@@ -783,9 +793,9 @@ func (t *PCTransport) logMayFailedICEStats() {
 func (t *PCTransport) resetShortConn() {
 	t.params.Logger.Infow("resetting short connection on ICE restart")
 	t.lock.Lock()
-	t.iceStartedAt = time.Time{}
-	t.iceConnectedAt = time.Time{}
-	t.connectedAt = time.Time{}
+	t.iceFirstStartedAt = time.Time{}
+	t.iceFirstConnectedAt = time.Time{}
+	t.peerConnectionLastconnectedAt = time.Time{}
 	if t.connectAfterICETimer != nil {
 		t.connectAfterICETimer.Stop()
 		t.connectAfterICETimer = nil
@@ -801,23 +811,23 @@ func (t *PCTransport) IsShortConnection(at time.Time) (bool, time.Duration) {
 	t.lock.RLock()
 	defer t.lock.RUnlock()
 
-	if t.iceConnectedAt.IsZero() {
+	if t.iceFirstConnectedAt.IsZero() {
 		return false, 0
 	}
 
-	duration := at.Sub(t.iceConnectedAt)
+	duration := at.Sub(t.iceFirstConnectedAt)
 	return duration < shortConnectionThreshold, duration
 }
 
-func (t *PCTransport) setConnectedAt(at time.Time) bool {
+func (t *PCTransport) setPeerConnectionConnectedAt(at time.Time) bool {
 	t.lock.Lock()
-	t.connectedAt = at
-	if !t.firstConnectedAt.IsZero() {
+	t.peerConnectionLastconnectedAt = at
+	if !t.peerConnectionFirstConnectedAt.IsZero() {
 		t.lock.Unlock()
 		return false
 	}
 
-	t.firstConnectedAt = at
+	t.peerConnectionFirstConnectedAt = at
 	prometheus.RecordServiceOperationSuccess("peer_connection")
 	prometheus.RecordPeerConnectionState(t.params.Transport, "connected")
 	t.lock.Unlock()
@@ -871,7 +881,7 @@ func (t *PCTransport) onPeerConnectionStateChange(state webrtc.PeerConnectionSta
 	switch state {
 	case webrtc.PeerConnectionStateConnected:
 		t.clearConnTimer()
-		isInitialConnection := t.setConnectedAt(time.Now())
+		isInitialConnection := t.setPeerConnectionConnectedAt(time.Now())
 		if isInitialConnection {
 			t.params.Handler.OnInitialConnected()
 
@@ -927,7 +937,7 @@ func (t *PCTransport) onDataChannel(dc *webrtc.DataChannel) {
 				if t.dataTrackDC != nil {
 					t.dataTrackDC.Close()
 				}
-				t.dataTrackDC = datachannel.NewDataChannelWriterUnreliable(dc, rawDC, 0, 0)
+				t.dataTrackDC = datachannel.NewDataChannelWriterUnreliable(dc, rawDC, t.params.DatachannelDataTrackTargetLatency, uint64(lossyDataChannelMinBufferedAmount))
 			}
 
 		case kind == livekit.DataPacket_RELIABLE:
@@ -999,7 +1009,7 @@ func (t *PCTransport) isFullyEstablished() bool {
 
 	dataChannelReady := t.params.UseOneShotSignallingMode || t.firstOfferNoDataChannel || (t.reliableDCOpened && t.lossyDCOpened)
 
-	return dataChannelReady && !t.connectedAt.IsZero()
+	return dataChannelReady && !t.peerConnectionLastconnectedAt.IsZero()
 }
 
 func (t *PCTransport) SetPreferTCP(preferTCP bool) {
@@ -1313,7 +1323,7 @@ func (t *PCTransport) CreateDataChannel(label string, dci *webrtc.DataChannelIni
 			case dcPtr == &t.lossyDC:
 				*dcPtr = datachannel.NewDataChannelWriterUnreliable(dc, rawDC, t.params.DatachannelLossyTargetLatency, uint64(lossyDataChannelMinBufferedAmount))
 			case dcPtr == &t.dataTrackDC:
-				*dcPtr = datachannel.NewDataChannelWriterUnreliable(dc, rawDC, 0, 0)
+				*dcPtr = datachannel.NewDataChannelWriterUnreliable(dc, rawDC, t.params.DatachannelDataTrackTargetLatency, uint64(lossyDataChannelMinBufferedAmount))
 			}
 			if dcReady != nil {
 				*dcReady = true
@@ -1446,18 +1456,25 @@ func (t *PCTransport) IsEstablished() bool {
 	return t.pc.ConnectionState() != webrtc.PeerConnectionStateNew
 }
 
-func (t *PCTransport) HasEverConnected() bool {
+func (t *PCTransport) ICEHasEverConnected() bool {
 	t.lock.RLock()
 	defer t.lock.RUnlock()
 
-	return !t.firstConnectedAt.IsZero()
+	return !t.iceFirstConnectedAt.IsZero()
 }
 
-func (t *PCTransport) FirstConnectedAt() time.Time {
+func (t *PCTransport) PeerConnectionHasEverConnected() bool {
 	t.lock.RLock()
 	defer t.lock.RUnlock()
 
-	return t.firstConnectedAt
+	return !t.peerConnectionFirstConnectedAt.IsZero()
+}
+
+func (t *PCTransport) PeerConnectionFirstConnectedAt() time.Time {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
+	return t.peerConnectionFirstConnectedAt
 }
 
 func (t *PCTransport) GetICEConnectionInfo() *types.ICEConnectionInfo {
@@ -1726,31 +1743,26 @@ func (t *PCTransport) GetAnswer() (webrtc.SessionDescription, uint32, error) {
 
 	cld := t.pc.CurrentLocalDescription()
 
-	// add local candidates to ICE connection details
-	parsed, err := cld.Unmarshal()
-	if err == nil {
-		addLocalICECandidates := func(attrs []sdp.Attribute) {
-			for _, a := range attrs {
-				if a.IsICECandidate() {
-					c, err := ice.UnmarshalCandidate(a.Value)
-					if err != nil {
-						continue
-					}
-					t.connectionDetails.AddLocalICECandidate(c, false, false)
-				}
-			}
-		}
+	preferTCP := t.preferTCP.Load()
+	if t.isCandidateFilterActive(preferTCP) {
+		t.params.Logger.Debugw("local answer (unfiltered)", "sdp", cld.SDP)
+	}
 
-		addLocalICECandidates(parsed.Attributes)
-		for _, m := range parsed.MediaDescriptions {
-			addLocalICECandidates(m.Attributes)
-		}
+	//
+	// Filter after setting local description as pion expects the answer
+	// to match between CreateAnswer and SetLocalDescription.
+	// Filtered answer is sent to remote so that remote does not
+	// see filtered candidates.
+	//
+	filteredAnswer := t.filterCandidates(*cld, preferTCP, true)
+	if t.isCandidateFilterActive(preferTCP) {
+		t.params.Logger.Debugw("local answer (filtered)", "sdp", filteredAnswer.SDP)
 	}
 
 	answerId := t.remoteOfferId.Load()
 	t.localAnswerId.Store(answerId)
 
-	return *cld, answerId, nil
+	return filteredAnswer, answerId, nil
 }
 
 func (t *PCTransport) GetICESessionUfrag() (string, error) {
@@ -1810,14 +1822,14 @@ func (t *PCTransport) HandleICETrickleSDPFragment(sdpFragment string) error {
 	fragmentICEUfrag, fragmentICEPwd, err := parsedFragment.ExtractICECredential()
 	if err != nil {
 		t.params.Logger.Warnw(
-			"could not get ICE crendential from fragment", err,
+			"could not get ICE credential from fragment", err,
 			"sdpFragment", sdpFragment,
 		)
 		return ErrInvalidSDPFragment
 	}
 	remoteICEUfrag, remoteICEPwd, err := lksdp.ExtractICECredential(parsedRemote)
 	if err != nil {
-		t.params.Logger.Warnw("could not get ICE crendential from remote description", err, "sdpFragment", sdpFragment, "remoteDescription", crd)
+		t.params.Logger.Warnw("could not get ICE credential from remote description", err, "sdpFragment", sdpFragment, "remoteDescription", crd)
 		return err
 	}
 	if fragmentICEUfrag != "" && fragmentICEUfrag != remoteICEUfrag {
@@ -1913,13 +1925,13 @@ func (t *PCTransport) HandleICERestartSDPFragment(sdpFragment string) (string, e
 		t.connectionDetails.AddRemoteICECandidate(c, false, false, false)
 	}
 
-	ans, err := t.pc.CreateAnswer(nil)
+	answer, err := t.pc.CreateAnswer(nil)
 	if err != nil {
 		t.params.Logger.Warnw("could not create answer", err)
 		return "", err
 	}
 
-	if err = t.pc.SetLocalDescription(ans); err != nil {
+	if err = t.pc.SetLocalDescription(answer); err != nil {
 		t.params.Logger.Warnw("could not set local description", err)
 		return "", err
 	}
@@ -1929,31 +1941,30 @@ func (t *PCTransport) HandleICERestartSDPFragment(sdpFragment string) (string, e
 
 	cld := t.pc.CurrentLocalDescription()
 
+	preferTCP := t.preferTCP.Load()
+	if t.isCandidateFilterActive(preferTCP) {
+		t.params.Logger.Debugw("local answer (unfiltered)", "sdp", cld.SDP)
+	}
+
+	//
+	// Filter after setting local description as pion expects the answer
+	// to match between CreateAnswer and SetLocalDescription.
+	// Filtered answer is sent to remote so that remote does not
+	// see filtered candidates.
+	//
+	filteredAnswer := t.filterCandidates(*cld, preferTCP, true)
+	if t.isCandidateFilterActive(preferTCP) {
+		t.params.Logger.Debugw("local answer (filtered)", "sdp", filteredAnswer.SDP)
+	}
+
 	// add local candidates to ICE connection details
-	parsedAnswer, err := cld.Unmarshal()
+	parsedFilteredAnswer, err := filteredAnswer.Unmarshal()
 	if err != nil {
 		t.params.Logger.Warnw("could not parse local description", err)
 		return "", err
 	}
 
-	addLocalICECandidates := func(attrs []sdp.Attribute) {
-		for _, a := range attrs {
-			if a.IsICECandidate() {
-				c, err := ice.UnmarshalCandidate(a.Value)
-				if err != nil {
-					continue
-				}
-				t.connectionDetails.AddLocalICECandidate(c, false, false)
-			}
-		}
-	}
-
-	addLocalICECandidates(parsedAnswer.Attributes)
-	for _, m := range parsedAnswer.MediaDescriptions {
-		addLocalICECandidates(m.Attributes)
-	}
-
-	parsedFragmentAnswer, err := lksdp.ExtractSDPFragment(parsedAnswer)
+	parsedFragmentAnswer, err := lksdp.ExtractSDPFragment(parsedFilteredAnswer)
 	if err != nil {
 		t.params.Logger.Warnw("could not extract SDP fragment", err)
 		return "", err
@@ -2416,8 +2427,14 @@ func (t *PCTransport) handleLocalICECandidate(e event) error {
 	filtered := false
 	if c != nil {
 		if t.preferTCP.Load() && c.Protocol != webrtc.ICEProtocolTCP {
-			t.params.Logger.Debugw("filtering out local candidate", "candidate", c.String())
+			t.params.Logger.Debugw("filtering out local candidate, TCP preferred", "candidate", c.String())
 			filtered = true
+		}
+		if !filtered && t.params.ExcludeIPv6LocalCandidates {
+			if IsIPv6(c.Address) {
+				t.params.Logger.Debugw("filtering out local candidate, IPv6 excluded", "candidate", c.String())
+				filtered = true
+			}
 		}
 		t.connectionDetails.AddLocalCandidate(c, filtered, true)
 	}
@@ -2483,6 +2500,10 @@ func (t *PCTransport) setNegotiationState(state transport.NegotiationState) {
 	}
 }
 
+func (t *PCTransport) isCandidateFilterActive(preferTCP bool) bool {
+	return preferTCP || t.params.ExcludeIPv6LocalCandidates
+}
+
 func (t *PCTransport) filterCandidates(sd webrtc.SessionDescription, preferTCP, isLocal bool) webrtc.SessionDescription {
 	parsed, err := sd.Unmarshal()
 	if err != nil {
@@ -2500,12 +2521,10 @@ func (t *PCTransport) filterCandidates(sd webrtc.SessionDescription, preferTCP, 
 					filteredAttrs = append(filteredAttrs, a)
 					continue
 				}
-				excluded := preferTCP && !c.NetworkType().IsTCP()
-				if !excluded {
-					if !t.params.Config.UseMDNS && types.IsICECandidateMDNS(c) {
-						excluded = true
-					}
-				}
+				excluded :=
+					(preferTCP && !c.NetworkType().IsTCP()) ||
+						(t.params.ExcludeIPv6LocalCandidates && isLocal && c.NetworkType().IsIPv6()) ||
+						(!t.params.Config.UseMDNS && types.IsICECandidateMDNS(c))
 				if !excluded {
 					filteredAttrs = append(filteredAttrs, a)
 				}
@@ -2648,7 +2667,7 @@ func (t *PCTransport) createAndSendOffer(options *webrtc.OfferOptions) error {
 	}
 
 	preferTCP := t.preferTCP.Load()
-	if preferTCP {
+	if t.isCandidateFilterActive(preferTCP) {
 		t.params.Logger.Debugw("local offer (unfiltered)", "sdp", offer.SDP)
 	}
 
@@ -2676,7 +2695,7 @@ func (t *PCTransport) createAndSendOffer(options *webrtc.OfferOptions) error {
 	// see filtered candidates.
 	//
 	offer = t.filterCandidates(offer, preferTCP, true)
-	if preferTCP {
+	if t.isCandidateFilterActive(preferTCP) {
 		t.params.Logger.Debugw("local offer (filtered)", "sdp", offer.SDP)
 	}
 
@@ -2742,11 +2761,11 @@ func (t *PCTransport) isRemoteOfferRestartICE(parsed *sdp.SessionDescription) (s
 func (t *PCTransport) setRemoteDescription(sd webrtc.SessionDescription) error {
 	// filter before setting remote description so that pion does not see filtered remote candidates
 	preferTCP := t.preferTCP.Load()
-	if preferTCP {
+	if t.isCandidateFilterActive(preferTCP) {
 		t.params.Logger.Debugw("remote description (unfiltered)", "type", sd.Type, "sdp", sd.SDP)
 	}
 	sd = t.filterCandidates(sd, preferTCP, false)
-	if preferTCP {
+	if t.isCandidateFilterActive(preferTCP) {
 		t.params.Logger.Debugw("remote description (filtered)", "type", sd.Type, "sdp", sd.SDP)
 	}
 
@@ -2806,7 +2825,7 @@ func (t *PCTransport) createAndSendAnswer() error {
 	}
 
 	preferTCP := t.preferTCP.Load()
-	if preferTCP {
+	if t.isCandidateFilterActive(preferTCP) {
 		t.params.Logger.Debugw("local answer (unfiltered)", "sdp", answer.SDP)
 	}
 
@@ -2822,7 +2841,7 @@ func (t *PCTransport) createAndSendAnswer() error {
 	// see filtered candidates.
 	//
 	answer = t.filterCandidates(answer, preferTCP, true)
-	if preferTCP {
+	if t.isCandidateFilterActive(preferTCP) {
 		t.params.Logger.Debugw("local answer (filtered)", "sdp", answer.SDP)
 	}
 
@@ -2957,7 +2976,7 @@ func (t *PCTransport) handleRemoteAnswerReceived(sd *webrtc.SessionDescription, 
 
 	if err := t.setRemoteDescription(*sd); err != nil {
 		// Pion will call RTPSender.Send method for each new added Downtrack, and return error if the DownTrack.Bind
-		// returns error. In case of Downtrack.Bind returns ErrUnsupportedCodec, the signal state will be stable as negotiation is aleady compelted
+		// returns error. In case of Downtrack.Bind returns ErrUnsupportedCodec, the signal state will be stable as negotiation is already completed
 		// before startRTPSenders, and the peerconnection state can be recovered by next negotiation which will be triggered
 		// by the SubscriptionManager unsubscribe the failure DownTrack. So don't treat this error as negotiation failure.
 		if !errors.Is(err, webrtc.ErrUnsupportedCodec) {
@@ -3188,7 +3207,7 @@ func offerAudioPayloadTypes(parsed *sdp.SessionDescription) map[mime.MimeType]we
 			if len(fields) < 2 {
 				continue
 			}
-			pt, err := strconv.Atoi(fields[0])
+			pt, err := strconv.ParseUint(fields[0], 10, 8)
 			if err != nil {
 				continue
 			}
@@ -3209,7 +3228,7 @@ func offerAudioPayloadTypes(parsed *sdp.SessionDescription) map[mime.MimeType]we
 	return out
 }
 
-// In single peer connection mode, set up enebled codecs for sender.
+// In single peer connection mode, set up enabled codecs for sender.
 // The config provides config of direction.
 // For publisher peer connection those are publish enabled codecs
 // and for subscriber peer connection those are subscribe enabled codecs.
