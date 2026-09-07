@@ -268,12 +268,14 @@ func TestTURNAuth_UnknownAPIKeyRejected(t *testing.T) {
 	require.Error(t, err, "unknown API key must be rejected")
 }
 
-// An already-expired credential cannot allocate. The password is computed
-// directly (CreatePassword refuses to mint a password for an expired credential).
+// An already-expired credential cannot allocate. The username is built directly
+// because CreateUsername floors non-positive TTLs to the default, and the password
+// is computed directly (CreatePassword refuses to mint one for an expired credential).
 func TestTURNAuth_ExpiredCredentialRejectedOnAllocate(t *testing.T) {
 	udpPort, h := startAuthTestTurnServer(t)
 
-	username, expiry := h.CreateUsername(turnTestAPIKey, turnTestPID, -3600) // expiry in the past
+	expiry := time.Now().Add(-time.Hour).Unix() // expiry in the past
+	username := base62.EncodeToString(fmt.Appendf(nil, "%s|%s|%d", turnTestAPIKey, turnTestPID, expiry))
 	password, err := h.computePassword(turnTestAPIKey, turnTestPID, expiry)
 	require.NoError(t, err)
 
