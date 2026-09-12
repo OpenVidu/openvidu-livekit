@@ -211,8 +211,8 @@ func NewLivekitServer(conf *config.Config,
 			logger.Errorw("could not remove dead nodes at first attempt", err)
 		}
 	})
-	// Gouroutine that every 3 minutes cleans up the Redis database from dead nodes and all associated entities
-	ticker := time.NewTicker(time.Minute * 3)
+	// Gouroutine that periodically cleans up the Redis database from dead nodes and all associated entities
+	ticker := time.NewTicker(s.config.OpenVidu.GetCleanupInterval())
 	go func(ticker *time.Ticker) {
 		for range ticker.C {
 			logger.Debugw("cleaning up dead nodes")

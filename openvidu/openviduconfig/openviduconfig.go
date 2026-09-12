@@ -18,9 +18,20 @@ import (
 	"time"
 )
 
+const DefaultCleanupInterval = 3 * time.Minute
+
 type OpenViduConfig struct {
 	Analytics              AnalyticsConfig `yaml:"analytics,omitempty"`
 	UseGlobalCpuMonitoring bool            `yaml:"use_global_cpu_monitoring,omitempty"`
+	// How often each node removes dead nodes and reconciles the entities they left behind
+	CleanupInterval time.Duration `yaml:"cleanup_interval,omitempty"`
+}
+
+func (c OpenViduConfig) GetCleanupInterval() time.Duration {
+	if c.CleanupInterval <= 0 {
+		return DefaultCleanupInterval
+	}
+	return c.CleanupInterval
 }
 
 type AnalyticsConfig struct {
