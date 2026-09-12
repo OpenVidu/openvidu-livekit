@@ -249,6 +249,13 @@ func (r *RoomManager) PublicDeleteRoom(ctx context.Context, roomName livekit.Roo
 	return r.deleteRoom(ctx, roomName)
 }
 
+// Stale Egresses and Ingresses. Off the caller's path: the startup cleanup
+// is synchronous and a pass may probe for minutes; passes do not overlap,
+// on this node or across nodes, because each one takes the same Redis lock.
+func (r *RoomManager) ReconcileEntities(ctx context.Context) {
+	go reconcileEntities(ctx, r.roomStore, r.egressLauncher, r.telemetry)
+}
+
 // END OPENVIDU BLOCK
 
 // deleteRoom completely deletes all room information, including active sessions, room store, and routing info

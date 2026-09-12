@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"time"
 
 	"github.com/twitchtv/twirp"
 
@@ -388,6 +389,25 @@ func (s *EgressService) StopEgress(ctx context.Context, req *livekit.StopEgressR
 		if loadErr != nil {
 			return nil, loadErr
 		}
+
+		// BEGIN OPENVIDU BLOCK
+		// Nothing answered for this egress: its handler died without reporting
+		// its end and the row would stay active forever. Ending it here makes
+		// the stop request the operator's way out.
+		if egressUnreachable(err) && !egressEnded(info) {
+			if updater, ok := s.io.(egressUpdater); ok {
+				update := func(ctx context.Context, info *livekit.EgressInfo) error {
+					_, err := updater.UpdateEgress(ctx, info)
+					return err
+				}
+				if lost, lostErr := markEgressLost(ctx, update, info, time.Now()); lostErr == nil {
+					logger.Warnw("egress lost: no handler answered the stop request, marked as failed", nil,
+						"egressID", req.EgressId)
+					return lost, nil
+				}
+			}
+		}
+		// END OPENVIDU BLOCK
 
 		switch info.Status {
 		case livekit.EgressStatus_EGRESS_STARTING,

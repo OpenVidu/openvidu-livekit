@@ -184,6 +184,8 @@ func (r *RedisRouter) RemoveDeadNodes(customCleanup CustomCleanup) error {
 			logger.Debugw("redis cleanup: node is alive", "node", n.Id)
 		}
 	}
+	// Stale Egresses and Ingress must be reconciled after their Rooms have been cleaned up
+	customCleanup.ReconcileEntities(context.Background())
 	return nil
 }
 

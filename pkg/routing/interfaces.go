@@ -150,6 +150,8 @@ type CustomCleanup interface {
 	LockRoom(ctx context.Context, roomName livekit.RoomName, timeout time.Duration) (string, error)
 	UnlockRoom(ctx context.Context, roomName livekit.RoomName, token string) error
 	PublicDeleteRoom(ctx context.Context, roomName livekit.RoomName) error
+	// Stale Egresses and Ingresses
+	ReconcileEntities(ctx context.Context)
 }
 
 // END OPENVIDU BLOCK
