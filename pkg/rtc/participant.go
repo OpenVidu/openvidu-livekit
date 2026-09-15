@@ -261,6 +261,10 @@ type ParticipantImpl struct {
 	state        atomic.Value // livekit.ParticipantInfo_State
 	disconnected chan struct{}
 
+	// a migrating in participant resumes on a reconnect response, the client takes it
+	// only as the first message on the resumed signal connection
+	reconnectResponseSent atomic.Bool
+
 	grants      atomic.Pointer[auth.ClaimGrants]
 	isPublisher atomic.Bool
 
@@ -612,9 +616,10 @@ func (p *ParticipantImpl) IsReady() bool {
 	state := p.State()
 
 	// when migrating, there is no JoinResponse, state transitions from JOINING -> ACTIVE -> DISCONNECTED
-	// so JOINING is considered ready.
+	// so JOINING is considered ready. The ReconnectResponse takes the place of the JoinResponse
+	// as the message the resumed signal connection opens with, so readiness waits for it.
 	if p.params.Migration {
-		return state != livekit.ParticipantInfo_DISCONNECTED
+		return state != livekit.ParticipantInfo_DISCONNECTED && p.reconnectResponseSent.Load()
 	}
 
 	// when not migrating, there is a JoinResponse, state transitions from JOINING -> JOINED -> ACTIVE -> DISCONNECTED
@@ -2071,8 +2076,9 @@ func (p *ParticipantImpl) setupSignalling() {
 		Participant: p,
 	})
 	p.signaller = signalling.NewSignallerAsync(signalling.SignallerAsyncParams{
-		Logger:      p.params.Logger,
-		Participant: p,
+		Logger:            p.params.Logger,
+		Participant:       p,
+		OnHandshakeOpened: p.flushQueuedUpdates,
 	})
 }
 
@@ -2390,6 +2396,7 @@ func (p *ParticipantImpl) onMediaTrack(rtcTrack *webrtc.TrackRemote, rtpReceiver
 			"ssrc", track.SSRC(),
 			"rtxSsrc", track.RtxSSRC(),
 			"mime", mime.NormalizeMimeType(codec.MimeType),
+			"isNewTrack", isNewTrack,
 			"isReceiverAdded", isReceiverAdded,
 			"sdpRids", logger.StringSlice(sdpRids[:]),
 		)
@@ -3297,7 +3304,6 @@ func (p *ParticipantImpl) mediaTrackReceived(
 	rtpReceiver *webrtc.RTPReceiver,
 ) (*MediaTrack, bool, bool, buffer.VideoLayersRid) {
 	p.pendingTracksLock.Lock()
-	newTrack := false
 
 	mid := p.TransportManager.GetPublisherMid(rtpReceiver)
 	p.pubLogger.Debugw(
@@ -3321,10 +3327,13 @@ func (p *ParticipantImpl) mediaTrackReceived(
 	}
 
 	// use existing media track to handle simulcast
-	var createdAt time.Time
-	var isMigrated bool
-	var ridsFromSdp buffer.VideoLayersRid
-	var pubTime time.Duration
+	var (
+		createdAt   time.Time
+		isNewTrack  bool
+		isMigrated  bool
+		ridsFromSdp buffer.VideoLayersRid
+		pubTime     time.Duration
+	)
 	mt, ok := p.getPublishedTrackBySdpCid(track.ID()).(*MediaTrack)
 	if !ok {
 		var (
@@ -3354,7 +3363,14 @@ func (p *ParticipantImpl) mediaTrackReceived(
 				}
 			}
 			if codecFound != len(ti.Codecs) {
-				p.pubLogger.Warnw("migrated track codec mismatched", nil, "track", logger.Proto(ti), "webrtcCodec", parameters)
+				p.pubLogger.Warnw(
+					"migrated track codec mismatched", nil,
+					"trackID", ti.Sid,
+					"track", logger.Proto(ti),
+					"webrtcCodec", parameters,
+					"codecFound", codecFound,
+					"codecCount", len(ti.Codecs),
+				)
 				p.pendingTracksLock.Unlock()
 				p.IssueFullReconnect(types.ParticipantCloseReasonMigrateCodecMismatch)
 				return nil, false, false, ridsFromSdp
@@ -3378,7 +3394,7 @@ func (p *ParticipantImpl) mediaTrackReceived(
 		}
 
 		mt = p.addMediaTrack(signalCid, ti)
-		newTrack = true
+		isNewTrack = true
 	}
 
 	// a track might have been set up in migrate-in path and won't show up as a new track here,
@@ -3390,12 +3406,12 @@ func (p *ParticipantImpl) mediaTrackReceived(
 			}
 		}
 	}
-	if !newTrack {
-		newTrack = !mt.Published()
+	if !isNewTrack {
+		isNewTrack = !mt.Published()
 	}
 	mt.SetPublished(true)
 
-	if newTrack {
+	if isNewTrack {
 		// if the addTrackRequest is sent before publisher peer connection is established, then it means the client tries to publish
 		// before fully connected, in this case we only record the time when publisher peer connection is established since
 		// we want this metric to represent the time cost by publishing.
@@ -3409,7 +3425,7 @@ func (p *ParticipantImpl) mediaTrackReceived(
 
 	_, isReceiverAdded := mt.AddReceiver(rtpReceiver, track, mid)
 
-	if newTrack {
+	if isNewTrack {
 		go func() {
 			// TODO: remove this after we know where the high delay is coming from
 			if pubTime > 3*time.Second {
@@ -3440,11 +3456,12 @@ func (p *ParticipantImpl) mediaTrackReceived(
 				p.GetClientInfo().GetSdk(),
 				p.Kind(),
 			)
+
 			p.handleTrackPublished(mt, isMigrated, false)
 		}()
 	}
 
-	return mt, newTrack, isReceiverAdded, ridsFromSdp
+	return mt, isNewTrack, isReceiverAdded, ridsFromSdp
 }
 
 func (p *ParticipantImpl) addMigratedTrack(cid string, ti *livekit.TrackInfo) *MediaTrack {
@@ -3457,6 +3474,31 @@ func (p *ParticipantImpl) addMigratedTrack(cid string, ti *livekit.TrackInfo) *M
 			"mid", ti.Mid,
 		)
 		return nil
+	}
+
+	// check if the migrated track has correct codec
+	if len(ti.Codecs) > 0 {
+		parameters := rtpReceiver.GetParameters()
+		var codecFound int
+		for _, c := range ti.Codecs {
+			for _, nc := range parameters.Codecs {
+				if mime.IsMimeTypeStringEqual(nc.MimeType, c.MimeType) {
+					codecFound++
+					break
+				}
+			}
+		}
+		if codecFound != len(ti.Codecs) {
+			p.pubLogger.Warnw(
+				"migrated track codec mismatched", nil,
+				"trackID", ti.Sid,
+				"track", logger.Proto(ti),
+				"webrtcCodec", parameters,
+				"codecFound", codecFound,
+				"codecCount", len(ti.Codecs),
+			)
+			return nil
+		}
 	}
 
 	mt := p.addMediaTrack(cid, ti)
