@@ -58,6 +58,7 @@ func (noopCleanup) LockRoom(context.Context, livekit.RoomName, time.Duration) (s
 }
 func (noopCleanup) UnlockRoom(context.Context, livekit.RoomName, string) error { return nil }
 func (noopCleanup) PublicDeleteRoom(context.Context, livekit.RoomName) error   { return nil }
+func (noopCleanup) ReconcileEntities(context.Context)                          {}
 
 func TestRemoveDeadNodesThreshold(t *testing.T) {
 	mr := miniredis.RunT(t)
