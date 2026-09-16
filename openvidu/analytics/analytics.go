@@ -17,6 +17,7 @@ package analytics
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"sync"
 	"time"
@@ -187,6 +188,22 @@ func sendBatch() {
 	}
 }
 
+// activeEntitiesFixerRedisErrorPause is how long the fixer waits before trying again when Redis itself
+// fails, so that a Redis outage does not turn the lock loop into a busy loop.
+const activeEntitiesFixerRedisErrorPause = 5 * time.Second
+
+// pauseFixerOnRedisError sleeps after a lock attempt that failed for a reason other than the lock being
+// held by another node. ErrNotObtained is the normal outcome of that race and needs no pause, because
+// Obtain has already waited for the lock TTL with its retry backoff.
+func pauseFixerOnRedisError(lockName string, err error) {
+	if errors.Is(err, redislock.ErrNotObtained) {
+		return
+	}
+	logger.Warnw("could not obtain the "+lockName+" lock, pausing the active entities fixer", err,
+		"pause", activeEntitiesFixerRedisErrorPause)
+	time.Sleep(activeEntitiesFixerRedisErrorPause)
+}
+
 func startActiveEntitiesFixer() {
 	for {
 		func() {
@@ -197,6 +214,7 @@ func startActiveEntitiesFixer() {
 					RetryStrategy: backoff,
 				})
 				if err != nil {
+					pauseFixerOnRedisError("active-entities-lock", err)
 					return
 				}
 
@@ -213,6 +231,7 @@ func startActiveEntitiesFixer() {
 					RetryStrategy: backoff,
 				})
 				if err != nil {
+					pauseFixerOnRedisError(dbLockName, err)
 					return
 				}
 

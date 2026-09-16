@@ -104,7 +104,7 @@ func TestAnySelector_SelectNode_TwoChoice(t *testing.T) {
 					Id:    "node1",
 					State: livekit.NodeState_SERVING,
 					Stats: &livekit.NodeStats{
-						UpdatedAt: time.Now().Unix() - 10, // Too old
+						UpdatedAt: time.Now().Unix() - AvailableSeconds - 1, // Too old (OPENVIDU: follows the fork's AvailableSeconds)
 						CpuLoad:   0.3,
 					},
 				},
