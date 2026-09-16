@@ -58,6 +58,12 @@ type RedisRouter struct {
 	isStarted atomic.Bool
 
 	cancel func()
+
+	// BEGIN OPENVIDU BLOCK
+	// localLag is how late the last stats timer fired, measured before touching Redis. A stalled Redis
+	// cannot inflate it, so it tells a starved node apart from a slow Redis when a keepalive arrives late.
+	localLag atomic.Int64
+	// END OPENVIDU BLOCK
 }
 
 func NewRedisRouter(lr *LocalRouter, rc redis.UniversalClient, kps rpc.KeepalivePubSub) *RedisRouter {
@@ -319,9 +325,16 @@ func (r *RedisRouter) Stop() {
 func (r *RedisRouter) statsWorker() {
 	goroutineDumped := false
 	for r.ctx.Err() == nil {
+		// BEGIN OPENVIDU BLOCK
+		armed := time.Now()
+		// END OPENVIDU BLOCK
 		// update periodically
 		select {
 		case <-time.After(r.nodeStatsConfig.StatsUpdateInterval):
+			// BEGIN OPENVIDU BLOCK
+			// Local scheduling lag, measured before touching Redis so a stalled Redis cannot inflate it.
+			r.localLag.Store(int64(time.Since(armed) - r.nodeStatsConfig.StatsUpdateInterval))
+			// END OPENVIDU BLOCK
 			r.kps.PublishPing(r.ctx, r.currentNode.NodeID(), &rpc.KeepalivePing{Timestamp: time.Now().Unix()})
 
 			delaySeconds := r.currentNode.SecondsSinceNodeStatsUpdate()
@@ -352,10 +365,16 @@ func (r *RedisRouter) keepaliveWorker(startedChan chan error) {
 	close(startedChan)
 
 	for ping := range pings.Channel() {
-		if time.Since(time.Unix(ping.Timestamp, 0)) > r.nodeStatsConfig.StatsUpdateInterval {
-			logger.Infow("keep alive too old, skipping", "timestamp", ping.Timestamp)
+		// BEGIN OPENVIDU BLOCK
+		age := time.Since(time.Unix(ping.Timestamp, 0))
+		switch classifyKeepalivePing(age, time.Duration(r.localLag.Load()), r.nodeStatsConfig.StatsUpdateInterval) {
+		case keepaliveLateNode:
+			logger.Infow("keep alive too old and node is lagging, skipping", "timestamp", ping.Timestamp, "age", age)
 			continue
+		case keepaliveLateRedis:
+			logger.Infow("keep alive arrived late, redis delay, refreshing anyway", "timestamp", ping.Timestamp, "age", age)
 		}
+		// END OPENVIDU BLOCK
 
 		if !r.currentNode.UpdateNodeStats() {
 			continue
@@ -367,3 +386,31 @@ func (r *RedisRouter) keepaliveWorker(startedChan chan error) {
 		}
 	}
 }
+
+// BEGIN OPENVIDU BLOCK
+type keepaliveVerdict int
+
+const (
+	// keepaliveOnTime: the ping is not older than the stats interval.
+	keepaliveOnTime keepaliveVerdict = iota
+	// keepaliveLateRedis: the ping is old but this node's own timer fired on time, so the delay happened
+	// between the PUBLISH and its delivery, that is, in Redis. The node is healthy and must stay registered.
+	keepaliveLateRedis
+	// keepaliveLateNode: the ping is old and this node's own timer also fired late. The node is starved
+	// and must not advertise itself as available.
+	keepaliveLateNode
+)
+
+// classifyKeepalivePing decides what to do with a ping this node sent to itself. age is how old the
+// ping is on arrival, localLag how late the last stats timer fired and interval the stats interval.
+func classifyKeepalivePing(age, localLag, interval time.Duration) keepaliveVerdict {
+	if age <= interval {
+		return keepaliveOnTime
+	}
+	if localLag > interval/2 {
+		return keepaliveLateNode
+	}
+	return keepaliveLateRedis
+}
+
+// END OPENVIDU BLOCK

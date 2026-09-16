@@ -17,11 +17,13 @@ package service
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/bsm/redislock"
 	goversion "github.com/hashicorp/go-version"
 	"github.com/pkg/errors"
 	"github.com/redis/go-redis/v9"
@@ -68,6 +70,19 @@ const (
 	maxRetries = 5
 )
 
+// BEGIN OPENVIDU BLOCK
+const (
+	// endedEgressCleanupInterval is how often each node runs the cleanup that removes ended egress
+	// entries older than 24 hours.
+	endedEgressCleanupInterval = 30 * time.Minute
+	// endedEgressCleanupLockKey is held by the one node that runs the cleanup in a cycle.
+	endedEgressCleanupLockKey = "ended-egress-cleanup-lock"
+	// egressScanCount is the COUNT hint passed to HSCAN when walking the egress hashes.
+	egressScanCount = 500
+)
+
+// END OPENVIDU BLOCK
+
 var _ OSSServiceStore = (*RedisStore)(nil)
 
 type RedisStore struct {
@@ -75,6 +90,10 @@ type RedisStore struct {
 	unlockScript *redis.Script
 	ctx          context.Context
 	done         chan struct{}
+
+	// BEGIN OPENVIDU BLOCK
+	locker *redislock.Client
+	// END OPENVIDU BLOCK
 }
 
 func NewRedisStore(rc redis.UniversalClient) *RedisStore {
@@ -87,6 +106,9 @@ func NewRedisStore(rc redis.UniversalClient) *RedisStore {
 		ctx:          context.Background(),
 		rc:           rc,
 		unlockScript: redis.NewScript(unlockScript),
+		// BEGIN OPENVIDU BLOCK
+		locker: redislock.New(rc),
+		// END OPENVIDU BLOCK
 	}
 }
 
@@ -396,26 +418,45 @@ func (s *RedisStore) ListEgress(_ context.Context, roomName livekit.RoomName, ac
 	var infos []*livekit.EgressInfo
 
 	if roomName == "" {
-		data, err := s.rc.HGetAll(s.ctx, EgressKey).Result()
-		if err != nil {
-			if err == redis.Nil {
-				return nil, nil
-			}
-			return nil, err
-		}
-
-		for _, d := range data {
-			info := &livekit.EgressInfo{}
-			err = proto.Unmarshal([]byte(d), info)
+		// BEGIN OPENVIDU BLOCK
+		// Walk the hash with HSCAN instead of a single HGETALL: with hundreds of thousands of entries one
+		// HGETALL keeps the Redis main thread busy for hundreds of milliseconds and stalls every other client.
+		seen := make(map[string]struct{})
+		var cursor uint64
+		for {
+			kv, next, err := s.rc.HScan(s.ctx, EgressKey, cursor, "", egressScanCount).Result()
 			if err != nil {
+				if err == redis.Nil {
+					return nil, nil
+				}
 				return nil, err
 			}
 
-			// if active, filter status starting, active, and ending
-			if !active || int32(info.Status) < int32(livekit.EgressStatus_EGRESS_COMPLETE) {
-				infos = append(infos, info)
+			for i := 0; i+1 < len(kv); i += 2 {
+				// HSCAN may return an element more than once if the hash is resized during the walk
+				if _, dup := seen[kv[i]]; dup {
+					continue
+				}
+				seen[kv[i]] = struct{}{}
+
+				info := &livekit.EgressInfo{}
+				err = proto.Unmarshal([]byte(kv[i+1]), info)
+				if err != nil {
+					return nil, err
+				}
+
+				// if active, filter status starting, active, and ending
+				if !active || int32(info.Status) < int32(livekit.EgressStatus_EGRESS_COMPLETE) {
+					infos = append(infos, info)
+				}
 			}
+
+			if next == 0 {
+				break
+			}
+			cursor = next
 		}
+		// END OPENVIDU BLOCK
 	} else {
 		egressIDs, err := s.rc.SMembers(s.ctx, RoomEgressPrefix+string(roomName)).Result()
 		if err != nil {
@@ -468,51 +509,116 @@ func (s *RedisStore) UpdateEgress(_ context.Context, info *livekit.EgressInfo) e
 	return nil
 }
 
-// Deletes egress info 24h after the egress has ended
+// BEGIN OPENVIDU BLOCK
+// Deletes egress info 24h after the egress has ended.
+//
+// The cleanup is spread out so that a fleet of nodes started in the same minute does not hit Redis at
+// once: the first run happens at a random point of the first interval, later runs add a jitter of one
+// sixth of the interval, and a Redis lock lets a single node do the work in each cycle.
 func (s *RedisStore) egressWorker() {
-	ticker := time.NewTicker(time.Minute * 30)
-	defer ticker.Stop()
+	interval := endedEgressCleanupInterval
+	timer := time.NewTimer(rand.N(interval))
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-s.done:
 			return
-		case <-ticker.C:
-			err := s.CleanEndedEgress()
-			if err != nil {
-				logger.Errorw("could not clean egress info", err)
-			}
+		case <-timer.C:
+			s.CleanEndedEgressIfLeader()
+			jitter := interval / 6
+			timer.Reset(interval - jitter + rand.N(2*jitter))
 		}
 	}
 }
 
-func (s *RedisStore) CleanEndedEgress() error {
-	values, err := s.rc.HGetAll(s.ctx, EndedEgressKey).Result()
-	if err != nil && err != redis.Nil {
-		return err
+// endedEgressCleanupLockTTL is how long the cleaning node keeps the lock, so that the other nodes skip
+// their own timer in this cycle. It is shorter than the interval so the lock is free again when the
+// next timers fire, even if the node that cleaned died while holding it.
+func (s *RedisStore) endedEgressCleanupLockTTL() time.Duration {
+	return endedEgressCleanupInterval - endedEgressCleanupInterval*15/100
+}
+
+// CleanEndedEgressIfLeader runs CleanEndedEgress unless another node already cleaned in the current
+// cycle. The lock is not released on purpose: it expires on its own shortly before the next cycle.
+// It returns whether this node did the cleanup.
+func (s *RedisStore) CleanEndedEgressIfLeader() bool {
+	_, err := s.locker.Obtain(s.ctx, endedEgressCleanupLockKey, s.endedEgressCleanupLockTTL(), &redislock.Options{
+		RetryStrategy: redislock.NoRetry(),
+	})
+	if err != nil {
+		if errors.Is(err, redislock.ErrNotObtained) {
+			logger.Debugw("ended egress cleanup skipped, another node cleaned this cycle")
+		} else {
+			logger.Warnw("could not obtain ended egress cleanup lock", err)
+		}
+		return false
 	}
 
+	if err := s.CleanEndedEgress(); err != nil {
+		logger.Errorw("could not clean egress info", err)
+	}
+	return true
+}
+
+// CleanEndedEgress walks ended_egress with HSCAN and removes, chunk by chunk, the egresses that ended
+// more than 24 hours ago together with their egress info and room membership. A malformed entry or a
+// failed chunk is remembered and reported at the end; it does not stop the cleanup.
+func (s *RedisStore) CleanEndedEgress() error {
 	expiry := time.Now().Add(-24 * time.Hour).UnixNano()
-	for egressID, val := range values {
-		roomName, endedAt, err := parseEgressEnded(val)
+
+	var (
+		cursor   uint64
+		firstErr error
+		scanned  int
+		deleted  int
+	)
+	for {
+		kv, next, err := s.rc.HScan(s.ctx, EndedEgressKey, cursor, "", egressScanCount).Result()
 		if err != nil {
 			return err
 		}
 
-		if endedAt < expiry {
-			pp := s.rc.Pipeline()
-			pp.SRem(s.ctx, RoomEgressPrefix+roomName, egressID)
-			pp.HDel(s.ctx, EgressKey, egressID)
-			// Delete the EndedEgressKey entry last so that future sweeper runs get another chance to delete dangling data is the deletion partially failed.
-			pp.HDel(s.ctx, EndedEgressKey, egressID)
-			if _, err := pp.Exec(s.ctx); err != nil {
-				return err
+		pp := s.rc.Pipeline()
+		pending := 0
+		for i := 0; i+1 < len(kv); i += 2 {
+			scanned++
+			egressID, val := kv[i], kv[i+1]
+			roomName, endedAt, err := parseEgressEnded(val)
+			if err != nil {
+				if firstErr == nil {
+					firstErr = errors.Wrapf(err, "egress %s", egressID)
+				}
+				continue
+			}
+
+			if endedAt < expiry {
+				pp.SRem(s.ctx, RoomEgressPrefix+roomName, egressID)
+				pp.HDel(s.ctx, EgressKey, egressID)
+				// Delete the EndedEgressKey entry last so that future cleanup runs get another chance to delete dangling data if the deletion partially failed.
+				pp.HDel(s.ctx, EndedEgressKey, egressID)
+				pending++
 			}
 		}
-	}
+		if pending > 0 {
+			if _, err := pp.Exec(s.ctx); err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+			} else {
+				deleted += pending
+			}
+		}
 
-	return nil
+		if next == 0 {
+			logger.Infow("ended egress cleanup finished", "scanned", scanned, "deleted", deleted)
+			return firstErr
+		}
+		cursor = next
+	}
 }
+
+// END OPENVIDU BLOCK
 
 func egressEndedValue(roomName string, endedAt int64) string {
 	return fmt.Sprintf("%s|%d", roomName, endedAt)

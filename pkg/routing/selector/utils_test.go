@@ -26,6 +26,10 @@ import (
 )
 
 func TestIsAvailable(t *testing.T) {
+	t.Run("no stats yet", func(t *testing.T) {
+		require.True(t, selector.IsAvailable(&livekit.Node{}))
+	})
+
 	t.Run("still available", func(t *testing.T) {
 		n := &livekit.Node{
 			Stats: &livekit.NodeStats{
@@ -38,7 +42,7 @@ func TestIsAvailable(t *testing.T) {
 	t.Run("expired", func(t *testing.T) {
 		n := &livekit.Node{
 			Stats: &livekit.NodeStats{
-				UpdatedAt: time.Now().Unix() - 20,
+				UpdatedAt: time.Now().Unix() - selector.AvailableSeconds - 1,
 			},
 		}
 		require.False(t, selector.IsAvailable(n))

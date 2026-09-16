@@ -204,8 +204,8 @@ func NewLivekitServer(conf *config.Config,
 	}
 
 	// BEGIN OPENVIDU BLOCK
-	// Clean dead nodes after the AvailableSeconds time has elapsed
-	// This ensures that a restarted node will always autoclean itself
+	// Clean dead nodes once AvailableSeconds have elapsed since start
+	// This ensures that a restarted node will always autoclean its previous incarnation
 	time.AfterFunc(time.Second*(selector.AvailableSeconds+1), func() {
 		if err = router.RemoveDeadNodes(roomManager); err != nil {
 			logger.Errorw("could not remove dead nodes at first attempt", err)

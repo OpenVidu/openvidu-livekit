@@ -680,6 +680,10 @@ func NewConfig(confString string, strictMode bool, c *cli.Command, baseFlags []c
 		}
 	}
 
+	// BEGIN OPENVIDU BLOCK
+	conf.applySentinelRedisTimeoutDefaults()
+	// END OPENVIDU BLOCK
+
 	if err := conf.RTC.Validate(conf.Development); err != nil {
 		return nil, fmt.Errorf("could not validate RTC config: %v", err)
 	}
@@ -736,6 +740,38 @@ func NewConfig(confString string, strictMode bool, c *cli.Command, baseFlags []c
 
 	return &conf, nil
 }
+
+// BEGIN OPENVIDU BLOCK
+// Default Redis client timeouts (in milliseconds) applied in Sentinel mode when the configuration
+// leaves them at zero. livekit/protocol otherwise falls back to 200 ms for the read and write
+// timeouts there, which turns a few hundred milliseconds of Redis latency into failed node heartbeats
+// and false dead-node detections. These values reproduce the go-redis defaults that already apply in
+// the cluster and single-node modes (where the protocol does not pass the timeouts at all), so Redis
+// behaves the same regardless of topology.
+const (
+	sentinelRedisDefaultDialTimeoutMs  = 5000
+	sentinelRedisDefaultReadTimeoutMs  = 3000
+	sentinelRedisDefaultWriteTimeoutMs = 3000
+)
+
+// applySentinelRedisTimeoutDefaults fills the Redis client timeouts that are zero in Sentinel mode.
+// Values set explicitly in the configuration are kept.
+func (conf *Config) applySentinelRedisTimeoutDefaults() {
+	if len(conf.Redis.SentinelAddresses) == 0 {
+		return
+	}
+	if conf.Redis.DialTimeout == 0 {
+		conf.Redis.DialTimeout = sentinelRedisDefaultDialTimeoutMs
+	}
+	if conf.Redis.ReadTimeout == 0 {
+		conf.Redis.ReadTimeout = sentinelRedisDefaultReadTimeoutMs
+	}
+	if conf.Redis.WriteTimeout == 0 {
+		conf.Redis.WriteTimeout = sentinelRedisDefaultWriteTimeoutMs
+	}
+}
+
+// END OPENVIDU BLOCK
 
 func (conf *Config) IsTURNSEnabled() bool {
 	if conf.TURN.Enabled && conf.TURN.TLSPort != 0 {
