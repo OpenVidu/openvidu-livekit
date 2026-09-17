@@ -77,8 +77,8 @@ const (
 	endedEgressCleanupInterval = 30 * time.Minute
 	// endedEgressCleanupLockKey is held by the one node that runs the cleanup in a cycle.
 	endedEgressCleanupLockKey = "ended-egress-cleanup-lock"
-	// egressScanCount is the COUNT hint passed to HSCAN when walking the egress hashes.
-	egressScanCount = 500
+	// hashScanCount is the COUNT hint passed to HSCAN when walking the egress and ingress hashes.
+	hashScanCount = 500
 )
 
 // END OPENVIDU BLOCK
@@ -424,7 +424,7 @@ func (s *RedisStore) ListEgress(_ context.Context, roomName livekit.RoomName, ac
 		seen := make(map[string]struct{})
 		var cursor uint64
 		for {
-			kv, next, err := s.rc.HScan(s.ctx, EgressKey, cursor, "", egressScanCount).Result()
+			kv, next, err := s.rc.HScan(s.ctx, EgressKey, cursor, "", hashScanCount).Result()
 			if err != nil {
 				if err == redis.Nil {
 					return nil, nil
@@ -574,7 +574,7 @@ func (s *RedisStore) CleanEndedEgress() error {
 		deleted  int
 	)
 	for {
-		kv, next, err := s.rc.HScan(s.ctx, EndedEgressKey, cursor, "", egressScanCount).Result()
+		kv, next, err := s.rc.HScan(s.ctx, EndedEgressKey, cursor, "", hashScanCount).Result()
 		if err != nil {
 			return err
 		}
@@ -835,6 +835,44 @@ func (s *RedisStore) loadIngressState(c redis.Cmdable, ingressId string) (*livek
 	}
 }
 
+// BEGIN OPENVIDU BLOCK
+// loadIngressStates attaches to each ingress the state stored for it, reading them all in one
+// pipeline. An ingress without a stored state keeps a nil State, as loadIngressState reports with
+// ErrIngressNotFound.
+func (s *RedisStore) loadIngressStates(infos []*livekit.IngressInfo) error {
+	if len(infos) == 0 {
+		return nil
+	}
+	pp := s.rc.Pipeline()
+	cmds := make([]*redis.StringCmd, len(infos))
+	for i, info := range infos {
+		cmds[i] = pp.Get(s.ctx, IngressStatePrefix+info.IngressId)
+	}
+	// Exec reports the first command that failed, and a missing state counts as one, so every
+	// command is checked on its own below.
+	if _, err := pp.Exec(s.ctx); err != nil && err != redis.Nil {
+		return err
+	}
+	for i, cmd := range cmds {
+		data, err := cmd.Result()
+		switch err {
+		case nil:
+			state := &livekit.IngressState{}
+			if err = proto.Unmarshal([]byte(data), state); err != nil {
+				return err
+			}
+			infos[i].State = state
+		case redis.Nil:
+			// No state for this ingress
+		default:
+			return err
+		}
+	}
+	return nil
+}
+
+// END OPENVIDU BLOCK
+
 func (s *RedisStore) LoadIngress(_ context.Context, ingressId string) (*livekit.IngressInfo, error) {
 	info, err := s.loadIngress(s.rc, ingressId)
 	if err != nil {
@@ -871,32 +909,46 @@ func (s *RedisStore) ListIngress(_ context.Context, roomName livekit.RoomName) (
 	var infos []*livekit.IngressInfo
 
 	if roomName == "" {
-		data, err := s.rc.HGetAll(s.ctx, IngressKey).Result()
-		if err != nil {
-			if err == redis.Nil {
-				return nil, nil
-			}
-			return nil, err
-		}
-
-		for _, d := range data {
-			info := &livekit.IngressInfo{}
-			err = proto.Unmarshal([]byte(d), info)
+		// BEGIN OPENVIDU BLOCK
+		// Walk the hash with HSCAN instead of a single HGETALL: an ingress is only removed on request, so
+		// this hash grows with every ingress ever created, and one HGETALL over it keeps the Redis main
+		// thread busy for every other client. The states of each chunk are read in one pipeline.
+		seen := make(map[string]struct{})
+		var cursor uint64
+		for {
+			kv, next, err := s.rc.HScan(s.ctx, IngressKey, cursor, "", hashScanCount).Result()
 			if err != nil {
-				return nil, err
-			}
-			state, err := s.loadIngressState(s.rc, info.IngressId)
-			switch err {
-			case nil:
-				info.State = state
-			case ErrIngressNotFound:
-				// No state for this ingress
-			default:
+				if err == redis.Nil {
+					return nil, nil
+				}
 				return nil, err
 			}
 
-			infos = append(infos, info)
+			chunk := make([]*livekit.IngressInfo, 0, len(kv)/2)
+			for i := 0; i+1 < len(kv); i += 2 {
+				// HSCAN may return an element more than once if the hash is resized during the walk
+				if _, dup := seen[kv[i]]; dup {
+					continue
+				}
+				seen[kv[i]] = struct{}{}
+
+				info := &livekit.IngressInfo{}
+				if err = proto.Unmarshal([]byte(kv[i+1]), info); err != nil {
+					return nil, err
+				}
+				chunk = append(chunk, info)
+			}
+			if err = s.loadIngressStates(chunk); err != nil {
+				return nil, err
+			}
+			infos = append(infos, chunk...)
+
+			if next == 0 {
+				break
+			}
+			cursor = next
 		}
+		// END OPENVIDU BLOCK
 	} else {
 		ingressIDs, err := s.rc.SMembers(s.ctx, RoomIngressPrefix+string(roomName)).Result()
 		if err != nil {
