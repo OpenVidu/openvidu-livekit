@@ -45,8 +45,10 @@ func sharedRedisClients(t testing.TB, n int) []*redis.Client {
 
 // seedEndedEgress stores egresses the way UpdateEgress leaves them once they end: egress info, ended
 // marker and room membership. The first `expired` ones ended 25 hours ago, the rest one hour ago.
-func seedEndedEgress(t testing.TB, rc *redis.Client, prefix string, expired, fresh int) {
+// It returns what it stored, by egress id.
+func seedEndedEgress(t testing.TB, rc *redis.Client, prefix string, expired, fresh int) map[string]*livekit.EgressInfo {
 	ctx := context.Background()
+	stored := make(map[string]*livekit.EgressInfo, expired+fresh)
 	pp := rc.Pipeline()
 	for i := 0; i < expired+fresh; i++ {
 		egressID := fmt.Sprintf("%s-EG_%d", prefix, i)
@@ -66,9 +68,26 @@ func seedEndedEgress(t testing.TB, rc *redis.Client, prefix string, expired, fre
 		pp.HSet(ctx, service.EgressKey, egressID, data)
 		pp.HSet(ctx, service.EndedEgressKey, egressID, fmt.Sprintf("%s|%d", roomName, endedAt))
 		pp.SAdd(ctx, service.RoomEgressPrefix+roomName, egressID)
+		stored[egressID] = info
 	}
 	_, err := pp.Exec(ctx)
 	require.NoError(t, err)
+	return stored
+}
+
+// requireSameEgresses checks that a listing holds exactly the expected egresses: every one of them
+// once, none that was not expected, and each equal field by field to what was stored under its id.
+func requireSameEgresses(t testing.TB, expected map[string]*livekit.EgressInfo, listed []*livekit.EgressInfo) {
+	require.Len(t, listed, len(expected))
+	seen := make(map[string]struct{}, len(listed))
+	for _, got := range listed {
+		want, ok := expected[got.EgressId]
+		require.True(t, ok, "egress %s was never stored", got.EgressId)
+		_, dup := seen[got.EgressId]
+		require.False(t, dup, "egress %s listed twice", got.EgressId)
+		seen[got.EgressId] = struct{}{}
+		require.True(t, proto.Equal(want, got), "egress %s came back as %v, stored %v", got.EgressId, got, want)
+	}
 }
 
 func TestCleanEndedEgressInChunks(t *testing.T) {
@@ -142,21 +161,22 @@ func TestListEgressWithoutRoomScansTheHash(t *testing.T) {
 	rs := service.NewRedisStore(rc)
 	ctx := context.Background()
 
-	// more complete egresses than a single HSCAN chunk, plus one active egress
-	seedEndedEgress(t, rc, "list", 0, 1200)
+	// more complete egresses than two HSCAN chunks, plus one active egress
+	expected := seedEndedEgress(t, rc, "list", 0, 1200)
 	active := &livekit.EgressInfo{
 		EgressId: "list-active",
 		RoomName: "list-room-active",
 		Status:   livekit.EgressStatus_EGRESS_ACTIVE,
 	}
 	require.NoError(t, rs.StoreEgress(ctx, active))
+	expected[active.EgressId] = active
 
+	// every stored egress comes back, once, exactly as stored
 	all, err := rs.ListEgress(ctx, "", false)
 	require.NoError(t, err)
-	require.Len(t, all, 1201)
+	requireSameEgresses(t, expected, all)
 
 	activeOnly, err := rs.ListEgress(ctx, "", true)
 	require.NoError(t, err)
-	require.Len(t, activeOnly, 1)
-	require.Equal(t, "list-active", activeOnly[0].EgressId)
+	requireSameEgresses(t, map[string]*livekit.EgressInfo{active.EgressId: active}, activeOnly)
 }
