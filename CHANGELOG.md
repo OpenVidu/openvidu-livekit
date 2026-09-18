@@ -2,13 +2,6 @@
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Fixed
-
-- Tolerate a slow Redis: healthy media nodes are no longer declared dead when Redis answers late, and the Redis client timeouts in Sentinel mode are no longer 200 ms (OpenVidu/openvidu-livekit#13)
-- Listing egresses and ingresses and cleaning up ended egresses no longer block Redis: the hashes are scanned in chunks instead of read in one go, and the cleanup runs on a single node per cycle (OpenVidu/openvidu-livekit#13, OpenVidu/openvidu-livekit#14)
-
 ## [1.13.7] - 2026-09-14
 
 ### Added
