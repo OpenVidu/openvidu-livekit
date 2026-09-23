@@ -91,7 +91,13 @@ const (
 	// allocations a single participant credential may hold on the embedded TURN
 	// server. It prevents one authenticated participant from exhausting the
 	// shared relay-port range for everyone else. A value <= 0 disables the quota.
-	DefaultTURNPerUserRelayAllocationLimit = 12
+	// BEGIN OPENVIDU BLOCK
+	// A client holds one allocation per peer connection, TURN URL and local network
+	// interface, and an allocation left behind by a network change counts until its
+	// lifetime expires (10 minutes), so the default leaves room for several interfaces,
+	// two peer connections and ICE restarts.
+	DefaultTURNPerUserRelayAllocationLimit = 32
+	// END OPENVIDU BLOCK
 )
 
 var (
