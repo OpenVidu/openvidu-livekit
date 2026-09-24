@@ -51,7 +51,7 @@ services:
       - minio_browser=on
 
   mongo:
-    image: docker.io/openvidu/mongodb:8.0.29-r0
+    image: docker.io/openvidu/mongodb:8.0.29-r1
     container_name: mongo
     ports:
       - 27017:27017
