@@ -7,7 +7,7 @@ OpenVidu. The changes of the upstream project are listed in `CHANGELOG.md`.
 
 ### Fixed
 
-- **Idle TURN connections no longer pile up**: a client that reached the embedded TURN server over TCP/TLS and then sent nothing — even with only an unauthenticated STUN Binding — used to hold the connection, and any allocation behind it, open until it closed on its own, because the TURN server reads each connection with no deadline. The server now closes a TURN TCP connection that is idle in both directions, after `turn.tcp_connection_idle_timeout_seconds` (default 60s; a value <= 0 disables it). An active relay keeps sending media, allocation refreshes and ICE consent checks well within the window.
+- **Idle TURN connections no longer pile up**: a client that reached the TURN server and then went silent — even with just a STUN Binding — held the connection, and any allocation behind it, open indefinitely. A TURN TCP connection idle in both directions is now closed after `turn.tcp_connection_idle_timeout_seconds` (default 60s; `<= 0` disables it); an active relay is never cut.
 
 ## [3.9.0]
 
