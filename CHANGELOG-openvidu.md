@@ -7,6 +7,7 @@ OpenVidu. The changes of the upstream project are listed in `CHANGELOG.md`.
 
 ### Fixed
 
+- **Idle TURN connections no longer pile up**: a client that reached the embedded TURN server over TCP/TLS and then sent nothing — even with only an unauthenticated STUN Binding — used to hold the connection, and any allocation behind it, open until it closed on its own, because the TURN server reads each connection with no deadline. The server now closes a TURN TCP connection that is idle in both directions, after `turn.tcp_connection_idle_timeout_seconds` (default 60s; a value <= 0 disables it). An active relay keeps sending media, allocation refreshes and ICE consent checks well within the window.
 - **Media nodes tolerate a slow Redis**: they are no longer declared dead when Redis answers late. (OpenVidu/openvidu-livekit#13)
 - **Egress and ingress listings no longer block Redis**: the hashes are scanned in chunks instead of read in one go. (OpenVidu/openvidu-livekit#13, OpenVidu/openvidu-livekit#14)
 - **TURN-only clients keep getting relays after a network change**: the default per-participant TURN allocation quota rises from 12 to 32.

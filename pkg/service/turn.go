@@ -272,6 +272,16 @@ func newTURNTCPListener(turnConf config.TURNConfig, address string) (net.Listene
 	if err != nil {
 		return nil, errors.Wrap(err, "could not listen on TURN TCP port")
 	}
+	// BEGIN OPENVIDU BLOCK — drop TURN TCP connections idle in both directions.
+	// Wrapped innermost (raw TCP) so it also bounds a stalled TLS handshake and
+	// the PROXY-protocol header read.
+	if turnConf.TCPConnectionIdleTimeoutSeconds > 0 {
+		listener = idleTimeoutListener{
+			Listener: listener,
+			timeout:  time.Duration(turnConf.TCPConnectionIdleTimeoutSeconds) * time.Second,
+		}
+	}
+	// END OPENVIDU BLOCK
 	if proxyPolicy != nil {
 		listener = &proxyproto.Listener{Listener: listener, ConnPolicy: proxyPolicy}
 	}
@@ -432,3 +442,49 @@ func (h *TURNAuthHandler) HandleAuth(ra *turn.RequestAttributes) (userID string,
 	}
 	return parts[1], turn.GenerateAuthKey(username, LivekitRealm, password), true
 }
+
+// BEGIN OPENVIDU BLOCK
+// idleTimeoutListener wraps a net.Listener so every accepted connection is closed
+// after `timeout` with no traffic in either direction. The embedded TURN server
+// reads each accepted TCP connection in a loop with no deadline, so a client that
+// reaches the server (even with only an unauthenticated STUN Binding) and then
+// stays silent would otherwise hold the connection, and any allocation, open until
+// it closes on its own. An active relay carries media, allocation refreshes and
+// ICE consent checks well within the window, so only a truly idle connection is
+// dropped. The timeout comes from turn.tcp_connection_idle_timeout_seconds.
+type idleTimeoutListener struct {
+	net.Listener
+	timeout time.Duration
+}
+
+func (l idleTimeoutListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return &idleTimeoutConn{Conn: conn, timeout: l.timeout}, nil
+}
+
+// idleTimeoutConn resets the read deadline on every read and write, so the
+// connection is dropped only after `timeout` with no activity in either direction.
+type idleTimeoutConn struct {
+	net.Conn
+	timeout time.Duration
+}
+
+func (c *idleTimeoutConn) arm() {
+	_ = c.Conn.SetReadDeadline(time.Now().Add(c.timeout))
+}
+
+func (c *idleTimeoutConn) Read(b []byte) (int, error) {
+	c.arm()
+	return c.Conn.Read(b)
+}
+
+func (c *idleTimeoutConn) Write(b []byte) (int, error) {
+	n, err := c.Conn.Write(b)
+	c.arm()
+	return n, err
+}
+
+// END OPENVIDU BLOCK

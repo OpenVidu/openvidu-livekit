@@ -97,6 +97,16 @@ const (
 	// lifetime expires (10 minutes), so the default leaves room for several interfaces,
 	// two peer connections and ICE restarts.
 	DefaultTURNPerUserRelayAllocationLimit = 32
+
+	// DefaultTURNTCPConnectionIdleTimeoutSeconds is how long a TURN TCP (TLS)
+	// connection may neither send nor receive before the server closes it. A
+	// client that reaches the TURN server and then stays silent — even with only
+	// an unauthenticated STUN Binding — would otherwise hold the connection, and
+	// any allocation behind it, open until it closes on its own, since the TURN
+	// server reads each connection with no deadline. An active relay carries
+	// media, allocation refreshes and ICE consent checks well within this window.
+	// A value <= 0 disables the idle timeout.
+	DefaultTURNTCPConnectionIdleTimeoutSeconds = 60
 	// END OPENVIDU BLOCK
 )
 
@@ -363,6 +373,13 @@ type TURNConfig struct {
 	// peer over an outbound TCP connection. Disabled by default: clients can only
 	// allocate UDP relays unless this is explicitly turned on.
 	EnableRFC6062 bool `yaml:"enable_rfc6062,omitempty"`
+	// TCPConnectionIdleTimeoutSeconds closes a TURN TCP (TLS) connection that
+	// neither sends nor receives for this many seconds, so a client cannot hold a
+	// connection — and the allocation behind it — open forever by going idle after
+	// reaching the server (even with only an unauthenticated STUN Binding).
+	// Defaults to DefaultTURNTCPConnectionIdleTimeoutSeconds (60); a value <= 0
+	// disables the idle timeout.
+	TCPConnectionIdleTimeoutSeconds int `yaml:"tcp_connection_idle_timeout_seconds,omitempty"`
 	// END OPENVIDU BLOCK
 }
 
@@ -653,6 +670,8 @@ var DefaultConfig = Config{
 		// BEGIN OPENVIDU BLOCK
 		// RFC 6062 (TURN TCP allocations) is disabled by default.
 		EnableRFC6062: false,
+		// Close TURN TCP/TLS connections idle in both directions after 60s.
+		TCPConnectionIdleTimeoutSeconds: DefaultTURNTCPConnectionIdleTimeoutSeconds,
 		// END OPENVIDU BLOCK
 		Enabled:                     false,
 		BindAddresses:               []string{"0.0.0.0"},
