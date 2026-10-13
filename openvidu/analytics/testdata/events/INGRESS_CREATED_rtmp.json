@@ -1,0 +1,19 @@
+{
+  "id": "AE_KHCNSSqdYR7X",
+  "type": "INGRESS_CREATED",
+  "timestamp": "2026-10-13T19:21:05.632645146Z",
+  "ingress_id": "IN_iwuXFX4xkybv",
+  "ingress": {
+    "ingress_id": "IN_iwuXFX4xkybv",
+    "name": "OBS fixtures",
+    "stream_key": "7h3eU7vuVLpi",
+    "url": "rtmp://localhost:11935/live",
+    "enable_transcoding": true,
+    "room_name": "fx-ingress",
+    "participant_identity": "obs",
+    "participant_name": "OBS",
+    "reusable": true,
+    "state": {}
+  },
+  "node_id": "ND_uWK64bdCvHNX"
+}

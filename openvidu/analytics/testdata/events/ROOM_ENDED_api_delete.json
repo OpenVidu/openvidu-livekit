@@ -1,0 +1,49 @@
+{
+  "id": "AE_mMARjkBnNJs6",
+  "type": "ROOM_ENDED",
+  "timestamp": "2026-10-13T19:19:39.689670372Z",
+  "room_id": "RM_hfET4FULBLcG",
+  "room": {
+    "sid": "RM_hfET4FULBLcG",
+    "name": "fx-api",
+    "empty_timeout": 30,
+    "departure_timeout": 10,
+    "creation_time": "1791919179",
+    "creation_time_ms": "1791919179638",
+    "turn_password": "VhCxGYmIijaetU3UHU2Eew2EmjeKVcUpTOCE9u5OLeEA",
+    "enabled_codecs": [
+      {
+        "mime": "audio/PCMU"
+      },
+      {
+        "mime": "audio/PCMA"
+      },
+      {
+        "mime": "audio/opus"
+      },
+      {
+        "mime": "audio/red"
+      },
+      {
+        "mime": "video/VP8"
+      },
+      {
+        "mime": "video/H264"
+      },
+      {
+        "mime": "video/VP9"
+      },
+      {
+        "mime": "video/AV1"
+      },
+      {
+        "mime": "video/H265"
+      },
+      {
+        "mime": "video/rtx"
+      }
+    ]
+  },
+  "node_id": "ND_gAWdUwUWW9JM",
+  "room_end_reason": "ROOM_END_API_DELETE"
+}

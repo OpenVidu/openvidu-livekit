@@ -1,0 +1,14 @@
+{
+  "id": "AE_ucXch8dP27sb",
+  "type": "API_CALL",
+  "timestamp": "2026-10-13T19:18:46.330745944Z",
+  "node_id": "ND_gAWdUwUWW9JM",
+  "api_call": {
+    "service": "Egress",
+    "method": "StartRoomCompositeEgress",
+    "node_id": "ND_gAWdUwUWW9JM",
+    "status": 200,
+    "started_at": "2026-10-13T19:18:45.796230743Z",
+    "duration_ns": "534464299"
+  }
+}

@@ -1,0 +1,75 @@
+{
+  "id": "AE_StoGDWcqd8eq",
+  "type": "TRACK_PUBLISHED",
+  "timestamp": "2026-10-13T19:21:16.050234110Z",
+  "room_id": "RM_NXE2HStYnKQv",
+  "room": {
+    "sid": "RM_NXE2HStYnKQv",
+    "name": "fx-ingress"
+  },
+  "participant_id": "PA_tL88sTcX579C",
+  "participant": {
+    "sid": "PA_tL88sTcX579C",
+    "identity": "obs"
+  },
+  "track_id": "TR_VCuhc9AeXjXZAe",
+  "track": {
+    "sid": "TR_VCuhc9AeXjXZAe",
+    "type": "VIDEO",
+    "width": 640,
+    "height": 360,
+    "simulcast": true,
+    "source": "CAMERA",
+    "layers": [
+      {
+        "width": 320,
+        "height": 180,
+        "bitrate": 237500,
+        "ssrc": 3764379117,
+        "rid": "q"
+      },
+      {
+        "quality": "MEDIUM",
+        "width": 640,
+        "height": 360,
+        "bitrate": 671751,
+        "ssrc": 1460523176,
+        "spatial_layer": 1,
+        "rid": "h"
+      }
+    ],
+    "mime_type": "video/H264",
+    "mid": "2",
+    "codecs": [
+      {
+        "mime_type": "video/H264",
+        "mid": "2",
+        "cid": "IN_iwuXFX4xkybv",
+        "layers": [
+          {
+            "width": 320,
+            "height": 180,
+            "bitrate": 237500,
+            "ssrc": 3764379117,
+            "rid": "q"
+          },
+          {
+            "quality": "MEDIUM",
+            "width": 640,
+            "height": 360,
+            "bitrate": 671751,
+            "ssrc": 1460523176,
+            "spatial_layer": 1,
+            "rid": "h"
+          }
+        ],
+        "video_layer_mode": "ONE_SPATIAL_LAYER_PER_STREAM"
+      }
+    ],
+    "stream": "camera",
+    "version": {
+      "unix_micro": "1791919276049483"
+    }
+  },
+  "node_id": "ND_uWK64bdCvHNX"
+}

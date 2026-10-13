@@ -1,0 +1,66 @@
+{
+  "id": "AE_zvpPAxwWMFPM",
+  "type": "PARTICIPANT_LEFT",
+  "timestamp": "2026-10-13T19:24:05.915398506Z",
+  "room_id": "RM_sqgCdXepgfgs",
+  "room": {
+    "sid": "RM_sqgCdXepgfgs",
+    "name": "fx-lifecycle",
+    "empty_timeout": 20,
+    "departure_timeout": 10,
+    "creation_time": "1791919382",
+    "creation_time_ms": "1791919382501",
+    "turn_password": "rI9xL9oCi8GEX6vRSoJe4EgFbEychZl3r4wefzRHGZGB",
+    "enabled_codecs": [
+      {
+        "mime": "audio/PCMU"
+      },
+      {
+        "mime": "audio/PCMA"
+      },
+      {
+        "mime": "audio/opus"
+      },
+      {
+        "mime": "audio/red"
+      },
+      {
+        "mime": "video/VP8"
+      },
+      {
+        "mime": "video/H264"
+      },
+      {
+        "mime": "video/VP9"
+      },
+      {
+        "mime": "video/AV1"
+      },
+      {
+        "mime": "video/H265"
+      },
+      {
+        "mime": "video/rtx"
+      }
+    ],
+    "metadata": "{\"purpose\":\"fixtures-updated\"}",
+    "num_participants": 3,
+    "num_publishers": 1
+  },
+  "participant_id": "PA_EM9CKNMaMMYQ",
+  "participant": {
+    "sid": "PA_EM9CKNMaMMYQ",
+    "identity": "carol-0.3",
+    "state": "DISCONNECTED",
+    "joined_at": "1791919424",
+    "joined_at_ms": "1791919424855",
+    "version": 3,
+    "permission": {
+      "can_subscribe": true,
+      "can_publish": true,
+      "can_publish_data": true
+    },
+    "disconnect_reason": "CONNECTION_TIMEOUT"
+  },
+  "node_id": "ND_uWK64bdCvHNX"
+}

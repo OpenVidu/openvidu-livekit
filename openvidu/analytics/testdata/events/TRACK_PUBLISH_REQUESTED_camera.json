@@ -1,0 +1,72 @@
+{
+  "id": "AE_GgGss2SefRiv",
+  "type": "TRACK_PUBLISH_REQUESTED",
+  "timestamp": "2026-10-13T19:23:02.520802468Z",
+  "room_id": "RM_sqgCdXepgfgs",
+  "room": {
+    "sid": "RM_sqgCdXepgfgs",
+    "name": "fx-lifecycle"
+  },
+  "participant_id": "PA_joBzDAREayuJ",
+  "participant": {
+    "sid": "PA_joBzDAREayuJ",
+    "identity": "alice"
+  },
+  "track_id": "TR_VCwMkJBY8Rri9c",
+  "track": {
+    "sid": "TR_VCwMkJBY8Rri9c",
+    "type": "VIDEO",
+    "name": "demo",
+    "width": 1280,
+    "height": 720,
+    "simulcast": true,
+    "source": "CAMERA",
+    "layers": [
+      {
+        "width": 320,
+        "height": 180,
+        "bitrate": 120000
+      },
+      {
+        "quality": "MEDIUM",
+        "width": 640,
+        "height": 360,
+        "bitrate": 400000
+      },
+      {
+        "quality": "HIGH",
+        "width": 1280,
+        "height": 720,
+        "bitrate": 1500000
+      }
+    ],
+    "codecs": [
+      {
+        "mime_type": "video/h264",
+        "cid": "demo-video",
+        "layers": [
+          {
+            "width": 320,
+            "height": 180,
+            "bitrate": 120000
+          },
+          {
+            "quality": "MEDIUM",
+            "width": 640,
+            "height": 360,
+            "bitrate": 400000
+          },
+          {
+            "quality": "HIGH",
+            "width": 1280,
+            "height": 720,
+            "bitrate": 1500000
+          }
+        ],
+        "video_layer_mode": "ONE_SPATIAL_LAYER_PER_STREAM"
+      }
+    ],
+    "stream": "camera"
+  },
+  "node_id": "ND_uWK64bdCvHNX"
+}

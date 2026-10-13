@@ -1,0 +1,24 @@
+{
+  "id": "AE_hcYXNbDAo4mP",
+  "type": "TRACK_MAX_SUBSCRIBED_VIDEO_QUALITY",
+  "timestamp": "2026-10-13T19:23:10.678121141Z",
+  "room_id": "RM_sqgCdXepgfgs",
+  "room": {
+    "sid": "RM_sqgCdXepgfgs",
+    "name": "fx-lifecycle"
+  },
+  "participant_id": "PA_joBzDAREayuJ",
+  "participant": {
+    "sid": "PA_joBzDAREayuJ"
+  },
+  "track_id": "TR_VCwMkJBY8Rri9c",
+  "track": {
+    "sid": "TR_VCwMkJBY8Rri9c",
+    "type": "VIDEO",
+    "width": 1280,
+    "height": 720
+  },
+  "max_subscribed_video_quality": "HIGH",
+  "mime": "video/H264",
+  "node_id": "ND_uWK64bdCvHNX"
+}

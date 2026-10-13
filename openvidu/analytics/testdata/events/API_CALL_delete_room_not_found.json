@@ -1,0 +1,22 @@
+{
+  "id": "AE_uqryUkcetvWo",
+  "type": "API_CALL",
+  "timestamp": "2026-10-13T19:19:39.739798316Z",
+  "node_id": "ND_gAWdUwUWW9JM",
+  "api_call": {
+    "request": {
+      "delete_room_request": {
+        "room": "fx-does-not-exist"
+      }
+    },
+    "service": "RoomService",
+    "method": "DeleteRoom",
+    "node_id": "ND_gAWdUwUWW9JM",
+    "status": 404,
+    "twirp_error_code": "not_found",
+    "twirp_error_message": "twirp error unknown: requested room does not exist",
+    "room_name": "fx-does-not-exist",
+    "started_at": "2026-10-13T19:19:39.739398336Z",
+    "duration_ns": "365774"
+  }
+}

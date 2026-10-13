@@ -1,0 +1,14 @@
+{
+  "id": "AE_HTXduYUsPEes",
+  "type": "API_CALL",
+  "timestamp": "2026-10-13T19:21:05.633346013Z",
+  "node_id": "ND_uWK64bdCvHNX",
+  "api_call": {
+    "service": "Ingress",
+    "method": "CreateIngress",
+    "node_id": "ND_uWK64bdCvHNX",
+    "status": 200,
+    "started_at": "2026-10-13T19:21:05.631604832Z",
+    "duration_ns": "1045820"
+  }
+}

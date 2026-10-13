@@ -1,0 +1,49 @@
+{
+  "id": "AE_B4yipxHDMzpo",
+  "type": "ROOM_ENDED",
+  "timestamp": "2026-10-13T19:22:54.341048799Z",
+  "room_id": "RM_NXE2HStYnKQv",
+  "room": {
+    "sid": "RM_NXE2HStYnKQv",
+    "name": "fx-ingress",
+    "empty_timeout": 20,
+    "departure_timeout": 10,
+    "creation_time": "1791919275",
+    "creation_time_ms": "1791919275478",
+    "turn_password": "vscTfRV2v0mcUR7x4We5KV63oJIhe4iQjhsjfgQF65AB",
+    "enabled_codecs": [
+      {
+        "mime": "audio/PCMU"
+      },
+      {
+        "mime": "audio/PCMA"
+      },
+      {
+        "mime": "audio/opus"
+      },
+      {
+        "mime": "audio/red"
+      },
+      {
+        "mime": "video/VP8"
+      },
+      {
+        "mime": "video/H264"
+      },
+      {
+        "mime": "video/VP9"
+      },
+      {
+        "mime": "video/AV1"
+      },
+      {
+        "mime": "video/H265"
+      },
+      {
+        "mime": "video/rtx"
+      }
+    ]
+  },
+  "node_id": "ND_uWK64bdCvHNX",
+  "room_end_reason": "ROOM_END_IDLE_TIMEOUT"
+}

@@ -1,0 +1,39 @@
+{
+  "stats": [
+    {
+      "id": "AS_RHBZDnaRU7Fe",
+      "time_stamp": "2026-10-13T19:23:48.279660262Z",
+      "node": "ND_uWK64bdCvHNX",
+      "room_id": "RM_sqgCdXepgfgs",
+      "room_name": "fx-lifecycle",
+      "participant_id": "PA_ueUNNeKQV3XV",
+      "track_id": "TR_SGPA_ueUNNeKQV3XV",
+      "streams": [
+        {
+          "primary_packets": 18,
+          "primary_bytes": "4052",
+          "start_time": "1970-01-01T00:00:00Z",
+          "end_time": "1970-01-01T00:00:00Z"
+        }
+      ]
+    },
+    {
+      "id": "AS_TL4TgHU58BHQ",
+      "kind": "DOWNSTREAM",
+      "time_stamp": "2026-10-13T19:23:48.279660262Z",
+      "node": "ND_uWK64bdCvHNX",
+      "room_id": "RM_sqgCdXepgfgs",
+      "room_name": "fx-lifecycle",
+      "participant_id": "PA_ueUNNeKQV3XV",
+      "track_id": "TR_SGPA_ueUNNeKQV3XV",
+      "streams": [
+        {
+          "primary_packets": 30,
+          "primary_bytes": "7063",
+          "start_time": "1970-01-01T00:00:00Z",
+          "end_time": "1970-01-01T00:00:00Z"
+        }
+      ]
+    }
+  ]
+}

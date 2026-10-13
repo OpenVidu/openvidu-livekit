@@ -1,0 +1,19 @@
+{
+  "id": "AE_DxhyzLHKwXHE",
+  "type": "TRACK_SUBSCRIBE_REQUESTED",
+  "timestamp": "2026-10-13T19:23:10.517052693Z",
+  "room_id": "RM_sqgCdXepgfgs",
+  "room": {
+    "sid": "RM_sqgCdXepgfgs",
+    "name": "fx-lifecycle"
+  },
+  "participant_id": "PA_eh4YYgfKooWZ",
+  "participant": {
+    "sid": "PA_eh4YYgfKooWZ"
+  },
+  "track_id": "TR_VCwMkJBY8Rri9c",
+  "track": {
+    "sid": "TR_VCwMkJBY8Rri9c"
+  },
+  "node_id": "ND_uWK64bdCvHNX"
+}
