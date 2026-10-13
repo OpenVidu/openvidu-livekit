@@ -80,7 +80,7 @@ func expectedIndexNames(t *testing.T, collection string, timeseries bool) []stri
 	require.NoError(t, err)
 	var names []string
 	for _, index := range indexes {
-		if index.Collection == collection && !(timeseries && index.TimeseriesFallbackOnly) {
+		if index.Collection == collection && (!timeseries || !index.TimeseriesFallbackOnly) {
 			names = append(names, index.Name)
 		}
 	}
