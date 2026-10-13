@@ -1,0 +1,12 @@
+{
+	"bsonType": "object",
+	"required": ["_id", "firstSeenAt", "lastSeenAt", "serverVersion"],
+	"properties": {
+		"_id": { "bsonType": "string", "description": "Node id" },
+		"firstSeenAt": { "bsonType": "date" },
+		"lastSeenAt": { "bsonType": "date" },
+		"serverVersion": { "bsonType": "string" },
+		"region": { "bsonType": "string" }
+	},
+	"additionalProperties": false
+}

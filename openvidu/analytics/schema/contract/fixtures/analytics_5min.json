@@ -1,0 +1,38 @@
+[
+	{
+		"_id": "global:2026-10-12T10:30:00Z",
+		"scope": "global",
+		"bucket": { "$date": "2026-10-12T10:30:00.000Z" },
+		"participants": {
+			"connected": { "$numberInt": "3" },
+			"joined": { "$numberInt": "2" },
+			"active": { "$numberInt": "1" }
+		},
+		"bytes": { "up": { "$numberLong": "19500000" }, "down": { "$numberLong": "112000000" } },
+		"quality": {
+			"scoreSum": { "$numberDouble": "49.4" },
+			"scoreCount": { "$numberInt": "12" },
+			"poor": { "$numberInt": "0" },
+			"lost": { "$numberInt": "0" }
+		},
+		"internal": { "connectedSids": ["PA_dav3Pub6Mn2", "PA_1ngressSes02", "PA_egStr3amer02"] }
+	},
+	{
+		"_id": "node:ND_beta3Vx9Pw:2026-10-12T10:30:00Z",
+		"scope": "node:ND_beta3Vx9Pw",
+		"bucket": { "$date": "2026-10-12T10:30:00.000Z" },
+		"participants": {
+			"connected": { "$numberInt": "3" },
+			"joined": { "$numberInt": "2" },
+			"active": { "$numberInt": "1" }
+		},
+		"bytes": { "up": { "$numberLong": "19500000" }, "down": { "$numberLong": "112000000" } },
+		"quality": {
+			"scoreSum": { "$numberDouble": "49.4" },
+			"scoreCount": { "$numberInt": "12" },
+			"poor": { "$numberInt": "0" },
+			"lost": { "$numberInt": "0" }
+		},
+		"internal": { "connectedSids": ["PA_dav3Pub6Mn2", "PA_1ngressSes02", "PA_egStr3amer02"] }
+	}
+]

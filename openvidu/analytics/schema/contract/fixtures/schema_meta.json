@@ -1,0 +1,37 @@
+[
+	{
+		"_id": "schema",
+		"version": { "$numberInt": "1" },
+		"writerVersion": "3.10.0",
+		"updatedAt": { "$date": "2026-10-12T08:00:00.000Z" }
+	},
+	{
+		"_id": "retention",
+		"eventsMs": { "$numberLong": "604800000" },
+		"statsMs": { "$numberLong": "604800000" },
+		"tracksMs": { "$numberLong": "604800000" },
+		"entitiesMs": { "$numberLong": "7776000000" },
+		"rollupsHourlyMs": { "$numberLong": "34560000000" },
+		"rollupsDailyMs": null,
+		"updatedAt": { "$date": "2026-10-12T08:00:00.000Z" }
+	},
+	{
+		"_id": "capabilities",
+		"timeseries": true,
+		"transactions": true,
+		"serverVersion": "8.0.29",
+		"detectedAt": { "$date": "2026-10-12T08:00:00.000Z" }
+	},
+	{ "_id": "config", "statsDetail": "participant", "recordedAt": { "$date": "2026-10-12T08:00:00.000Z" } },
+	{
+		"_id": "migration",
+		"state": "completed",
+		"checkpoint": { "phase": "cleanup" },
+		"processed": { "$numberLong": "125000" },
+		"total": { "$numberLong": "125000" },
+		"startedAt": { "$date": "2026-10-12T08:00:05.000Z" },
+		"finishedAt": { "$date": "2026-10-12T08:20:00.000Z" },
+		"nodeId": "ND_alpha8Kq2Lm",
+		"legacyRetainedUntil": { "$date": "2026-11-13T08:00:00.000Z" }
+	}
+]

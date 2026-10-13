@@ -1,0 +1,89 @@
+{
+	"bsonType": "object",
+	"required": ["_id"],
+	"oneOf": [
+		{
+			"bsonType": "object",
+			"required": ["_id", "version", "writerVersion", "updatedAt"],
+			"properties": {
+				"_id": { "bsonType": "string", "enum": ["schema"] },
+				"version": { "bsonType": ["int", "long"] },
+				"writerVersion": { "bsonType": "string" },
+				"updatedAt": { "bsonType": "date" }
+			},
+			"additionalProperties": false
+		},
+		{
+			"bsonType": "object",
+			"required": [
+				"_id",
+				"eventsMs",
+				"statsMs",
+				"tracksMs",
+				"entitiesMs",
+				"rollupsHourlyMs",
+				"rollupsDailyMs",
+				"updatedAt"
+			],
+			"properties": {
+				"_id": { "bsonType": "string", "enum": ["retention"] },
+				"eventsMs": { "bsonType": ["long", "int"] },
+				"statsMs": { "bsonType": ["long", "int"] },
+				"tracksMs": { "bsonType": ["long", "int"] },
+				"entitiesMs": { "bsonType": ["long", "int"] },
+				"rollupsHourlyMs": { "bsonType": ["long", "int"] },
+				"rollupsDailyMs": {
+					"bsonType": ["long", "int", "null"],
+					"description": "null keeps documents forever"
+				},
+				"updatedAt": { "bsonType": "date" }
+			},
+			"additionalProperties": false
+		},
+		{
+			"bsonType": "object",
+			"required": ["_id", "timeseries", "transactions", "serverVersion", "detectedAt"],
+			"properties": {
+				"_id": { "bsonType": "string", "enum": ["capabilities"] },
+				"timeseries": { "bsonType": "bool" },
+				"transactions": { "bsonType": "bool" },
+				"serverVersion": { "bsonType": "string" },
+				"detectedAt": { "bsonType": "date" }
+			},
+			"additionalProperties": false
+		},
+		{
+			"bsonType": "object",
+			"required": ["_id", "statsDetail", "recordedAt"],
+			"properties": {
+				"_id": { "bsonType": "string", "enum": ["config"] },
+				"statsDetail": { "bsonType": "string", "enum": ["participant", "track"] },
+				"recordedAt": { "bsonType": "date" }
+			},
+			"additionalProperties": false
+		},
+		{
+			"bsonType": "object",
+			"required": ["_id", "state", "processed", "total"],
+			"properties": {
+				"_id": { "bsonType": "string", "enum": ["migration"] },
+				"state": { "bsonType": "string", "enum": ["pending", "running", "completed", "failed"] },
+				"checkpoint": { "bsonType": "object" },
+				"processed": { "bsonType": ["long", "int"] },
+				"total": { "bsonType": ["long", "int"] },
+				"startedAt": { "bsonType": "date" },
+				"finishedAt": { "bsonType": "date" },
+				"error": { "bsonType": "string" },
+				"nodeId": { "bsonType": "string" },
+				"legacyRetainedUntil": { "bsonType": "date" }
+			},
+			"additionalProperties": false
+		},
+		{
+			"bsonType": "object",
+			"required": ["_id"],
+			"properties": { "_id": { "bsonType": "string", "enum": ["dashboard"] } },
+			"additionalProperties": true
+		}
+	]
+}
