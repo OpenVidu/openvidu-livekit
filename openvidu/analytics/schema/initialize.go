@@ -185,23 +185,14 @@ func ensureCollection(ctx context.Context, db *mongo.Database, definition Collec
 	}
 
 	if info == nil {
-		if definition.Timeseries != nil && !opts.DisableTimeseries {
-			created, err := createTimeseries(ctx, db, definition, opts.Retention)
-			if err == nil {
-				result.CreatedCollections = append(result.CreatedCollections, definition.Name)
-				return created, nil
-			}
-			result.TimeseriesError = err
+		timeseries, err := createCollection(ctx, db, definition, validator, opts, result)
+		if !isNamespaceExists(err) {
+			return timeseries, err
 		}
-		createOpts := options.CreateCollection().
-			SetValidator(validator).
-			SetValidationAction(opts.ValidationAction).
-			SetValidationLevel("strict")
-		if err := db.CreateCollection(ctx, definition.Name, createOpts); err != nil {
+		// Another node starting at the same time created it first; update it as an existing collection.
+		if info, err = collectionInfoOf(ctx, db, definition.Name); err != nil {
 			return false, err
 		}
-		result.CreatedCollections = append(result.CreatedCollections, definition.Name)
-		return false, nil
 	}
 
 	if info.Type == "timeseries" {
@@ -215,6 +206,51 @@ func ensureCollection(ctx context.Context, db *mongo.Database, definition Collec
 		{Key: "validationAction", Value: opts.ValidationAction},
 		{Key: "validationLevel", Value: "strict"},
 	}).Err()
+}
+
+func createCollection(ctx context.Context, db *mongo.Database, definition CollectionDefinition, validator bson.D,
+	opts InitOptions, result *InitResult) (bool, error) {
+	if definition.Timeseries != nil && !opts.DisableTimeseries {
+		created, err := createTimeseries(ctx, db, definition, opts.Retention)
+		if err == nil {
+			result.CreatedCollections = append(result.CreatedCollections, definition.Name)
+			return created, nil
+		}
+		if isNamespaceExists(err) {
+			return false, err
+		}
+		result.TimeseriesError = err
+	}
+	createOpts := options.CreateCollection().
+		SetValidator(validator).
+		SetValidationAction(opts.ValidationAction).
+		SetValidationLevel("strict")
+	if err := db.CreateCollection(ctx, definition.Name, createOpts); err != nil {
+		return false, err
+	}
+	result.CreatedCollections = append(result.CreatedCollections, definition.Name)
+	return false, nil
+}
+
+func collectionInfoOf(ctx context.Context, db *mongo.Database, name string) (*collectionInfo, error) {
+	cursor, err := db.ListCollections(ctx, bson.D{{Key: "name", Value: name}})
+	if err != nil {
+		return nil, fmt.Errorf("listCollections: %w", err)
+	}
+	var infos []collectionInfo
+	if err := cursor.All(ctx, &infos); err != nil {
+		return nil, fmt.Errorf("listCollections: %w", err)
+	}
+	if len(infos) == 0 {
+		return nil, fmt.Errorf("collection %s reported as existing but not listed", name)
+	}
+	return &infos[0], nil
+}
+
+// isNamespaceExists reports the NamespaceExists error (code 48) of a create or rename whose target already exists.
+func isNamespaceExists(err error) bool {
+	var serverErr mongo.ServerError
+	return errors.As(err, &serverErr) && serverErr.HasErrorCode(48)
 }
 
 func createTimeseries(ctx context.Context, db *mongo.Database, definition CollectionDefinition, retention Retention) (bool, error) {
