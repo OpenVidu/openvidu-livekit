@@ -40,11 +40,19 @@ func minimal() AnalyticsConfig {
 	return AnalyticsConfig{Enabled: true, MongoUrl: "mongodb://localhost:27017"}
 }
 
-func TestExampleConfiguration(t *testing.T) {
-	example, err := os.ReadFile("testdata/analytics-example.yaml")
+// readmeExample returns the first YAML block of README-openvidu.md, the documented configuration example.
+func readmeExample(t *testing.T) string {
+	readme, err := os.ReadFile("../../README-openvidu.md")
 	require.NoError(t, err)
+	_, rest, found := strings.Cut(string(readme), "```yaml\n")
+	require.True(t, found, "no YAML block in README-openvidu.md")
+	example, _, found := strings.Cut(rest, "```")
+	require.True(t, found)
+	return example
+}
 
-	settings, warnings, err := parseAnalytics(t, string(example)).Settings()
+func TestExampleConfiguration(t *testing.T) {
+	settings, warnings, err := parseAnalytics(t, readmeExample(t)).Settings()
 	require.NoError(t, err)
 	require.Empty(t, warnings)
 	require.Equal(t, 10*time.Second, settings.Interval)
