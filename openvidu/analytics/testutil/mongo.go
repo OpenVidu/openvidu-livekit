@@ -42,9 +42,27 @@ const mongodPath = "/opt/bitnami/mongodb/bin/mongod"
 const mongoshPath = "/opt/bitnami/mongodb/bin/mongosh"
 
 // StartMongo starts a single-node MongoDB replica set and returns a connected client, terminated when the test ends.
+// With ANALYTICS_TEST_MONGO_URI set it connects to that server instead.
 func StartMongo(t *testing.T) *mongo.Client {
 	t.Helper()
+	client, _ := StartMongoWithURI(t)
+	return client
+}
+
+// External reports whether the tests run against the server of ANALYTICS_TEST_MONGO_URI, which tests must not
+// disrupt (for example with a step-down).
+func External() bool {
+	return os.Getenv("ANALYTICS_TEST_MONGO_URI") != ""
+}
+
+// StartMongoWithURI is StartMongo that also returns the connection string.
+func StartMongoWithURI(t *testing.T) (*mongo.Client, string) {
+	t.Helper()
 	ctx := context.Background()
+
+	if uri := os.Getenv("ANALYTICS_TEST_MONGO_URI"); uri != "" {
+		return connect(t, uri), uri
+	}
 
 	image := os.Getenv("ANALYTICS_TEST_MONGO_IMAGE")
 	if image == "" {
@@ -57,7 +75,10 @@ func StartMongo(t *testing.T) *mongo.Client {
 			"--wiredTigerCacheSizeGB", "0.25"),
 		testcontainers.WithExposedPorts("27017/tcp"),
 		testcontainers.WithHostConfigModifier(func(hostConfig *container.HostConfig) {
-			hostConfig.Memory = 768 * 1024 * 1024
+			hostConfig.Memory = 1024 * 1024 * 1024
+			// WiredTiger keeps one file per collection and index; the default limit of open files runs out after a
+			// few dozen test databases and mongod aborts.
+			hostConfig.Ulimits = []*container.Ulimit{{Name: "nofile", Soft: 64000, Hard: 64000}}
 		}),
 		testcontainers.WithWaitStrategy(wait.ForListeningPort("27017/tcp").WithStartupTimeout(time.Minute)),
 	)
@@ -85,13 +106,19 @@ func StartMongo(t *testing.T) *mongo.Client {
 		t.Fatalf("MongoDB endpoint: %v", err)
 	}
 	// The member advertises localhost:27017, unreachable from the host, so the client connects directly.
-	client, err := mongo.Connect(options.Client().ApplyURI(fmt.Sprintf("mongodb://%s/?directConnection=true", endpoint)))
+	uri := fmt.Sprintf("mongodb://%s/?directConnection=true", endpoint)
+	return connect(t, uri), uri
+}
+
+func connect(t *testing.T, uri string) *mongo.Client {
+	t.Helper()
+	client, err := mongo.Connect(options.Client().ApplyURI(uri))
 	if err != nil {
 		t.Fatalf("connect to MongoDB: %v", err)
 	}
 	t.Cleanup(func() { _ = client.Disconnect(context.Background()) })
 
-	if err := client.Database("admin").RunCommand(ctx, bson.D{{Key: "ping", Value: 1}}).Err(); err != nil {
+	if err := client.Database("admin").RunCommand(context.Background(), bson.D{{Key: "ping", Value: 1}}).Err(); err != nil {
 		t.Fatalf("ping MongoDB: %v", err)
 	}
 	return client

@@ -201,8 +201,26 @@ func NewTelemetryService(notifier webhook.QueuedNotifier, analytics AnalyticsSer
 	t.jobsQueue.Start()
 	go t.run()
 
+	// BEGIN OPENVIDU BLOCK
+	openViduTelemetryService = t
+	// END OPENVIDU BLOCK
+
 	return t
 }
+
+// BEGIN OPENVIDU BLOCK
+var openViduTelemetryService *telemetryService
+
+// FlushAndStop sends the stats of every worker and runs the queued telemetry operations, so that the events of a
+// graceful shutdown (rooms ended, participants left) and the last stats reach the analytics service before exit.
+func FlushAndStop() {
+	if t := openViduTelemetryService; t != nil {
+		t.FlushStats()
+		t.jobsQueue.Stop()
+	}
+}
+
+// END OPENVIDU BLOCK
 
 func (t *telemetryService) FlushStats() {
 	t.flushMu.Lock()
