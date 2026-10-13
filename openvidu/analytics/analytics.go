@@ -40,6 +40,8 @@ const dbLockName = "analytics-db-operations-lock"
 
 var (
 	analyticsConfiguration         *openviduconfig.AnalyticsConfig
+	analyticsInterval              time.Duration
+	analyticsExpiration            time.Duration
 	activeEntitiesFixerInterval    time.Duration
 	activeEntitiesFixerLockBackoff time.Duration
 	activeEntitiesFixerLockTtl     time.Duration
@@ -107,17 +109,14 @@ func InitializeAnalytics(configuration *config.Config, livekithelper livekithelp
 	analyticsSenders = []*AnalyticsSender{mongoDatabaseClient.owner}
 
 	analyticsConfiguration = &configuration.OpenVidu.Analytics
-	if analyticsConfiguration.Interval == 0 {
-		analyticsConfiguration.Interval = time.Second * 10
+	settings, _, err := analyticsConfiguration.Settings()
+	if err != nil {
+		return err
 	}
-	if analyticsConfiguration.FixerInterval == 0 {
-		analyticsConfiguration.FixerInterval = time.Minute
-	}
-	if analyticsConfiguration.Expiration == 0 {
-		analyticsConfiguration.Expiration = time.Hour * 24 * 32 // 32 days
-	}
+	analyticsInterval = settings.Interval
+	analyticsExpiration = settings.Retention.Events
 
-	activeEntitiesFixerInterval = max(analyticsConfiguration.Interval*2+time.Second*10, analyticsConfiguration.FixerInterval)
+	activeEntitiesFixerInterval = max(settings.Interval*2+time.Second*10, settings.FixerInterval)
 	activeEntitiesFixerLockBackoff = activeEntitiesFixerInterval / 2
 	activeEntitiesFixerLockTtl = activeEntitiesFixerInterval + 5*time.Second
 
@@ -158,7 +157,7 @@ func Start() {
 func startAnalyticsRoutine() {
 	for {
 		func() {
-			time.Sleep(analyticsConfiguration.Interval)
+			time.Sleep(analyticsInterval)
 
 			// If Redis is configured, use Redis Locker instead of mutex
 			if redisLocker != nil {

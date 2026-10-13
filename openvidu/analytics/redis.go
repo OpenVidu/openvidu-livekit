@@ -17,7 +17,6 @@ package analytics
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
@@ -176,7 +175,7 @@ func (r *RedisDatabaseClient) SendBatch() {
 			// Store JSON object
 			pipelinesByRoom[event.Room.Sid].JSONSet(context.Background(), eventKey, "$", eventMap)
 			// Set expiration time
-			pipelinesByRoom[event.Room.Sid].Expire(context.Background(), eventKey, time.Duration(analyticsConfiguration.Expiration))
+			pipelinesByRoom[event.Room.Sid].Expire(context.Background(), eventKey, analyticsExpiration)
 		}
 
 		for _, stat := range stats {
@@ -186,7 +185,7 @@ func (r *RedisDatabaseClient) SendBatch() {
 			// Store JSON object
 			pipelinesByRoom[stat.RoomId].JSONSet(context.Background(), statKey, "$", statMap)
 			// Set expiration time
-			pipelinesByRoom[stat.RoomId].Expire(context.Background(), statKey, time.Duration(analyticsConfiguration.Expiration))
+			pipelinesByRoom[stat.RoomId].Expire(context.Background(), statKey, analyticsExpiration)
 		}
 
 		for _, pipeline := range pipelinesByRoom {

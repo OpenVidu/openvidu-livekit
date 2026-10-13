@@ -322,12 +322,12 @@ func restoreAllEventsOrStats[T *livekit.AnalyticsEvent | *livekit.AnalyticsStat]
 
 func mongoParseEvent(eventMap map[string]interface{}, event *livekit.AnalyticsEvent) {
 	addMongoIdToEvent(eventMap, event)
-	eventMap["openvidu_expire_at"] = time.Now().Add(analyticsConfiguration.Expiration).UTC()
+	eventMap["openvidu_expire_at"] = time.Now().Add(analyticsExpiration).UTC()
 }
 
 func mongoParseStat(statMap map[string]interface{}, stat *livekit.AnalyticsStat) {
 	addMongoIdToStat(statMap, stat)
-	statMap["openvidu_expire_at"] = time.Now().Add(analyticsConfiguration.Expiration).UTC()
+	statMap["openvidu_expire_at"] = time.Now().Add(analyticsExpiration).UTC()
 }
 
 func addMongoIdToEvent(eventMap map[string]interface{}, event *livekit.AnalyticsEvent) {
@@ -603,7 +603,7 @@ func (m *MongoDatabaseClient) fixActiveRooms(activeRoomsDb []string, lastAlive T
 			roomEndedEvent := roomCreatedEventMap
 			roomEndedEvent["type"] = livekit.AnalyticsEventType_ROOM_ENDED.String()
 			roomEndedEvent["room_id"] = roomId
-			roomEndedEvent["openvidu_expire_at"] = time.Now().Add(analyticsConfiguration.Expiration).UTC()
+			roomEndedEvent["openvidu_expire_at"] = time.Now().Add(analyticsExpiration).UTC()
 
 			creationTimeFloat := roomCreatedEventMap["room"].(map[string]interface{})["creation_time"].(float64)
 			creationTime, _ := strconv.ParseInt(strconv.FormatFloat(creationTimeFloat, 'f', -1, 64), 10, 64)
@@ -670,7 +670,7 @@ func (m *MongoDatabaseClient) fixActiveParticipants(activeParticipantsDb []strin
 			// Fill "PARTICIPANT_LEFT" event with necessary info
 			participantLeftEvent := participantActiveEventMap
 			participantLeftEvent["type"] = livekit.AnalyticsEventType_PARTICIPANT_LEFT.String()
-			participantLeftEvent["openvidu_expire_at"] = time.Now().Add(analyticsConfiguration.Expiration).UTC()
+			participantLeftEvent["openvidu_expire_at"] = time.Now().Add(analyticsExpiration).UTC()
 
 			joinedAtFloat := participantActiveEventMap["participant"].(map[string]interface{})["joined_at"].(float64)
 			joinedAt, _ := strconv.ParseInt(strconv.FormatFloat(joinedAtFloat, 'f', -1, 64), 10, 64)
@@ -741,7 +741,7 @@ func (m *MongoDatabaseClient) fixActiveEgresses(activeEgressesDb []string, lastA
 			egressEndedEvent := egressStartedEventMap
 			egressEndedEvent["type"] = livekit.AnalyticsEventType_EGRESS_ENDED.String()
 			egressEndedEvent["egress"].(map[string]interface{})["status"] = "EGRESS_COMPLETE"
-			egressEndedEvent["openvidu_expire_at"] = time.Now().Add(analyticsConfiguration.Expiration).UTC()
+			egressEndedEvent["openvidu_expire_at"] = time.Now().Add(analyticsExpiration).UTC()
 
 			float, ok := egressStartedEventMap["egress"].(map[string]interface{})["started_at"].(float64)
 			if !ok {
@@ -817,7 +817,7 @@ func (m *MongoDatabaseClient) fixActiveIngresses(activeIngressesDb []string, las
 			ingressEndedEvent := ingressStartedEventMap
 			ingressEndedEvent["type"] = livekit.AnalyticsEventType_INGRESS_ENDED.String()
 			ingressEndedEvent["ingress"].(map[string]interface{})["state"].(map[string]interface{})["status"] = "ENDPOINT_INACTIVE"
-			ingressEndedEvent["openvidu_expire_at"] = time.Now().Add(analyticsConfiguration.Expiration).UTC()
+			ingressEndedEvent["openvidu_expire_at"] = time.Now().Add(analyticsExpiration).UTC()
 
 			startedAtFloat := ingressStartedEventMap["ingress"].(map[string]interface{})["state"].(map[string]interface{})["started_at"].(float64)
 			startedAt, _ := strconv.ParseInt(strconv.FormatFloat(startedAtFloat, 'f', -1, 64), 10, 64)
