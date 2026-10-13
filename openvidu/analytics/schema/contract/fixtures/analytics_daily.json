@@ -55,7 +55,7 @@
 			},
 			"connectTimeSumMs": { "$numberLong": "12400" },
 			"connectTimeCount": { "$numberInt": "10" },
-			"minutes": { "$numberDouble": "196.62" }
+			"minutes": { "$numberDouble": "196.61666666666667" }
 		},
 		"tracks": {
 			"published": { "$numberInt": "6" },
@@ -73,12 +73,11 @@
 			"sessionsEnded": { "$numberInt": "1" },
 			"durationMs": { "$numberLong": "1190000" }
 		},
-		"bytes": { "up": { "$numberLong": "510500000" }, "down": { "$numberLong": "966200000" } },
+		"bytes": { "up": { "$numberLong": "483800000" }, "down": { "$numberLong": "987120000" } },
 		"quality": {
-			"scoreSum": { "$numberDouble": "1782.0" },
+			"scoreSum": { "$numberDouble": "1753.0" },
 			"scoreCount": { "$numberInt": "440" },
-			"poor": { "$numberInt": "6" },
-			"lost": { "$numberInt": "0" }
+			"poor": { "$numberInt": "6" }
 		},
 		"apiCalls": {
 			"total": { "$numberInt": "9" },
@@ -145,7 +144,7 @@
 			},
 			"connectTimeSumMs": { "$numberLong": "8600" },
 			"connectTimeCount": { "$numberInt": "6" },
-			"minutes": { "$numberDouble": "176.78" }
+			"minutes": { "$numberDouble": "176.78333333333333" }
 		},
 		"tracks": {
 			"published": { "$numberInt": "2" },
@@ -158,12 +157,11 @@
 			"endedByStatus": { "complete": { "$numberInt": "1" }, "failed": { "$numberInt": "1" } },
 			"durationMs": { "$numberLong": "2340000" }
 		},
-		"bytes": { "up": { "$numberLong": "412000000" }, "down": { "$numberLong": "905000000" } },
+		"bytes": { "up": { "$numberLong": "385000000" }, "down": { "$numberLong": "888000000" } },
 		"quality": {
-			"scoreSum": { "$numberDouble": "1296.0" },
+			"scoreSum": { "$numberDouble": "1267.0" },
 			"scoreCount": { "$numberInt": "320" },
-			"poor": { "$numberInt": "6" },
-			"lost": { "$numberInt": "0" }
+			"poor": { "$numberInt": "6" }
 		},
 		"apiCalls": {
 			"total": { "$numberInt": "6" },

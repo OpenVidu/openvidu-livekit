@@ -11,13 +11,7 @@
 		"updatedAt": { "$date": "2026-10-12T09:40:20.000Z" },
 		"endedAt": { "$date": "2026-10-12T09:40:20.000Z" },
 		"durationMs": { "$numberLong": "2300000" },
-		"request": {
-			"layout": "speaker",
-			"preset": "H264_720P_30",
-			"audioOnly": false,
-			"videoOnly": false,
-			"outputs": ["file"]
-		},
+		"request": { "layout": "speaker", "preset": "H264_720P_30", "outputs": ["file"] },
 		"outputs": [
 			{
 				"kind": "file",

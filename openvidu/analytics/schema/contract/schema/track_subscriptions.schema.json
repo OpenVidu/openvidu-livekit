@@ -19,7 +19,6 @@
 		"unsubscribedAt": { "bsonType": "date" },
 		"durationMs": { "bsonType": ["long", "int"] },
 		"closedBy": { "bsonType": "string", "enum": ["event", "reconciler"] },
-		"maxVideoQuality": { "bsonType": "string", "enum": ["LOW", "MEDIUM", "HIGH", "OFF"] },
 		"subscribeStats": {
 			"bsonType": "object",
 			"required": [

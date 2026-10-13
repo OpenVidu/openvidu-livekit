@@ -47,7 +47,7 @@
 			},
 			"connectTimeSumMs": { "$numberLong": "8600" },
 			"connectTimeCount": { "$numberInt": "6" },
-			"minutes": { "$numberDouble": "176.78" }
+			"minutes": { "$numberDouble": "176.78333333333333" }
 		},
 		"tracks": {
 			"published": { "$numberInt": "2" },
@@ -60,21 +60,21 @@
 			"endedByStatus": { "complete": { "$numberInt": "1" }, "failed": { "$numberInt": "1" } },
 			"durationMs": { "$numberLong": "2340000" }
 		},
-		"bytes": { "up": { "$numberLong": "412000000" }, "down": { "$numberLong": "905000000" } },
+		"bytes": { "up": { "$numberLong": "385000000" }, "down": { "$numberLong": "888000000" } },
 		"quality": {
-			"scoreSum": { "$numberDouble": "1296.0" },
+			"scoreSum": { "$numberDouble": "1267.0" },
 			"scoreCount": { "$numberInt": "320" },
-			"poor": { "$numberInt": "6" },
-			"lost": { "$numberInt": "0" }
+			"poor": { "$numberInt": "6" }
 		},
 		"apiCalls": {
-			"total": { "$numberInt": "6" },
+			"total": { "$numberInt": "8" },
 			"byMethod": {
 				"RoomService_CreateRoom": { "$numberInt": "1" },
 				"RoomService_DeleteRoom": { "$numberInt": "1" },
 				"RoomService_ListParticipants": { "$numberInt": "2" },
 				"Egress_StartRoomCompositeEgress": { "$numberInt": "1" },
-				"Egress_StartTrackEgress": { "$numberInt": "1" }
+				"Egress_StartTrackEgress": { "$numberInt": "1" },
+				"Ingress_CreateIngress": { "$numberInt": "2" }
 			}
 		},
 		"apiErrors": {
@@ -130,7 +130,7 @@
 			},
 			"connectTimeSumMs": { "$numberLong": "8600" },
 			"connectTimeCount": { "$numberInt": "6" },
-			"minutes": { "$numberDouble": "176.78" }
+			"minutes": { "$numberDouble": "176.78333333333333" }
 		},
 		"tracks": {
 			"published": { "$numberInt": "2" },
@@ -143,12 +143,11 @@
 			"endedByStatus": { "complete": { "$numberInt": "1" }, "failed": { "$numberInt": "1" } },
 			"durationMs": { "$numberLong": "2340000" }
 		},
-		"bytes": { "up": { "$numberLong": "412000000" }, "down": { "$numberLong": "905000000" } },
+		"bytes": { "up": { "$numberLong": "385000000" }, "down": { "$numberLong": "888000000" } },
 		"quality": {
-			"scoreSum": { "$numberDouble": "1296.0" },
+			"scoreSum": { "$numberDouble": "1267.0" },
 			"scoreCount": { "$numberInt": "320" },
-			"poor": { "$numberInt": "6" },
-			"lost": { "$numberInt": "0" }
+			"poor": { "$numberInt": "6" }
 		},
 		"apiCalls": {
 			"total": { "$numberInt": "6" },

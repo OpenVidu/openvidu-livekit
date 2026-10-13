@@ -224,7 +224,10 @@
 			},
 			"additionalProperties": false
 		},
-		"uniqueIdentities": { "bsonType": ["int", "long"], "description": "Written by the day-closing job" }
+		"uniqueIdentities": {
+			"bsonType": ["int", "long"],
+			"description": "Set by the server reconciler once the UTC day has closed"
+		}
 	},
 	"additionalProperties": false
 }

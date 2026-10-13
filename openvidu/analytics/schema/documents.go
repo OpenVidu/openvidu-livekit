@@ -267,7 +267,6 @@ type TrackSubscriptionDocument struct {
 	UnsubscribedAt     *time.Time     `bson:"unsubscribedAt,omitempty"`
 	DurationMs         *int64         `bson:"durationMs,omitempty"`
 	ClosedBy           string         `bson:"closedBy,omitempty"`
-	MaxVideoQuality    string         `bson:"maxVideoQuality,omitempty"`
 	SubscribeStats     *RtpFinalStats `bson:"subscribeStats,omitempty"`
 	SchemaVersion      int32          `bson:"schemaVersion"`
 	ExpiresAt          *time.Time     `bson:"expiresAt"`

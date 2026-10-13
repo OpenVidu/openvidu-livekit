@@ -230,7 +230,7 @@
 		"tracks": {
 			"published": { "$numberInt": "0" },
 			"bySource": {},
-			"subscribed": { "$numberInt": "2" },
+			"subscribed": { "$numberInt": "0" },
 			"subscribeFailures": { "$numberInt": "0" }
 		},
 		"bytes": { "up": { "$numberLong": "500000" }, "down": { "$numberLong": "250000000" } },
@@ -274,7 +274,7 @@
 		"tracks": {
 			"published": { "$numberInt": "0" },
 			"bySource": {},
-			"subscribed": { "$numberInt": "2" },
+			"subscribed": { "$numberInt": "0" },
 			"subscribeFailures": { "$numberInt": "0" }
 		},
 		"bytes": { "up": { "$numberLong": "400000" }, "down": { "$numberLong": "30000000" } },
@@ -317,12 +317,12 @@
 		"tracks": {
 			"published": { "$numberInt": "0" },
 			"bySource": {},
-			"subscribed": { "$numberInt": "1" },
+			"subscribed": { "$numberInt": "0" },
 			"subscribeFailures": { "$numberInt": "0" }
 		},
 		"bytes": { "up": { "$numberLong": "100000" }, "down": { "$numberLong": "6000000" } },
 		"quality": {
-			"scoreSum": { "$numberDouble": "80.0" },
+			"scoreSum": { "$numberDouble": "51.0" },
 			"scoreCount": { "$numberInt": "12" },
 			"minScore": { "$numberDouble": "4.2" },
 			"poor": { "$numberInt": "0" },
@@ -533,7 +533,7 @@
 		"tracks": {
 			"published": { "$numberInt": "0" },
 			"bySource": {},
-			"subscribed": { "$numberInt": "3" },
+			"subscribed": { "$numberInt": "0" },
 			"subscribeFailures": { "$numberInt": "0" }
 		},
 		"bytes": { "up": { "$numberLong": "300000" }, "down": { "$numberLong": "41000000" } },

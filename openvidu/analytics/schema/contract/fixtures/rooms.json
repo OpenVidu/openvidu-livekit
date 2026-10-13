@@ -38,9 +38,9 @@
 			"byType": { "room_composite": { "$numberInt": "1" }, "track": { "$numberInt": "1" } }
 		},
 		"ingress": { "sessions": { "$numberInt": "0" }, "active": { "$numberInt": "0" } },
-		"bytes": { "up": { "$numberLong": "412000000" }, "down": { "$numberLong": "905000000" } },
+		"bytes": { "up": { "$numberLong": "385000000" }, "down": { "$numberLong": "888000000" } },
 		"quality": {
-			"scoreSum": { "$numberDouble": "1296.0" },
+			"scoreSum": { "$numberDouble": "1267.0" },
 			"scoreCount": { "$numberInt": "320" },
 			"minScore": { "$numberDouble": "1.8" },
 			"poor": { "$numberInt": "6" },
@@ -101,7 +101,7 @@
 			"byType": { "room_composite": { "$numberInt": "1" } }
 		},
 		"ingress": { "sessions": { "$numberInt": "2" }, "active": { "$numberInt": "1" } },
-		"bytes": { "up": { "$numberLong": "98500000" }, "down": { "$numberLong": "61200000" } },
+		"bytes": { "up": { "$numberLong": "98800000" }, "down": { "$numberLong": "99120000" } },
 		"quality": {
 			"scoreSum": { "$numberDouble": "486.0" },
 			"scoreCount": { "$numberInt": "120" },

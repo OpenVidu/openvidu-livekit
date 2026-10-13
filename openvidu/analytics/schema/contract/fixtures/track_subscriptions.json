@@ -13,7 +13,6 @@
 		"unsubscribedAt": { "$date": "2026-10-12T09:10:00.000Z" },
 		"durationMs": { "$numberLong": "535000" },
 		"closedBy": "event",
-		"maxVideoQuality": "HIGH",
 		"subscribeStats": {
 			"bytes": { "$numberLong": "110000000" },
 			"packets": { "$numberInt": "95000" },
@@ -43,7 +42,6 @@
 		"unsubscribedAt": { "$date": "2026-10-12T09:40:00.000Z" },
 		"durationMs": { "$numberLong": "1795000" },
 		"closedBy": "event",
-		"maxVideoQuality": "MEDIUM",
 		"subscribeStats": {
 			"bytes": { "$numberLong": "180000000" },
 			"packets": { "$numberInt": "170000" },
@@ -79,6 +77,9 @@
 		"roomSid": "RM_bQ7tVnW2cErT",
 		"subscriberSid": "PA_er1nJ0in9Qa",
 		"subscriberIdentity": "erin",
+		"publisherSid": "PA_dav3Pub6Mn2",
+		"publisherIdentity": "dave",
+		"source": "CAMERA",
 		"status": "requested",
 		"schemaVersion": { "$numberInt": "1" },
 		"expiresAt": null
@@ -97,7 +98,6 @@
 		"unsubscribedAt": { "$date": "2026-10-12T10:20:00.000Z" },
 		"durationMs": { "$numberLong": "1185000" },
 		"closedBy": "event",
-		"maxVideoQuality": "HIGH",
 		"subscribeStats": {
 			"bytes": { "$numberLong": "660000000" },
 			"packets": { "$numberInt": "470000" },
@@ -124,7 +124,6 @@
 		"source": "CAMERA",
 		"status": "subscribed",
 		"subscribedAt": { "$date": "2026-10-12T10:30:05.000Z" },
-		"maxVideoQuality": "HIGH",
 		"schemaVersion": { "$numberInt": "1" },
 		"expiresAt": null
 	}
