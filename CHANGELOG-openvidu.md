@@ -9,6 +9,7 @@ OpenVidu. The changes of the upstream project are listed in `CHANGELOG.md`.
 
 - **New analytics data model**: each node writes rooms, participants, tracks, subscriptions, egress, ingress, raw events, statistics and 5-minute, hourly and daily rollups to MongoDB in idempotent batches every `openvidu.analytics.interval`, with a retention per data class and a node heartbeat. Collections, validators and indexes are created or updated at startup. New `openvidu.analytics` options: `retention`, `stats_detail`, `anonymize_ip`, `store_metadata`, `events.store_types`, `queue` and `validation_action`; new metrics `openvidu_analytics_*`.
 - **API calls are analytics events**: every Twirp API response emits an `API_CALL` event, counted per method in the rollups.
+- **Analytics reconciler**: rooms, participants (with their tracks and subscriptions), egress and ingress sessions whose end event never arrived are closed within about 2 minutes of a node crash, with an end time estimated from their last stats or event, `closedBy: reconciler` and the reason `RECONCILED`, without ever closing an entity that still receives stats. One node at a time runs it every `openvidu.analytics.fixer_interval`; new options `openvidu.analytics.reconciler.enabled` and `max_closures_per_run`, and metrics `openvidu_analytics_reconciler_*`.
 
 ### Changed
 
@@ -21,7 +22,7 @@ OpenVidu. The changes of the upstream project are listed in `CHANGELOG.md`.
 
 ### Removed
 
-- **Legacy analytics writer**: the `stats`, `active_entities` and `last_alive` collections, the legacy `events` document shape, the active-entities fixer and the Redis analytics sink.
+- **Legacy analytics writer**: the `stats`, `active_entities` and `last_alive` collections, the legacy `events` document shape, the active-entities fixer (replaced by the analytics reconciler) and the Redis analytics sink.
 
 ### Fixed
 
