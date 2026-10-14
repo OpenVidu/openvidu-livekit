@@ -47,6 +47,7 @@ type AnalyticsConfig struct {
 	Queue            AnalyticsQueue      `yaml:"queue,omitempty"`
 	ValidationAction string              `yaml:"validation_action,omitempty"`
 	Reconciler       AnalyticsReconciler `yaml:"reconciler,omitempty"`
+	Migration        AnalyticsMigration  `yaml:"migration,omitempty"`
 }
 
 // AnalyticsRetention holds the retention per data class.
@@ -75,6 +76,15 @@ type AnalyticsReconciler struct {
 	// Enabled defaults to true when absent.
 	Enabled           *bool `yaml:"enabled,omitempty"`
 	MaxClosuresPerRun int   `yaml:"max_closures_per_run,omitempty"`
+}
+
+// AnalyticsMigration configures the migration of the data of the legacy analytics writer.
+type AnalyticsMigration struct {
+	// Enabled defaults to true when absent.
+	Enabled *bool `yaml:"enabled,omitempty"`
+	// Rate is the maximum number of legacy documents replayed per second; 0 means unthrottled.
+	Rate      *int `yaml:"rate,omitempty"`
+	BatchSize int  `yaml:"batch_size,omitempty"`
 }
 
 // Duration is a duration in Go syntax ("10s", "168h"). A bare integer is read as nanoseconds, as the former
@@ -173,6 +183,14 @@ type AnalyticsSettings struct {
 	MaxStats         int
 	ValidationAction string
 	Reconciler       ReconcilerSettings
+	Migration        MigrationSettings
+}
+
+// MigrationSettings holds the effective legacy data migration configuration.
+type MigrationSettings struct {
+	Enabled   bool
+	Rate      int
+	BatchSize int
 }
 
 // ReconcilerSettings holds the effective reconciler configuration.
@@ -204,6 +222,8 @@ const (
 	DefaultQueueMaxStats          = 50000
 	DefaultValidationAction       = "warn"
 	DefaultMaxClosuresPerRun      = 500
+	DefaultMigrationRate          = 2000
+	DefaultMigrationBatchSize     = 500
 )
 
 const keyPrefix = "openvidu.analytics."
@@ -225,6 +245,14 @@ func (c AnalyticsConfig) Settings() (AnalyticsSettings, []string, error) {
 			Enabled:           c.Reconciler.Enabled == nil || *c.Reconciler.Enabled,
 			MaxClosuresPerRun: c.Reconciler.MaxClosuresPerRun,
 		},
+		Migration: MigrationSettings{
+			Enabled:   c.Migration.Enabled == nil || *c.Migration.Enabled,
+			Rate:      DefaultMigrationRate,
+			BatchSize: c.Migration.BatchSize,
+		},
+	}
+	if c.Migration.Rate != nil {
+		settings.Migration.Rate = *c.Migration.Rate
 	}
 	if settings.Database == "" {
 		settings.Database = DefaultAnalyticsDatabase
@@ -243,6 +271,9 @@ func (c AnalyticsConfig) Settings() (AnalyticsSettings, []string, error) {
 	}
 	if settings.Reconciler.MaxClosuresPerRun == 0 {
 		settings.Reconciler.MaxClosuresPerRun = DefaultMaxClosuresPerRun
+	}
+	if settings.Migration.BatchSize == 0 {
+		settings.Migration.BatchSize = DefaultMigrationBatchSize
 	}
 
 	durations := []struct {
@@ -352,6 +383,12 @@ func (s AnalyticsSettings) validate() error {
 		return fmt.Errorf("%sreconciler.max_closures_per_run must be at least 1, got %d", keyPrefix,
 			s.Reconciler.MaxClosuresPerRun)
 	}
+	if s.Migration.Rate < 0 {
+		return fmt.Errorf("%smigration.rate must not be negative, got %d", keyPrefix, s.Migration.Rate)
+	}
+	if s.Migration.BatchSize < 1 || s.Migration.BatchSize > 10000 {
+		return fmt.Errorf("%smigration.batch_size must be between 1 and 10000, got %d", keyPrefix, s.Migration.BatchSize)
+	}
 	return nil
 }
 
@@ -382,6 +419,9 @@ func (s AnalyticsSettings) LogFields() []any {
 		"validation_action", s.ValidationAction,
 		"reconciler.enabled", s.Reconciler.Enabled,
 		"reconciler.max_closures_per_run", s.Reconciler.MaxClosuresPerRun,
+		"migration.enabled", s.Migration.Enabled,
+		"migration.rate", s.Migration.Rate,
+		"migration.batch_size", s.Migration.BatchSize,
 	}
 }
 

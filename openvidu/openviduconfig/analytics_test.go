@@ -100,6 +100,7 @@ func TestMinimalConfigurationDefaults(t *testing.T) {
 		MaxStats:         50000,
 		ValidationAction: "warn",
 		Reconciler:       ReconcilerSettings{Enabled: true, MaxClosuresPerRun: 500},
+		Migration:        MigrationSettings{Enabled: true, Rate: 2000, BatchSize: 500},
 	}, settings)
 
 	require.Len(t, settings.StoreTypes, len(StorableEventTypes)-3)
@@ -133,6 +134,21 @@ openvidu:
 `).Settings()
 	require.NoError(t, err)
 	require.Equal(t, ReconcilerSettings{Enabled: true, MaxClosuresPerRun: 500}, settings.Reconciler)
+}
+
+func TestMigrationSettings(t *testing.T) {
+	settings, _, err := parseAnalytics(t, `
+openvidu:
+  analytics:
+    enabled: true
+    mongo_url: mongodb://localhost:27017
+    migration:
+      enabled: false
+      rate: 0
+      batch_size: 100
+`).Settings()
+	require.NoError(t, err)
+	require.Equal(t, MigrationSettings{Enabled: false, Rate: 0, BatchSize: 100}, settings.Migration)
 }
 
 func TestStatsDetailDefaultFollowsTheEdition(t *testing.T) {
@@ -194,6 +210,10 @@ func TestInvalidValuesNameTheKey(t *testing.T) {
 		{"small stats queue", func(c *AnalyticsConfig) { c.Queue.MaxStats = 10 }, "openvidu.analytics.queue.max_stats"},
 		{"negative closures per run", func(c *AnalyticsConfig) { c.Reconciler.MaxClosuresPerRun = -1 },
 			"openvidu.analytics.reconciler.max_closures_per_run"},
+		{"negative migration rate", func(c *AnalyticsConfig) { rate := -1; c.Migration.Rate = &rate },
+			"openvidu.analytics.migration.rate"},
+		{"huge migration batch", func(c *AnalyticsConfig) { c.Migration.BatchSize = 20000 },
+			"openvidu.analytics.migration.batch_size"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
