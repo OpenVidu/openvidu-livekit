@@ -288,6 +288,30 @@ func (s *Store) Identities(ctx context.Context, sids []string) (map[string]strin
 	return identities, nil
 }
 
+// ExistingEvents returns which of the raw event ids are stored.
+func (s *Store) ExistingEvents(ctx context.Context, ids []string) (map[string]bool, error) {
+	existing := map[string]bool{}
+	if len(ids) == 0 {
+		return existing, nil
+	}
+	s.roundTrips++
+	cursor, err := s.db.Collection(schema.CollectionEvents).Find(ctx,
+		bson.D{{Key: "_id", Value: bson.D{{Key: "$in", Value: ids}}}}, options.Find().SetProjection(bson.D{{Key: "_id", Value: 1}}))
+	if err != nil {
+		return nil, err
+	}
+	var events []struct {
+		ID string `bson:"_id"`
+	}
+	if err := cursor.All(ctx, &events); err != nil {
+		return nil, err
+	}
+	for _, event := range events {
+		existing[event.ID] = true
+	}
+	return existing, nil
+}
+
 // Tracks returns the references of the tracks found and, per publisher among publisherSids, its published tracks.
 func (s *Store) Tracks(ctx context.Context, trackSids []string, publisherSids []string) (map[string]projection.TrackRef, map[string][]string, error) {
 	refs := map[string]projection.TrackRef{}

@@ -52,6 +52,9 @@ type Refs struct {
 	ParticipantTracks map[string][]string
 	// IngressStatus maps ingress IDs to the last state status seen before this event, empty when unknown.
 	IngressStatus map[string]string
+	// Reconciled holds the entities the reconciler closed before their close event arrived: their closure is
+	// already counted in the rollups.
+	Reconciled map[string]bool
 }
 
 // TrackRef describes a published track.
@@ -187,11 +190,6 @@ func (p *projector) upsert(collection string, id string, f *fields) {
 // another entity) that must not create a partial document.
 func (p *projector) amend(collection string, id string, f *fields) {
 	p.result.Updates = append(p.result.Updates, Update{Collection: collection, ID: id, Pipeline: []bson.D{stage(f.doc())}})
-}
-
-func (p *projector) cascade(collection string, filter bson.D, f *fields) {
-	p.result.Cascades = append(p.result.Cascades,
-		Update{Collection: collection, Filter: filter, Pipeline: []bson.D{stage(f.doc())}})
 }
 
 func (p *projector) retentionMs(class schema.RetentionClass) int64 {

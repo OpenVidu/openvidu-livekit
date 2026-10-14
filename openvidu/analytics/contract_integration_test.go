@@ -35,6 +35,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/livekit/livekit-server/openvidu/analytics/projection"
 	"github.com/livekit/livekit-server/openvidu/analytics/schema"
 	"github.com/livekit/livekit-server/openvidu/analytics/store"
 	"github.com/livekit/livekit-server/openvidu/analytics/testutil"
@@ -44,7 +45,8 @@ import (
 // The canonical scenario of the data model contract (dashboard-ce/typings/contract/fixtures/scenario.ts): one closed
 // room on node alpha (09:00–09:45 UTC) and one active room on node beta (since 10:00 UTC) on 2026-10-12. The raw
 // events of the vendored fixtures are replayed as recorded; the other events and the stats that the documents
-// imply are built here.
+// imply are built here. The leave event of the agent is lost: the reconciler closes it, and computes the unique
+// identities of the day once it has closed.
 
 const (
 	scNodeAlpha     = "ND_alpha8Kq2Lm"
@@ -108,6 +110,7 @@ func TestContractFixtures(t *testing.T) {
 			require.NoError(t, s.Heartbeat(ctx, node.id, scServerVersion, scRegion, node.firstSeen))
 			require.NoError(t, s.Heartbeat(ctx, node.id, scServerVersion, scRegion, sat("10:35:10")))
 		}
+		reconcileScenario(t, db, p.opts)
 
 		for _, collection := range []string{
 			schema.CollectionRooms, schema.CollectionParticipants, schema.CollectionTracks,
@@ -137,6 +140,24 @@ func TestContractFixtures(t *testing.T) {
 		require.NoError(t, p.apply(ctx, nil, []*statsEntry{{stats: lastFlush}}))
 		compareTrackStats(t, db, "track")
 	})
+}
+
+// reconcileScenario runs the reconciler twice at 10:35:20, with LiveKit listing the active room and its participants
+// only, which closes the agent of the closed room, then once after the day has closed.
+func reconcileScenario(t *testing.T, db *mongo.Database, opts projection.Options) {
+	live := newFakeLive()
+	live.addRoom(scActiveName, scActiveRoom, scDave, scErin, scIngress2, scStreamer)
+	r := newReconciler(store.New(db), live, opts, reconcilerSettings{batchInterval: 10 * time.Second,
+		interval: time.Minute, cleanupInterval: 3 * time.Minute, maxClosures: 500, entitiesRetention: 2160 * time.Hour},
+		scNodeAlpha, buildReconcilerMetrics())
+	r.log = (&capturedLog{}).sink()
+	now := sat("10:35:20")
+	r.now = func() time.Time { return now }
+	for range 2 {
+		require.NoError(t, r.reconcile(context.Background(), false).err)
+	}
+	now = time.Date(2026, 10, 13, 0, 10, 0, 0, time.UTC)
+	require.NoError(t, r.dailyUniqueIdentities(context.Background(), now))
 }
 
 func contractDatabase(t *testing.T, client *mongo.Client, name string) *mongo.Database {
@@ -202,6 +223,9 @@ func contractEvents(t *testing.T) []*livekit.AnalyticsEvent {
 	require.NoError(t, err)
 	var events []*livekit.AnalyticsEvent
 	for _, raw := range recorded {
+		if raw.Lookup("synthetic").Boolean() {
+			continue
+		}
 		events = append(events, eventFromFixture(t, raw))
 	}
 	events = append(events, scenarioEvents()...)
@@ -551,7 +575,6 @@ func scenarioEvents() []*livekit.AnalyticsEvent {
 			scRTPStats(sat("09:10:05"), sat("09:40:00"), 170_000, 180_000_000, 900, 0, 2), sat("09:40:00")),
 		recorder.leftEvent("AE_paLeftRec0001", sat("09:40:05"), livekit.DisconnectReason_CLIENT_INITIATED, false),
 		scEgress("AE_egEnding00001", livekit.AnalyticsEventType_EGRESS_UPDATED, recordingEgress(livekit.EgressStatus_EGRESS_ENDING, sat("09:40:06")), sat("09:40:06")),
-		agent.leftEvent("AE_paLeftAgent01", sat("09:44:59"), livekit.DisconnectReason_ROOM_DELETED, false),
 		scAPICall("AE_apiDeleteRm01", scNodeAlpha, "livekit.RoomService", "DeleteRoom", 200, scClosedName, sat("09:45:00")),
 		bob2.leftEvent("AE_paLeftBob2001", sat("09:45:00"), livekit.DisconnectReason_ROOM_DELETED, false),
 
@@ -873,11 +896,8 @@ func compareCollection(t *testing.T, db *mongo.Database, collection string, exac
 		require.NoError(t, bson.Unmarshal(raw, &document))
 		expected := normalizeDocument(document)
 		id := fmt.Sprint(expected["_id"])
-		if collection == schema.CollectionSchemaMeta && id == "migration" {
+		if collection == schema.CollectionSchemaMeta && (id == "migration" || id == "reconciler") {
 			continue
-		}
-		if collection == schema.CollectionAnalyticsDaily {
-			delete(expected, "uniqueIdentities")
 		}
 		expectedIDs[id] = true
 		actual, ok := stored[id]

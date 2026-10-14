@@ -258,12 +258,12 @@
 		"kind": "AGENT",
 		"status": "left",
 		"joinedAt": { "$date": "2026-10-12T09:00:10.000Z" },
-		"leftAt": { "$date": "2026-10-12T09:44:59.000Z" },
-		"durationMs": { "$numberLong": "2689000" },
-		"expiresAt": { "$date": "2027-01-10T09:44:59.000Z" },
+		"leftAt": { "$date": "2026-10-12T09:44:30.000Z" },
+		"durationMs": { "$numberLong": "2660000" },
+		"expiresAt": { "$date": "2027-01-10T09:44:30.000Z" },
 		"activeAt": { "$date": "2026-10-12T09:00:11.000Z" },
-		"disconnectReason": "ROOM_DELETED",
-		"closedBy": "event",
+		"disconnectReason": "RECONCILED",
+		"closedBy": "reconciler",
 		"connectTimeMs": { "$numberInt": "900" },
 		"connectionType": "udp",
 		"region": "eu-west",
@@ -287,7 +287,7 @@
 			"lastScore": { "$numberDouble": "4.0" },
 			"lastScoreAt": { "$date": "2026-10-12T09:44:30.000Z" }
 		},
-		"lastEventAt": { "$date": "2026-10-12T09:44:59.000Z" },
+		"lastEventAt": { "$date": "2026-10-12T09:00:11.000Z" },
 		"lastStatsAt": { "$date": "2026-10-12T09:44:30.000Z" }
 	},
 	{

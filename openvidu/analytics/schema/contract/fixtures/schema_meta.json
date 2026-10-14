@@ -33,5 +33,26 @@
 		"finishedAt": { "$date": "2026-10-12T08:20:00.000Z" },
 		"nodeId": "ND_alpha8Kq2Lm",
 		"legacyRetainedUntil": { "$date": "2026-11-13T08:00:00.000Z" }
+	},
+	{
+		"_id": "reconciler",
+		"lastRunAt": { "$date": "2026-10-12T10:35:20.000Z" },
+		"lastRunDurationMs": { "$numberLong": "38" },
+		"nodeId": "ND_alpha8Kq2Lm",
+		"candidates": {
+			"room": { "$numberInt": "0" },
+			"participant": { "$numberInt": "2" },
+			"egress": { "$numberInt": "0" },
+			"ingressSession": { "$numberInt": "0" }
+		},
+		"closed": {
+			"room": { "$numberInt": "0" },
+			"participant": { "$numberInt": "1" },
+			"track": { "$numberInt": "0" },
+			"subscription": { "$numberInt": "0" },
+			"egress": { "$numberInt": "0" },
+			"ingressSession": { "$numberInt": "0" }
+		},
+		"partial": false
 	}
 ]

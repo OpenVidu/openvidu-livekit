@@ -133,43 +133,49 @@ func (p *projector) participant() {
 		f.set("disconnectReason", cond(closedByEvent, field("disconnectReason"), info.GetDisconnectReason().String()))
 		f.set("closedBy", byEvent)
 		room.set("internal.closedSids", union("internal.closedSids", sid))
-		p.closeParticipantMedia(sid)
+		p.result.Cascades = append(p.result.Cascades,
+			mediaCascades(sid, p.refs.ParticipantTracks[sid], p.ts, byEvent, p.retentionMs(schema.RetentionTracks))...)
 	}
 
 	p.upsert(schema.CollectionParticipants, sid, f)
 	p.upsert(schema.CollectionRooms, roomSid, room)
 }
 
-// closeParticipantMedia closes, with the participant's leave time, the tracks it still publishes, the subscriptions
-// to those tracks and its own open subscriptions; LiveKit does not always emit their closing events.
-func (p *projector) closeParticipantMedia(sid string) {
-	expiresAt := p.ts.Add(time.Duration(p.retentionMs(schema.RetentionTracks)) * time.Millisecond)
+// mediaCascades close, at the participant's end time, the tracks it still publishes, the subscriptions to the tracks
+// it published and its own open subscriptions; LiveKit does not always emit their closing events.
+func mediaCascades(sid string, published []string, at time.Time, closedBy string, tracksRetentionMs int64) []Update {
+	expiresAt := at.Add(time.Duration(tracksRetentionMs) * time.Millisecond)
 
 	tracks := newFields()
 	tracks.set("status", trackUnpublished)
-	tracks.set("unpublishedAt", p.ts)
-	tracks.set("closedBy", byEvent)
-	tracks.set("durationMs", subtract(p.ts, field("publishedAt")))
+	tracks.set("unpublishedAt", at)
+	tracks.set("closedBy", closedBy)
+	tracks.set("durationMs", subtract(at, field("publishedAt")))
 	tracks.set("expiresAt", expiresAt)
-	p.cascade(schema.CollectionTracks, bson.D{{Key: "participantSid", Value: sid}, {Key: "status", Value: trackPublished}}, tracks)
+	cascades := []Update{{Collection: schema.CollectionTracks,
+		Filter:   bson.D{{Key: "participantSid", Value: sid}, {Key: "status", Value: trackPublished}},
+		Pipeline: []bson.D{stage(tracks.doc())}}}
 
 	subscriptions := newFields()
 	subscriptions.set("status", subscriptionUnsubscribed)
-	subscriptions.set("unsubscribedAt", cond(exists("subscribedAt"), p.ts, remove))
-	subscriptions.set("closedBy", byEvent)
-	subscriptions.set("durationMs", cond(exists("subscribedAt"), subtract(p.ts, field("subscribedAt")), remove))
+	subscriptions.set("unsubscribedAt", cond(exists("subscribedAt"), at, remove))
+	subscriptions.set("closedBy", closedBy)
+	subscriptions.set("durationMs", cond(exists("subscribedAt"), subtract(at, field("subscribedAt")), remove))
 	subscriptions.set("expiresAt", expiresAt)
 	open := bson.D{{Key: "$in", Value: bson.A{subscriptionRequested, subscriptionSubscribed}}}
-	p.cascade(schema.CollectionTrackSubscriptions,
-		bson.D{{Key: "subscriberSid", Value: sid}, {Key: "status", Value: open}}, subscriptions)
-	if published := p.refs.ParticipantTracks[sid]; len(published) > 0 {
+	cascades = append(cascades, Update{Collection: schema.CollectionTrackSubscriptions,
+		Filter:   bson.D{{Key: "subscriberSid", Value: sid}, {Key: "status", Value: open}},
+		Pipeline: []bson.D{stage(subscriptions.doc())}})
+	if len(published) > 0 {
 		trackSids := bson.A{}
 		for _, trackSid := range published {
 			trackSids = append(trackSids, trackSid)
 		}
-		p.cascade(schema.CollectionTrackSubscriptions,
-			bson.D{{Key: "trackSid", Value: bson.D{{Key: "$in", Value: trackSids}}}, {Key: "status", Value: open}}, subscriptions)
+		cascades = append(cascades, Update{Collection: schema.CollectionTrackSubscriptions,
+			Filter:   bson.D{{Key: "trackSid", Value: bson.D{{Key: "$in", Value: trackSids}}}, {Key: "status", Value: open}},
+			Pipeline: []bson.D{stage(subscriptions.doc())}})
 	}
+	return cascades
 }
 
 // joinTime reads ParticipantInfo.joined_at_ms, falling back to joined_at in seconds and then to the event time.

@@ -556,6 +556,26 @@
 		}
 	},
 	{
+		"_id": "AE_SYN_PA_ag3ntAssist1",
+		"type": "PARTICIPANT_LEFT",
+		"ts": { "$date": "2026-10-12T09:44:30.000Z" },
+		"roomSid": "RM_aLkq3ZpD9wXy",
+		"roomName": "Daily-Standup",
+		"nodeId": "ND_alpha8Kq2Lm",
+		"synthetic": true,
+		"participantSid": "PA_ag3ntAssist1",
+		"identity": "agent-assistant",
+		"payload": {
+			"room": { "sid": "RM_aLkq3ZpD9wXy", "name": "Daily-Standup" },
+			"participant": {
+				"sid": "PA_ag3ntAssist1",
+				"identity": "agent-assistant",
+				"disconnect_reason": "RECONCILED"
+			},
+			"reconciler": { "reason": "absent-live" }
+		}
+	},
+	{
 		"_id": "AE_egEnded000001",
 		"type": "EGRESS_ENDED",
 		"ts": { "$date": "2026-10-12T09:40:20.000Z" },

@@ -81,6 +81,43 @@
 		},
 		{
 			"bsonType": "object",
+			"required": ["_id", "lastRunAt", "lastRunDurationMs", "nodeId", "candidates", "closed", "partial"],
+			"properties": {
+				"_id": { "bsonType": "string", "enum": ["reconciler"] },
+				"lastRunAt": { "bsonType": "date" },
+				"lastRunDurationMs": { "bsonType": ["long", "int"] },
+				"nodeId": { "bsonType": "string" },
+				"candidates": {
+					"bsonType": "object",
+					"required": ["room", "participant", "egress", "ingressSession"],
+					"properties": {
+						"room": { "bsonType": ["int", "long"] },
+						"participant": { "bsonType": ["int", "long"] },
+						"egress": { "bsonType": ["int", "long"] },
+						"ingressSession": { "bsonType": ["int", "long"] }
+					},
+					"additionalProperties": false
+				},
+				"closed": {
+					"bsonType": "object",
+					"required": ["room", "participant", "egress", "ingressSession", "track", "subscription"],
+					"properties": {
+						"room": { "bsonType": ["int", "long"] },
+						"participant": { "bsonType": ["int", "long"] },
+						"egress": { "bsonType": ["int", "long"] },
+						"ingressSession": { "bsonType": ["int", "long"] },
+						"track": { "bsonType": ["int", "long"] },
+						"subscription": { "bsonType": ["int", "long"] }
+					},
+					"additionalProperties": false
+				},
+				"partial": { "bsonType": "bool" },
+				"lastError": { "bsonType": "string" }
+			},
+			"additionalProperties": false
+		},
+		{
+			"bsonType": "object",
 			"required": ["_id"],
 			"properties": { "_id": { "bsonType": "string", "enum": ["dashboard"] } },
 			"additionalProperties": true

@@ -40,11 +40,17 @@ func (p *projector) counters(counters map[string]any) {
 
 // fiveMinute adds counters to the 5-minute documents of both scopes.
 func (p *projector) fiveMinute(counters map[string]any) {
-	for _, scope := range scopes(p.event.GetNodeId()) {
-		p.result.Increments = append(p.result.Increments, Increment{
-			Collection: schema.CollectionAnalytics5Min, Scope: scope, Bucket: p.ts.Truncate(fiveMinutes), Counters: counters,
+	p.result.Increments = append(p.result.Increments, fiveMinuteIncrements(p.event.GetNodeId(), p.ts, counters)...)
+}
+
+func fiveMinuteIncrements(nodeID string, at time.Time, counters map[string]any) []Increment {
+	var increments []Increment
+	for _, scope := range scopes(nodeID) {
+		increments = append(increments, Increment{
+			Collection: schema.CollectionAnalytics5Min, Scope: scope, Bucket: at.Truncate(fiveMinutes), Counters: counters,
 		})
 	}
+	return increments
 }
 
 func periodIncrements(nodeID string, at time.Time, counters map[string]any) []Increment {
@@ -67,6 +73,11 @@ func RoomEndedIncrements(nodeID string, endedAt time.Time, participants int32) [
 var one = int32(1)
 
 func (p *projector) rollups() {
+	if id := ClosedEntity(p.event); id != "" && p.refs.Reconciled[id] {
+		// The reconciler counted this closure; the real event only corrects the closure fields.
+		p.result.EndedRoom = ""
+		return
+	}
 	switch p.event.GetType() {
 	case livekit.AnalyticsEventType_ROOM_CREATED:
 		p.counters(map[string]any{"rooms.created": one})

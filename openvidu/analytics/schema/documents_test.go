@@ -64,6 +64,8 @@ func newDocument(t *testing.T, collection string, raw bson.Raw) any {
 			return &SchemaMetaConfig{}
 		case SchemaMetaMigrationID:
 			return &SchemaMetaMigration{}
+		case SchemaMetaReconcilerID:
+			return &SchemaMetaReconciler{}
 		}
 	}
 	t.Fatalf("no document type for %s %s", collection, raw.Lookup("_id"))

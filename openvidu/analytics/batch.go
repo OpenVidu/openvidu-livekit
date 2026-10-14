@@ -65,6 +65,7 @@ type batchStore interface {
 	InsertStats(ctx context.Context, stats []schema.TrackStatsDocument) error
 	ParticipantSessions(ctx context.Context, roomSids []string) (map[string]int32, error)
 	Identities(ctx context.Context, sids []string) (map[string]string, error)
+	ExistingEvents(ctx context.Context, ids []string) (map[string]bool, error)
 	Tracks(ctx context.Context, trackSids []string, publisherSids []string) (map[string]projection.TrackRef, map[string][]string, error)
 	Heartbeat(ctx context.Context, nodeID string, serverVersion string, region string, at time.Time) error
 	RoundTrips() int
@@ -89,9 +90,15 @@ func (p *processor) apply(ctx context.Context, events []*eventEntry, stats []*st
 	if err := p.prefetch(ctx, events); err != nil {
 		return err
 	}
+	reconciled, err := p.reconciled(ctx, events)
+	if err != nil {
+		return err
+	}
 	for _, entry := range events {
 		if !entry.projected {
-			entry.result = projection.Event(entry.event, p.cache.refsFor(entry.event), p.opts)
+			refs := p.cache.refsFor(entry.event)
+			refs.Reconciled = reconciled
+			entry.result = projection.Event(entry.event, refs, p.opts)
 			entry.projected = true
 			if !projection.Supported(entry.event.GetType()) && p.onUnsupported != nil {
 				p.onUnsupported(entry.event)
@@ -169,6 +176,35 @@ func (p *processor) prefetch(ctx context.Context, events []*eventEntry) error {
 		p.cache.identities.Add(sid, identity)
 	}
 	return nil
+}
+
+// reconciled returns the entities that close events of the batch end and that the reconciler already closed, found by
+// the synthetic event of their closure with one query.
+func (p *processor) reconciled(ctx context.Context, events []*eventEntry) (map[string]bool, error) {
+	entities := map[string]string{}
+	var ids []string
+	for _, entry := range events {
+		if entry.projected {
+			continue
+		}
+		if entity := projection.ClosedEntity(entry.event); entity != "" {
+			id := projection.SyntheticEventID(entity)
+			entities[id] = entity
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	existing, err := p.store.ExistingEvents(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	reconciled := map[string]bool{}
+	for id := range existing {
+		reconciled[entities[id]] = true
+	}
+	return reconciled, nil
 }
 
 func isTrackFamily(eventType livekit.AnalyticsEventType) bool {

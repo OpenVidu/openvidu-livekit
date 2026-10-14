@@ -23,8 +23,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bsm/redislock"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
+	redisLiveKit "github.com/livekit/protocol/redis"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -49,9 +51,51 @@ const (
 )
 
 var (
-	mu       sync.Mutex
-	instance *writer
+	mu         sync.Mutex
+	instance   *writer
+	reconciles *reconcilerRunner
 )
+
+// reconcilerRunner runs the reconciler loop in its own goroutine between Start and Stop.
+type reconcilerRunner struct {
+	reconciler *reconciler
+	locks      locker
+
+	mu      sync.Mutex
+	stopped bool
+	cancel  context.CancelFunc
+	done    chan struct{}
+}
+
+func (r *reconcilerRunner) start() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.stopped || r.cancel != nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	r.cancel = cancel
+	r.done = make(chan struct{})
+	go func(done chan struct{}) {
+		defer close(done)
+		r.reconciler.loop(ctx, r.locks)
+	}(r.done)
+}
+
+func (r *reconcilerRunner) stop(ctx context.Context) {
+	r.mu.Lock()
+	r.stopped = true
+	cancel, done := r.cancel, r.done
+	r.mu.Unlock()
+	if cancel == nil {
+		return
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
+}
 
 // Node identifies the server node that writes.
 type Node struct {
@@ -60,8 +104,8 @@ type Node struct {
 }
 
 // InitializeAnalytics validates the configuration, connects to MongoDB, initializes the collections, validators,
-// indexes and schema_meta, and prepares the writer. Any failure stops the server.
-func InitializeAnalytics(conf *config.Config, node Node, _ livekithelperinterface.LivekitHelper) error {
+// indexes and schema_meta, and prepares the writer and the reconciler. Any failure stops the server.
+func InitializeAnalytics(conf *config.Config, node Node, helper livekithelperinterface.LivekitHelper) error {
 	settings, warnings, err := conf.OpenVidu.Analytics.Settings()
 	if err != nil {
 		return err
@@ -80,14 +124,53 @@ func InitializeAnalytics(conf *config.Config, node Node, _ livekithelperinterfac
 	if err := client.Ping(ctx, nil); err != nil {
 		return fmt.Errorf("analytics: MongoDB unreachable: %w", err)
 	}
-	w, err := initialize(ctx, client.Database(settings.Database), settings, node)
+	db := client.Database(settings.Database)
+	w, err := initialize(ctx, db, settings, node)
+	if err != nil {
+		return err
+	}
+	runner, err := newReconcilerRunner(conf, settings, db, helper, node)
 	if err != nil {
 		return err
 	}
 	mu.Lock()
 	instance = w
+	reconciles = runner
 	mu.Unlock()
 	return nil
+}
+
+// newReconcilerRunner prepares the reconciler of the node, or returns nil when it is disabled.
+func newReconcilerRunner(conf *config.Config, settings openviduconfig.AnalyticsSettings, db *mongo.Database,
+	live liveState, node Node) (*reconcilerRunner, error) {
+	if !settings.Reconciler.Enabled {
+		logger.Infow("analytics reconciler disabled: entities whose end event is lost stay open")
+		return nil, nil
+	}
+	locks, err := reconcilerLocker(conf, settings)
+	if err != nil {
+		return nil, err
+	}
+	return &reconcilerRunner{locks: locks, reconciler: newReconciler(store.New(db), live, projectionOptions(settings),
+		reconcilerSettings{
+			batchInterval:     settings.Interval,
+			interval:          settings.FixerInterval,
+			cleanupInterval:   conf.OpenVidu.GetCleanupInterval(),
+			maxClosures:       settings.Reconciler.MaxClosuresPerRun,
+			entitiesRetention: settings.Retention.Entities,
+		}, node.ID, newReconcilerMetrics())}, nil
+}
+
+// reconcilerLocker elects the reconciler node with a Redis lock, or locally without Redis.
+func reconcilerLocker(conf *config.Config, settings openviduconfig.AnalyticsSettings) (locker, error) {
+	if !conf.Redis.IsConfigured() {
+		return &localLocker{}, nil
+	}
+	client, err := redisLiveKit.GetRedisClient(&conf.Redis)
+	if err != nil {
+		return nil, fmt.Errorf("analytics: connect to Redis for the reconciler lock: %w", err)
+	}
+	return redisLocker{client: redislock.New(client), backoff: settings.FixerInterval / 2}, nil
 }
 
 // initialize renames the legacy events collection, initializes the database and builds the writer.
@@ -206,22 +289,28 @@ func isLegacyEvents(ctx context.Context, events *mongo.Collection) (bool, error)
 	return count > 0, err
 }
 
-// Start runs the batch loop until Stop. It blocks.
+// Start starts the reconciler loop and runs the batch loop until Stop. It blocks.
 func Start() {
 	mu.Lock()
-	w := instance
+	w, runner := instance, reconciles
 	mu.Unlock()
+	if runner != nil {
+		runner.start()
+	}
 	if w != nil {
 		w.run()
 	}
 }
 
-// Stop flushes the queues through the normal batch path, waiting at most until ctx expires, and counts whatever
-// remains as dropped.
+// Stop stops the reconciler and flushes the queues through the normal batch path, waiting at most until ctx expires,
+// and counts whatever remains as dropped.
 func Stop(ctx context.Context) {
 	mu.Lock()
-	w := instance
+	w, runner := instance, reconciles
 	mu.Unlock()
+	if runner != nil {
+		runner.stop(ctx)
+	}
 	if w != nil {
 		w.stop(ctx)
 	}

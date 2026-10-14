@@ -112,6 +112,10 @@ func (f *fakeStore) Identities(context.Context, []string) (map[string]string, er
 	return map[string]string{}, nil
 }
 
+func (f *fakeStore) ExistingEvents(context.Context, []string) (map[string]bool, error) {
+	return map[string]bool{}, nil
+}
+
 func (f *fakeStore) Tracks(context.Context, []string, []string) (map[string]projection.TrackRef, map[string][]string, error) {
 	return map[string]projection.TrackRef{}, map[string][]string{}, nil
 }
@@ -294,6 +298,7 @@ func TestMetricFamiliesAfterABatch(t *testing.T) {
 	require.NoError(t, w.tick(context.Background()))
 	w.metrics.dropped.WithLabelValues("events", "overflow").Add(0)
 	w.metrics.writeErrors.WithLabelValues("rooms", "rejected").Add(0)
+	newReconcilerMetrics().observe(runReport{result: resultOK, closed: schema.ReconcilerClosures{Participant: 1}})
 
 	families, err := prometheus.DefaultGatherer.Gather()
 	require.NoError(t, err)
@@ -315,5 +320,10 @@ func TestMetricFamiliesAfterABatch(t *testing.T) {
 		"openvidu_analytics_batch_duration_seconds": {},
 		"openvidu_analytics_dropped_total":          {"queue": true, "reason": true},
 		"openvidu_analytics_write_errors_total":     {"collection": true, "kind": true},
+
+		"openvidu_analytics_reconciler_runs_total":           {"result": true},
+		"openvidu_analytics_reconciler_closed_total":         {"entity": true},
+		"openvidu_analytics_reconciler_candidates":           {"entity": true},
+		"openvidu_analytics_reconciler_run_duration_seconds": {},
 	}, labels)
 }

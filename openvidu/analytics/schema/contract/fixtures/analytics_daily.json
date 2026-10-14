@@ -50,12 +50,13 @@
 			"disconnectReasons": {
 				"CLIENT_INITIATED": { "$numberInt": "4" },
 				"DUPLICATE_IDENTITY": { "$numberInt": "1" },
-				"ROOM_DELETED": { "$numberInt": "2" },
-				"CONNECTION_TIMEOUT": { "$numberInt": "1" }
+				"ROOM_DELETED": { "$numberInt": "1" },
+				"CONNECTION_TIMEOUT": { "$numberInt": "1" },
+				"RECONCILED": { "$numberInt": "1" }
 			},
 			"connectTimeSumMs": { "$numberLong": "12400" },
 			"connectTimeCount": { "$numberInt": "10" },
-			"minutes": { "$numberDouble": "196.61666666666667" }
+			"minutes": { "$numberDouble": "196.13333333333335" }
 		},
 		"tracks": {
 			"published": { "$numberInt": "6" },
@@ -139,12 +140,13 @@
 			"disconnectReasons": {
 				"CLIENT_INITIATED": { "$numberInt": "3" },
 				"DUPLICATE_IDENTITY": { "$numberInt": "1" },
-				"ROOM_DELETED": { "$numberInt": "2" },
-				"CONNECTION_TIMEOUT": { "$numberInt": "1" }
+				"ROOM_DELETED": { "$numberInt": "1" },
+				"CONNECTION_TIMEOUT": { "$numberInt": "1" },
+				"RECONCILED": { "$numberInt": "1" }
 			},
 			"connectTimeSumMs": { "$numberLong": "8600" },
 			"connectTimeCount": { "$numberInt": "6" },
-			"minutes": { "$numberDouble": "176.78333333333333" }
+			"minutes": { "$numberDouble": "176.3" }
 		},
 		"tracks": {
 			"published": { "$numberInt": "2" },

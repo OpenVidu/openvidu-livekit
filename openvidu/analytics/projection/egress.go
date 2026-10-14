@@ -77,14 +77,7 @@ func (p *projector) egress() {
 	if outputs := egressOutputs(info); len(outputs) > 0 {
 		f.set("outputs", latest("outputs", "updatedAt", updatedAt, outputs))
 	}
-	entry := bson.D{{Key: "status", Value: status}, {Key: "at", Value: updatedAt}}
-	f.set("statusHistory", bson.D{{Key: "$slice", Value: bson.A{
-		bson.D{{Key: "$sortArray", Value: bson.D{
-			{Key: "input", Value: union("statusHistory", entry)},
-			{Key: "sortBy", Value: bson.D{{Key: "at", Value: 1}}},
-		}}},
-		-statusHistoryLimit,
-	}}})
+	f.set("statusHistory", withStatus(status, updatedAt))
 	f.set("retryCount", maxOf("retryCount", info.GetRetryCount()))
 	f.set("backupStorageUsed", or(keep("backupStorageUsed", false), info.GetBackupStorageUsed()))
 	if isTerminal(status) {
@@ -102,6 +95,18 @@ func (p *projector) egress() {
 		}
 		p.upsert(schema.CollectionRooms, roomSid, room)
 	}
+}
+
+// withStatus adds a status change to the egress status history, kept sorted by time and bounded.
+func withStatus(status string, at time.Time) bson.D {
+	entry := bson.D{{Key: "status", Value: status}, {Key: "at", Value: at}}
+	return bson.D{{Key: "$slice", Value: bson.A{
+		bson.D{{Key: "$sortArray", Value: bson.D{
+			{Key: "input", Value: union("statusHistory", entry)},
+			{Key: "sortBy", Value: bson.D{{Key: "at", Value: 1}}},
+		}}},
+		-statusHistoryLimit,
+	}}}
 }
 
 func isTerminal(status string) bool {

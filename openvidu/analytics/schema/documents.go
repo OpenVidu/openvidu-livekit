@@ -571,6 +571,7 @@ const (
 	SchemaMetaCapabilitiesID = "capabilities"
 	SchemaMetaConfigID       = "config"
 	SchemaMetaMigrationID    = "migration"
+	SchemaMetaReconcilerID   = "reconciler"
 )
 
 // SchemaMetaSchema records the contract version implemented by the writer.
@@ -622,4 +623,34 @@ type SchemaMetaMigration struct {
 	Error               string     `bson:"error,omitempty"`
 	NodeID              string     `bson:"nodeId,omitempty"`
 	LegacyRetainedUntil *time.Time `bson:"legacyRetainedUntil,omitempty"`
+}
+
+// ReconcilerCounts counts the entities of a reconciler run per type.
+type ReconcilerCounts struct {
+	Room           int32 `bson:"room"`
+	Participant    int32 `bson:"participant"`
+	Egress         int32 `bson:"egress"`
+	IngressSession int32 `bson:"ingressSession"`
+}
+
+// ReconcilerClosures counts the closures of a reconciler run per type, cascaded tracks and subscriptions included.
+type ReconcilerClosures struct {
+	Room           int32 `bson:"room"`
+	Participant    int32 `bson:"participant"`
+	Track          int32 `bson:"track"`
+	Subscription   int32 `bson:"subscription"`
+	Egress         int32 `bson:"egress"`
+	IngressSession int32 `bson:"ingressSession"`
+}
+
+// SchemaMetaReconciler records the last run of the reconciler.
+type SchemaMetaReconciler struct {
+	ID                string             `bson:"_id"`
+	LastRunAt         time.Time          `bson:"lastRunAt"`
+	LastRunDurationMs int64              `bson:"lastRunDurationMs"`
+	NodeID            string             `bson:"nodeId"`
+	Candidates        ReconcilerCounts   `bson:"candidates"`
+	Closed            ReconcilerClosures `bson:"closed"`
+	Partial           bool               `bson:"partial"`
+	LastError         string             `bson:"lastError,omitempty"`
 }
