@@ -40,6 +40,10 @@ openvidu:
     reconciler:
       enabled: true
       max_closures_per_run: 500
+    migration:
+      enabled: true
+      rate: 2000
+      batch_size: 500
 ```
 
 | Key                        | Default                                | Meaning                                                                                                                                                                                                              |
@@ -63,6 +67,9 @@ openvidu:
 | `validation_action`        | `warn`                                 | `warn` logs the documents that break the collection validators; `error` rejects them (used by tests).                                                                                                               |
 | `reconciler.enabled`       | `true`                                 | Close the entities whose end event never arrived. With `false` they stay open until their own event, if any, arrives.                                                                                               |
 | `reconciler.max_closures_per_run` | `500`                           | Entities closed by one run at most; a run that reaches it continues 5 s later.                                                                                                                                       |
+| `migration.enabled`        | `true`                                 | Migrate the data of the legacy analytics writer at the first start (see [Legacy data migration](#legacy-data-migration)). With `false` the migration stays pending. |
+| `migration.rate`           | `2000`                                 | Legacy documents replayed per second at most; `0` is unthrottled.                                                                                                     |
+| `migration.batch_size`     | `500`                                  | Legacy documents per batch, from `1` to `10000`; a batch always holds whole seconds.                                                                                   |
 | `expiration`               | —                                      | **Deprecated.** Sets `retention.events` and `retention.stats` when neither is set and is ignored otherwise; a warning is logged in both cases.                                                                      |
 
 Retentions are durations of at least `1h` in whole seconds. By default every event type the server emits is kept raw except `TRACK_PUBLISHED_UPDATE`, `TRACK_MAX_SUBSCRIBED_VIDEO_QUALITY` and `TRACK_SUBSCRIBE_REQUESTED`.
@@ -78,6 +85,33 @@ At startup the server creates or updates the collections, validators and indexes
 Every `interval`, each node writes one batch: rooms, participants, tracks, subscriptions, egress, ingress and ingress sessions (idempotent updates, so a replayed or reordered batch converges), raw events, statistics (`track_stats`, a time-series collection when the server supports it), 5-minute, hourly and daily rollups, and its heartbeat in `nodes`. A batch that fails with a transient error (network, election) is retried first in the next interval. On a graceful shutdown the queues are written for at most 5 s.
 
 Credentials (TURN passwords, storage keys, stream keys, tokens in URLs) are never stored: protocol messages go through an allow-list.
+
+## Legacy data migration
+
+Versions before 3.10 stored analytics in the `events`, `stats`, `active_entities` and `last_alive` collections. The
+first start of the new version renames `events` to `legacy_events`, records `schema_meta` `_id: migration` with
+`state: pending`, and migrates the legacy data in the background while live events are written as usual:
+
+- One node at a time runs it, elected with the Redis lock `analytics-migration-lock` (TTL 60 s, refreshed after
+  every batch); the other nodes retry every minute, so a node takes over when the runner dies.
+- Phases: `events` (legacy events replayed through the same projections as live events, in timestamp order),
+  `stats` (legacy stats through the stats pipeline), `reconcile` (the reconciler runs until nothing is left to
+  close) and `cleanup` (`active_entities` and `last_alive` dropped). `legacy_events` and `stats` are never deleted:
+  they expire by their own TTL, recorded as `legacyRetainedUntil`.
+- Raw events keep the LiveKit `id` of the legacy event (`AE_LEG_<legacy _id>` when it had none). The close events
+  the legacy fixer inserted are not replayed as events: their entity is closed by the reconciler at the fixer's
+  time (`closedBy: reconciler`, `RECONCILED`); an authentic close event overrides it.
+- Batches never split a second; after every batch the checkpoint (phase and last second per collection),
+  `processed` and `counts` (`events`, `stats`, `synthetic`, `skipped`) are saved, so a restart resumes without
+  reapplying a document. Transient MongoDB errors are retried 5 times; then the state is `failed` with the error,
+  and the next start retries from the checkpoint. A replay forced again by deleting the `migration` document is a
+  no-op for entities, events and rollups, but adds the legacy statistics again.
+- While the migration has not completed, the reconciler leaves alone the candidates of nodes that never wrote a
+  heartbeat in `nodes`: they are legacy entities the replay closes later.
+- Progress is logged every 30 s (processed, total, documents per second, ETA) and on every phase.
+
+Rollback: stop the new server, rename `legacy_events` back to `events`, drop the v2 collections and start the
+previous version.
 
 ## Reconciler
 
@@ -119,6 +153,9 @@ A node also runs once right after startup.
 | `openvidu_analytics_reconciler_closed_total` | `entity`             | Entities closed: `room`, `participant`, `track`, `subscription`, `egress`, `ingress_session`. |
 | `openvidu_analytics_reconciler_candidates`  | `entity`              | Candidates of the last run.                     |
 | `openvidu_analytics_reconciler_run_duration_seconds` |              | Duration of a reconciler run.                   |
+| `openvidu_analytics_migration_state`        |                       | Legacy migration: 0 none, 1 pending, 2 running, 3 completed, 4 failed. |
+| `openvidu_analytics_migration_processed_total` | `collection`       | Legacy documents replayed: `legacy_events`, `stats`. |
+| `openvidu_analytics_migration_batch_seconds` |                      | Duration of a legacy migration batch.           |
 
 ## Running locally
 
@@ -142,4 +179,4 @@ Go to `http://localhost:8081` to explore the MongoDB database with mongo-express
 - Unit tests: `go test ./openvidu/...`.
 - Integration tests, which need Docker: `go test -tags integration ./openvidu/analytics/...`. They start a MongoDB replica set with Testcontainers on `openvidu/mongodb:8.0.29-r1` (`ANALYTICS_TEST_MONGO_IMAGE` overrides it), or use the server of `ANALYTICS_TEST_MONGO_URI`.
 - Batch benchmark: the integration test `TestBatchPerformanceBudget` runs when `ANALYTICS_BENCH_MONGO_URI` and `ANALYTICS_BENCH_DB` name a database filled by the sizing generator of the OpenVidu Dashboard (`tools/research/sizing`, scenario M, 7 days).
-- The recorded events and stats used by the tests are described in [`openvidu/analytics/testdata`](./openvidu/analytics/testdata/README.md).
+- The recorded events and stats used by the tests are described in [`openvidu/analytics/testdata`](./openvidu/analytics/testdata/README.md), and the legacy documents in [`openvidu/analytics/migration/testdata`](./openvidu/analytics/migration/testdata/README.md).
