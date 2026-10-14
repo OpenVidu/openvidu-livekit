@@ -38,14 +38,15 @@ type AnalyticsConfig struct {
 	Interval      Duration `yaml:"interval,omitempty"`
 	FixerInterval Duration `yaml:"fixer_interval,omitempty"`
 	// Deprecated: mapped to Retention.Events and Retention.Stats when those are absent.
-	Expiration       Duration           `yaml:"expiration,omitempty"`
-	Retention        AnalyticsRetention `yaml:"retention,omitempty"`
-	StatsDetail      string             `yaml:"stats_detail,omitempty"`
-	AnonymizeIP      bool               `yaml:"anonymize_ip,omitempty"`
-	StoreMetadata    bool               `yaml:"store_metadata,omitempty"`
-	Events           AnalyticsEvents    `yaml:"events,omitempty"`
-	Queue            AnalyticsQueue     `yaml:"queue,omitempty"`
-	ValidationAction string             `yaml:"validation_action,omitempty"`
+	Expiration       Duration            `yaml:"expiration,omitempty"`
+	Retention        AnalyticsRetention  `yaml:"retention,omitempty"`
+	StatsDetail      string              `yaml:"stats_detail,omitempty"`
+	AnonymizeIP      bool                `yaml:"anonymize_ip,omitempty"`
+	StoreMetadata    bool                `yaml:"store_metadata,omitempty"`
+	Events           AnalyticsEvents     `yaml:"events,omitempty"`
+	Queue            AnalyticsQueue      `yaml:"queue,omitempty"`
+	ValidationAction string              `yaml:"validation_action,omitempty"`
+	Reconciler       AnalyticsReconciler `yaml:"reconciler,omitempty"`
 }
 
 // AnalyticsRetention holds the retention per data class.
@@ -67,6 +68,13 @@ type AnalyticsEvents struct {
 type AnalyticsQueue struct {
 	MaxEvents int `yaml:"max_events,omitempty"`
 	MaxStats  int `yaml:"max_stats,omitempty"`
+}
+
+// AnalyticsReconciler configures the reconciler, which closes the entities whose end events never arrived.
+type AnalyticsReconciler struct {
+	// Enabled defaults to true when absent.
+	Enabled           *bool `yaml:"enabled,omitempty"`
+	MaxClosuresPerRun int   `yaml:"max_closures_per_run,omitempty"`
 }
 
 // Duration is a duration in Go syntax ("10s", "168h"). A bare integer is read as nanoseconds, as the former
@@ -164,6 +172,13 @@ type AnalyticsSettings struct {
 	MaxEvents        int
 	MaxStats         int
 	ValidationAction string
+	Reconciler       ReconcilerSettings
+}
+
+// ReconcilerSettings holds the effective reconciler configuration.
+type ReconcilerSettings struct {
+	Enabled           bool
+	MaxClosuresPerRun int
 }
 
 // RetentionSettings holds the effective retention per data class.
@@ -188,6 +203,7 @@ const (
 	DefaultQueueMaxEvents         = 20000
 	DefaultQueueMaxStats          = 50000
 	DefaultValidationAction       = "warn"
+	DefaultMaxClosuresPerRun      = 500
 )
 
 const keyPrefix = "openvidu.analytics."
@@ -205,6 +221,10 @@ func (c AnalyticsConfig) Settings() (AnalyticsSettings, []string, error) {
 		MaxEvents:        c.Queue.MaxEvents,
 		MaxStats:         c.Queue.MaxStats,
 		ValidationAction: c.ValidationAction,
+		Reconciler: ReconcilerSettings{
+			Enabled:           c.Reconciler.Enabled == nil || *c.Reconciler.Enabled,
+			MaxClosuresPerRun: c.Reconciler.MaxClosuresPerRun,
+		},
 	}
 	if settings.Database == "" {
 		settings.Database = DefaultAnalyticsDatabase
@@ -220,6 +240,9 @@ func (c AnalyticsConfig) Settings() (AnalyticsSettings, []string, error) {
 	}
 	if settings.ValidationAction == "" {
 		settings.ValidationAction = DefaultValidationAction
+	}
+	if settings.Reconciler.MaxClosuresPerRun == 0 {
+		settings.Reconciler.MaxClosuresPerRun = DefaultMaxClosuresPerRun
 	}
 
 	durations := []struct {
@@ -325,6 +348,10 @@ func (s AnalyticsSettings) validate() error {
 	if s.MaxStats < 1000 {
 		return fmt.Errorf("%squeue.max_stats must be at least 1000, got %d", keyPrefix, s.MaxStats)
 	}
+	if s.Reconciler.MaxClosuresPerRun < 1 {
+		return fmt.Errorf("%sreconciler.max_closures_per_run must be at least 1, got %d", keyPrefix,
+			s.Reconciler.MaxClosuresPerRun)
+	}
 	return nil
 }
 
@@ -353,6 +380,8 @@ func (s AnalyticsSettings) LogFields() []any {
 		"queue.max_events", s.MaxEvents,
 		"queue.max_stats", s.MaxStats,
 		"validation_action", s.ValidationAction,
+		"reconciler.enabled", s.Reconciler.Enabled,
+		"reconciler.max_closures_per_run", s.Reconciler.MaxClosuresPerRun,
 	}
 }
 

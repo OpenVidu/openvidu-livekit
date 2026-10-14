@@ -99,6 +99,7 @@ func TestMinimalConfigurationDefaults(t *testing.T) {
 		MaxEvents:        20000,
 		MaxStats:         50000,
 		ValidationAction: "warn",
+		Reconciler:       ReconcilerSettings{Enabled: true, MaxClosuresPerRun: 500},
 	}, settings)
 
 	require.Len(t, settings.StoreTypes, len(StorableEventTypes)-3)
@@ -107,6 +108,31 @@ func TestMinimalConfigurationDefaults(t *testing.T) {
 		require.NotContains(t, settings.StoreTypes, excluded)
 	}
 	require.Contains(t, settings.StoreTypes, "INGRESS_UPDATED")
+}
+
+func TestReconcilerSettings(t *testing.T) {
+	settings, _, err := parseAnalytics(t, `
+openvidu:
+  analytics:
+    enabled: true
+    mongo_url: mongodb://localhost:27017
+    reconciler:
+      enabled: false
+      max_closures_per_run: 50
+`).Settings()
+	require.NoError(t, err)
+	require.Equal(t, ReconcilerSettings{Enabled: false, MaxClosuresPerRun: 50}, settings.Reconciler)
+
+	settings, _, err = parseAnalytics(t, `
+openvidu:
+  analytics:
+    enabled: true
+    mongo_url: mongodb://localhost:27017
+    reconciler:
+      enabled: true
+`).Settings()
+	require.NoError(t, err)
+	require.Equal(t, ReconcilerSettings{Enabled: true, MaxClosuresPerRun: 500}, settings.Reconciler)
 }
 
 func TestStatsDetailDefaultFollowsTheEdition(t *testing.T) {
@@ -166,6 +192,8 @@ func TestInvalidValuesNameTheKey(t *testing.T) {
 		{"unknown event type", func(c *AnalyticsConfig) { c.Events.StoreTypes = "ROOM_CREATED,ROOM_CLOSED" }, "ROOM_CLOSED"},
 		{"small event queue", func(c *AnalyticsConfig) { c.Queue.MaxEvents = 999 }, "openvidu.analytics.queue.max_events"},
 		{"small stats queue", func(c *AnalyticsConfig) { c.Queue.MaxStats = 10 }, "openvidu.analytics.queue.max_stats"},
+		{"negative closures per run", func(c *AnalyticsConfig) { c.Reconciler.MaxClosuresPerRun = -1 },
+			"openvidu.analytics.reconciler.max_closures_per_run"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

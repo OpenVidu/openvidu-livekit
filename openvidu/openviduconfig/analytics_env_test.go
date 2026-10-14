@@ -29,7 +29,7 @@ var analyticsKeys = []string{
 	"enabled", "mongo_url", "database", "interval", "fixer_interval", "expiration",
 	"retention.events", "retention.stats", "retention.tracks", "retention.entities", "retention.rollups_hourly",
 	"stats_detail", "anonymize_ip", "store_metadata", "events.store_types", "queue.max_events", "queue.max_stats",
-	"validation_action",
+	"validation_action", "reconciler.enabled", "reconciler.max_closures_per_run",
 }
 
 func TestEveryAnalyticsKeyHasAnEnvironmentVariable(t *testing.T) {
