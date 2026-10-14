@@ -64,7 +64,7 @@
 		},
 		{
 			"bsonType": "object",
-			"required": ["_id", "state", "processed", "total"],
+			"required": ["_id", "state", "processed", "total", "writerVersion", "fromSchemaVersion", "counts"],
 			"properties": {
 				"_id": { "bsonType": "string", "enum": ["migration"] },
 				"state": { "bsonType": "string", "enum": ["pending", "running", "completed", "failed"] },
@@ -74,6 +74,19 @@
 				"startedAt": { "bsonType": "date" },
 				"finishedAt": { "bsonType": "date" },
 				"error": { "bsonType": "string" },
+				"writerVersion": { "bsonType": "string" },
+				"fromSchemaVersion": { "bsonType": ["int", "long"] },
+				"counts": {
+					"bsonType": "object",
+					"required": ["events", "stats", "synthetic", "skipped"],
+					"properties": {
+						"events": { "bsonType": ["long", "int"] },
+						"stats": { "bsonType": ["long", "int"] },
+						"synthetic": { "bsonType": ["long", "int"] },
+						"skipped": { "bsonType": ["long", "int"] }
+					},
+					"additionalProperties": false
+				},
 				"nodeId": { "bsonType": "string" },
 				"legacyRetainedUntil": { "bsonType": "date" }
 			},

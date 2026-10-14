@@ -26,11 +26,23 @@
 	{
 		"_id": "migration",
 		"state": "completed",
-		"checkpoint": { "phase": "cleanup" },
+		"checkpoint": {
+			"phase": "cleanup",
+			"events": { "$numberLong": "1791791990" },
+			"stats": { "$numberLong": "1791791995" }
+		},
 		"processed": { "$numberLong": "125000" },
 		"total": { "$numberLong": "125000" },
 		"startedAt": { "$date": "2026-10-12T08:00:05.000Z" },
 		"finishedAt": { "$date": "2026-10-12T08:20:00.000Z" },
+		"writerVersion": "3.10.0",
+		"fromSchemaVersion": { "$numberInt": "0" },
+		"counts": {
+			"events": { "$numberLong": "98000" },
+			"stats": { "$numberLong": "26800" },
+			"synthetic": { "$numberLong": "120" },
+			"skipped": { "$numberLong": "80" }
+		},
 		"nodeId": "ND_alpha8Kq2Lm",
 		"legacyRetainedUntil": { "$date": "2026-11-13T08:00:00.000Z" }
 	},

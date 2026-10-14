@@ -613,16 +613,34 @@ type SchemaMetaConfig struct {
 
 // SchemaMetaMigration records the progress of the legacy data migration.
 type SchemaMetaMigration struct {
-	ID                  string     `bson:"_id"`
-	State               string     `bson:"state"`
-	Checkpoint          bson.D     `bson:"checkpoint,omitempty"`
-	Processed           int64      `bson:"processed"`
-	Total               int64      `bson:"total"`
-	StartedAt           *time.Time `bson:"startedAt,omitempty"`
-	FinishedAt          *time.Time `bson:"finishedAt,omitempty"`
-	Error               string     `bson:"error,omitempty"`
-	NodeID              string     `bson:"nodeId,omitempty"`
-	LegacyRetainedUntil *time.Time `bson:"legacyRetainedUntil,omitempty"`
+	ID                  string          `bson:"_id"`
+	State               string          `bson:"state"`
+	Checkpoint          *MigrationPoint `bson:"checkpoint,omitempty"`
+	Processed           int64           `bson:"processed"`
+	Total               int64           `bson:"total"`
+	StartedAt           *time.Time      `bson:"startedAt,omitempty"`
+	FinishedAt          *time.Time      `bson:"finishedAt,omitempty"`
+	Error               string          `bson:"error,omitempty"`
+	WriterVersion       string          `bson:"writerVersion"`
+	FromSchemaVersion   int32           `bson:"fromSchemaVersion"`
+	Counts              MigrationCounts `bson:"counts"`
+	NodeID              string          `bson:"nodeId,omitempty"`
+	LegacyRetainedUntil *time.Time      `bson:"legacyRetainedUntil,omitempty"`
+}
+
+// MigrationPoint is where the migration resumes: its phase and the last legacy second fully applied per collection.
+type MigrationPoint struct {
+	Phase  string `bson:"phase"`
+	Events int64  `bson:"events"`
+	Stats  int64  `bson:"stats"`
+}
+
+// MigrationCounts counts the legacy documents the migration handled.
+type MigrationCounts struct {
+	Events    int64 `bson:"events"`
+	Stats     int64 `bson:"stats"`
+	Synthetic int64 `bson:"synthetic"`
+	Skipped   int64 `bson:"skipped"`
 }
 
 // ReconcilerCounts counts the entities of a reconciler run per type.
