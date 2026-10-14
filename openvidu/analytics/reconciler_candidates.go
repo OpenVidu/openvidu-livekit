@@ -16,6 +16,7 @@ package analytics
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/livekit/livekit-server/openvidu/analytics/projection"
@@ -39,12 +40,17 @@ type candidateSet struct {
 type egressCandidate struct {
 	egress store.OpenEgress
 	room   store.RoomRef
+	// reason and at override the closure reason and the end time estimated from the room.
+	reason string
+	at     time.Time
 }
 
 // ingressSessionCandidate is an open ingress session whose room closed long ago on a dead node.
 type ingressSessionCandidate struct {
 	session store.OpenIngressSession
 	room    store.RoomRef
+	reason  string
+	at      time.Time
 }
 
 func (c candidateSet) counts() schema.ReconcilerCounts {
@@ -62,6 +68,13 @@ func (c candidateSet) counts() schema.ReconcilerCounts {
 //     last event is older than their empty timeout plus two intervals;
 //   - open egresses and ingress sessions whose room closed more than two cleanup intervals ago on a dead node.
 func (r *reconciler) candidates(ctx context.Context, now time.Time) (candidateSet, error) {
+	hold := false
+	if r.holdLegacy != nil {
+		var err error
+		if hold, err = r.holdLegacy(ctx); err != nil {
+			return candidateSet{}, err
+		}
+	}
 	limit := r.settings.maxClosures
 	staleBefore := now.Add(-staleAfter)
 	var found candidateSet
@@ -110,9 +123,22 @@ func (r *reconciler) candidates(ctx context.Context, now time.Time) (candidateSe
 	for _, candidate := range sessions {
 		nodes = append(nodes, candidate.room.NodeID)
 	}
-	found.dead, err = r.deadNodes(ctx, now, nodes)
+	var seen map[string]bool
+	found.dead, seen, err = r.deadNodes(ctx, now, nodes)
 	if err != nil {
 		return found, err
+	}
+	if hold {
+		// The legacy migration replays entities of nodes that never wrote a heartbeat, closed later in the replay.
+		legacy := func(node string) bool { return !seen[node] }
+		held := len(found.participants) + len(found.rooms) + len(egresses) + len(sessions)
+		found.participants = slices.DeleteFunc(found.participants, func(p store.OpenParticipant) bool { return legacy(p.NodeID) })
+		found.rooms = slices.DeleteFunc(found.rooms, func(room store.OpenRoom) bool { return legacy(room.NodeID) })
+		egresses = slices.DeleteFunc(egresses, func(c egressCandidate) bool { return legacy(c.room.NodeID) })
+		sessions = slices.DeleteFunc(sessions, func(c ingressSessionCandidate) bool { return legacy(c.room.NodeID) })
+		if held -= len(found.participants) + len(found.rooms) + len(egresses) + len(sessions); held > 0 {
+			r.log.debugw("analytics reconciler: candidates of legacy nodes held until the migration completes", "count", held)
+		}
 	}
 	for _, candidate := range egresses {
 		if found.dead[candidate.room.NodeID] {
@@ -173,24 +199,29 @@ func (r *reconciler) mediaOfClosedRooms(ctx context.Context, now time.Time) ([]e
 	return egressCandidates, sessionCandidates, nil
 }
 
-// deadNodes returns the nodes among ids that are dead: no heartbeat for two batch intervals and not available in
-// LiveKit's node registry. A node whose registry entry cannot be read is not dead.
-func (r *reconciler) deadNodes(ctx context.Context, now time.Time, ids []string) (map[string]bool, error) {
+// deadNodes returns the nodes among ids that are dead (no heartbeat for two batch intervals and not available in
+// LiveKit's node registry) and those that ever wrote a heartbeat. A node whose registry entry cannot be read is not
+// dead.
+func (r *reconciler) deadNodes(ctx context.Context, now time.Time, ids []string) (map[string]bool, map[string]bool, error) {
 	dead := map[string]bool{}
-	var unique []string
 	seen := map[string]bool{}
+	var unique []string
+	listed := map[string]bool{}
 	for _, id := range ids {
-		if id != "" && !seen[id] {
-			seen[id] = true
+		if id != "" && !listed[id] {
+			listed[id] = true
 			unique = append(unique, id)
 		}
 	}
 	if len(unique) == 0 {
-		return dead, nil
+		return dead, seen, nil
 	}
 	lastSeen, err := r.store.NodesLastSeen(ctx, unique)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	for id := range lastSeen {
+		seen[id] = true
 	}
 	heartbeatFrom := now.Add(-2 * r.settings.batchInterval)
 	for _, id := range unique {
@@ -207,5 +238,5 @@ func (r *reconciler) deadNodes(ctx context.Context, now time.Time, ids []string)
 			dead[id] = true
 		}
 	}
-	return dead, nil
+	return dead, seen, nil
 }

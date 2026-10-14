@@ -267,16 +267,37 @@ func TestDeadNodes(t *testing.T) {
 	live.available["ND_registered"] = true
 	r, _ := newTestReconciler(s, live)
 
-	dead, err := r.deadNodes(context.Background(), reconcileNow,
+	dead, seen, err := r.deadNodes(context.Background(), reconcileNow,
 		[]string{"ND_fresh", "ND_stale", "ND_registered", "ND_unknown", "", "ND_stale"})
 	require.NoError(t, err)
 	require.Equal(t, map[string]bool{"ND_stale": true, "ND_unknown": true}, dead)
+	require.Equal(t, map[string]bool{"ND_fresh": true, "ND_stale": true, "ND_registered": true}, seen)
 	require.Equal(t, 3, live.registryHits, "a fresh heartbeat needs no registry read")
 
 	live.nodesErr = errors.New("redis down")
-	dead, err = r.deadNodes(context.Background(), reconcileNow, []string{"ND_stale"})
+	dead, _, err = r.deadNodes(context.Background(), reconcileNow, []string{"ND_stale"})
 	require.NoError(t, err)
 	require.Empty(t, dead, "an unreadable registry never makes a node dead")
+}
+
+func TestLegacyCandidatesHeldDuringTheMigration(t *testing.T) {
+	s := newFakeReconcilerStore()
+	s.lastSeen["ND_crashed"] = reconcileNow.Add(-time.Hour)
+	s.stale = []store.OpenParticipant{openParticipant("PA_legacy", "old", "ND_legacy"),
+		openParticipant("PA_crashed", "daily", "ND_crashed")}
+	r, _ := newTestReconciler(s, newFakeLive())
+	hold := true
+	r.holdLegacy = func(context.Context) (bool, error) { return hold, nil }
+
+	found, err := r.candidates(context.Background(), reconcileNow)
+	require.NoError(t, err)
+	require.Len(t, found.participants, 1)
+	require.Equal(t, "PA_crashed", found.participants[0].SID, "a node that wrote a heartbeat is not legacy")
+
+	hold = false
+	found, err = r.candidates(context.Background(), reconcileNow)
+	require.NoError(t, err)
+	require.Len(t, found.participants, 2)
 }
 
 func TestConfirmation(t *testing.T) {

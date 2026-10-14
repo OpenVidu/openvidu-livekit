@@ -296,6 +296,59 @@ func (s *Store) OpenIngressSessions(ctx context.Context, limit int) ([]OpenIngre
 	return sessions, err
 }
 
+// OpenParticipantsByID returns the open participant sessions among sids.
+func (s *Store) OpenParticipantsByID(ctx context.Context, sids []string) ([]OpenParticipant, error) {
+	var participants []OpenParticipant
+	if len(sids) == 0 {
+		return participants, nil
+	}
+	err := s.find(ctx, Query{Collection: schema.CollectionParticipants, Filter: bson.D{
+		{Key: "_id", Value: bson.D{{Key: "$in", Value: sids}}}, openParticipantFilter(),
+	}}, openParticipantFields, &participants)
+	return participants, err
+}
+
+// OpenRoomsByID returns the active rooms among sids.
+func (s *Store) OpenRoomsByID(ctx context.Context, sids []string) ([]OpenRoom, error) {
+	var rooms []OpenRoom
+	if len(sids) == 0 {
+		return rooms, nil
+	}
+	err := s.find(ctx, Query{Collection: schema.CollectionRooms, Filter: bson.D{
+		{Key: "_id", Value: bson.D{{Key: "$in", Value: sids}}}, {Key: "status", Value: "active"},
+	}}, bson.D{{Key: "name", Value: 1}, {Key: "nodeId", Value: 1}, {Key: "createdAt", Value: 1},
+		{Key: "lastEventAt", Value: 1}, {Key: "lastStatsAt", Value: 1}}, &rooms)
+	return rooms, err
+}
+
+// OpenEgressesByID returns the egresses among ids that have not ended.
+func (s *Store) OpenEgressesByID(ctx context.Context, ids []string) ([]OpenEgress, error) {
+	var egresses []OpenEgress
+	if len(ids) == 0 {
+		return egresses, nil
+	}
+	err := s.find(ctx, Query{Collection: schema.CollectionEgresses, Filter: bson.D{
+		{Key: "_id", Value: bson.D{{Key: "$in", Value: ids}}},
+		{Key: "status", Value: bson.D{{Key: "$in", Value: projection.OpenEgressStatuses}}},
+	}}, bson.D{{Key: "roomSid", Value: 1}, {Key: "roomName", Value: 1}, {Key: "status", Value: 1},
+		{Key: "startedAt", Value: 1}, {Key: "updatedAt", Value: 1}}, &egresses)
+	return egresses, err
+}
+
+// OpenIngressSessionsByID returns the ingress sessions among ids that have not ended.
+func (s *Store) OpenIngressSessionsByID(ctx context.Context, ids []string) ([]OpenIngressSession, error) {
+	var sessions []OpenIngressSession
+	if len(ids) == 0 {
+		return sessions, nil
+	}
+	err := s.find(ctx, Query{Collection: schema.CollectionIngressSessions, Filter: bson.D{
+		{Key: "_id", Value: bson.D{{Key: "$in", Value: ids}}},
+		{Key: "status", Value: bson.D{{Key: "$in", Value: projection.OpenIngressSessionStatuses}}},
+	}}, bson.D{{Key: "ingressId", Value: 1}, {Key: "roomSid", Value: 1}, {Key: "roomName", Value: 1},
+		{Key: "status", Value: 1}, {Key: "startedAt", Value: 1}}, &sessions)
+	return sessions, err
+}
+
 // NodesLastSeen returns the last heartbeat of each node found among ids.
 func (s *Store) NodesLastSeen(ctx context.Context, ids []string) (map[string]time.Time, error) {
 	lastSeen := map[string]time.Time{}
@@ -500,6 +553,20 @@ func (s *Store) SetUniqueIdentities(ctx context.Context, day time.Time, global i
 	_, err := collection.UpdateOne(ctx, bson.D{{Key: "scope", Value: "global"}, {Key: "bucket", Value: day}},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "uniqueIdentities", Value: global}}}})
 	return err
+}
+
+// MigrationState returns the state of the legacy data migration, empty when none was recorded.
+func (s *Store) MigrationState(ctx context.Context) (string, error) {
+	var migration struct {
+		State string `bson:"state"`
+	}
+	s.roundTrips++
+	err := s.db.Collection(schema.CollectionSchemaMeta).FindOne(ctx, bson.D{{Key: "_id", Value: schema.SchemaMetaMigrationID}},
+		options.FindOne().SetProjection(bson.D{{Key: "state", Value: 1}})).Decode(&migration)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return "", nil
+	}
+	return migration.State, err
 }
 
 // RecordReconcilerRun replaces the schema_meta document of the last reconciler run.

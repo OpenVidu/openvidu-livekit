@@ -37,6 +37,8 @@ type confirmedParticipant struct {
 type confirmedRoom struct {
 	store.OpenRoom
 	reason string
+	// at overrides the end time estimated from the room's last signal.
+	at time.Time
 }
 
 // confirmation holds the candidates of a run that are confirmed for closure.
@@ -257,7 +259,7 @@ func (r *reconciler) readListing(ctx context.Context, now time.Time) (*liveListi
 	if err != nil {
 		return nil, err
 	}
-	dead, err := r.deadNodes(ctx, now, nodes)
+	dead, _, err := r.deadNodes(ctx, now, nodes)
 	if err != nil {
 		return nil, err
 	}

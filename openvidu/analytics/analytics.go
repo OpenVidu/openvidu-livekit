@@ -54,12 +54,12 @@ var (
 	mu         sync.Mutex
 	instance   *writer
 	reconciles *reconcilerRunner
+	migrations *task
 )
 
-// reconcilerRunner runs the reconciler loop in its own goroutine between Start and Stop.
-type reconcilerRunner struct {
-	reconciler *reconciler
-	locks      locker
+// task runs a loop in its own goroutine between Start and Stop.
+type task struct {
+	loop func(ctx context.Context)
 
 	mu      sync.Mutex
 	stopped bool
@@ -67,26 +67,26 @@ type reconcilerRunner struct {
 	done    chan struct{}
 }
 
-func (r *reconcilerRunner) start() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.stopped || r.cancel != nil {
+func (t *task) start() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.stopped || t.cancel != nil {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	r.cancel = cancel
-	r.done = make(chan struct{})
+	t.cancel = cancel
+	t.done = make(chan struct{})
 	go func(done chan struct{}) {
 		defer close(done)
-		r.reconciler.loop(ctx, r.locks)
-	}(r.done)
+		t.loop(ctx)
+	}(t.done)
 }
 
-func (r *reconcilerRunner) stop(ctx context.Context) {
-	r.mu.Lock()
-	r.stopped = true
-	cancel, done := r.cancel, r.done
-	r.mu.Unlock()
+func (t *task) stop(ctx context.Context) {
+	t.mu.Lock()
+	t.stopped = true
+	cancel, done := t.cancel, t.done
+	t.mu.Unlock()
 	if cancel == nil {
 		return
 	}
@@ -95,6 +95,19 @@ func (r *reconcilerRunner) stop(ctx context.Context) {
 	case <-done:
 	case <-ctx.Done():
 	}
+}
+
+// reconcilerRunner runs the reconciler loop between Start and Stop.
+type reconcilerRunner struct {
+	task
+	reconciler *reconciler
+	locks      locker
+}
+
+func newReconcilerTask(r *reconciler, locks locker) *reconcilerRunner {
+	runner := &reconcilerRunner{reconciler: r, locks: locks}
+	runner.loop = func(ctx context.Context) { r.loop(ctx, locks) }
+	return runner
 }
 
 // Node identifies the server node that writes.
@@ -133,11 +146,51 @@ func InitializeAnalytics(conf *config.Config, node Node, helper livekithelperint
 	if err != nil {
 		return err
 	}
+	migration, err := newMigrationTask(ctx, conf, settings, db, helper, node)
+	if err != nil {
+		return err
+	}
 	mu.Lock()
 	instance = w
 	reconciles = runner
+	migrations = migration
 	mu.Unlock()
 	return nil
+}
+
+// newMigrationTask records a pending legacy migration when legacy collections exist and prepares its runner, or
+// returns nil when nothing remains to migrate.
+func newMigrationTask(ctx context.Context, conf *config.Config, settings openviduconfig.AnalyticsSettings, db *mongo.Database,
+	live liveState, node Node) (*task, error) {
+	pending, err := prepareMigration(ctx, db, openviduversion.Version)
+	if err != nil {
+		return nil, fmt.Errorf("analytics: prepare the legacy data migration: %w", err)
+	}
+	if !pending {
+		return nil, nil
+	}
+	locks, err := migrationLocker(conf)
+	if err != nil {
+		return nil, err
+	}
+	rec := newReconciler(store.New(db), live, projectionOptions(settings), reconcilerSettingsOf(conf, settings), node.ID,
+		newReconcilerMetrics())
+	m := newMigrator(db, settings, rec, locks, node.ID, newMigrationMetrics())
+	logger.Infow("analytics: legacy analytics data detected, migrating it in the background",
+		"enabled", settings.Migration.Enabled, "rate", settings.Migration.Rate, "batchSize", settings.Migration.BatchSize)
+	return &task{loop: m.loop}, nil
+}
+
+// migrationLocker elects the node that runs the migration without waiting for a lock another node holds.
+func migrationLocker(conf *config.Config) (locker, error) {
+	if !conf.Redis.IsConfigured() {
+		return &localLocker{}, nil
+	}
+	client, err := redisLiveKit.GetRedisClient(&conf.Redis)
+	if err != nil {
+		return nil, fmt.Errorf("analytics: connect to Redis for the migration lock: %w", err)
+	}
+	return redisLocker{client: redislock.New(client)}, nil
 }
 
 // newReconcilerRunner prepares the reconciler of the node, or returns nil when it is disabled.
@@ -151,14 +204,24 @@ func newReconcilerRunner(conf *config.Config, settings openviduconfig.AnalyticsS
 	if err != nil {
 		return nil, err
 	}
-	return &reconcilerRunner{locks: locks, reconciler: newReconciler(store.New(db), live, projectionOptions(settings),
-		reconcilerSettings{
-			batchInterval:     settings.Interval,
-			interval:          settings.FixerInterval,
-			cleanupInterval:   conf.OpenVidu.GetCleanupInterval(),
-			maxClosures:       settings.Reconciler.MaxClosuresPerRun,
-			entitiesRetention: settings.Retention.Entities,
-		}, node.ID, newReconcilerMetrics())}, nil
+	r := newReconciler(store.New(db), live, projectionOptions(settings), reconcilerSettingsOf(conf, settings), node.ID,
+		newReconcilerMetrics())
+	states := store.New(db)
+	r.holdLegacy = func(ctx context.Context) (bool, error) {
+		state, err := states.MigrationState(ctx)
+		return state != "" && state != migrationCompleted, err
+	}
+	return newReconcilerTask(r, locks), nil
+}
+
+func reconcilerSettingsOf(conf *config.Config, settings openviduconfig.AnalyticsSettings) reconcilerSettings {
+	return reconcilerSettings{
+		batchInterval:     settings.Interval,
+		interval:          settings.FixerInterval,
+		cleanupInterval:   conf.OpenVidu.GetCleanupInterval(),
+		maxClosures:       settings.Reconciler.MaxClosuresPerRun,
+		entitiesRetention: settings.Retention.Entities,
+	}
 }
 
 // reconcilerLocker elects the reconciler node with a Redis lock, or locally without Redis.
@@ -289,13 +352,16 @@ func isLegacyEvents(ctx context.Context, events *mongo.Collection) (bool, error)
 	return count > 0, err
 }
 
-// Start starts the reconciler loop and runs the batch loop until Stop. It blocks.
+// Start starts the reconciler and the legacy migration, and runs the batch loop until Stop. It blocks.
 func Start() {
 	mu.Lock()
-	w, runner := instance, reconciles
+	w, runner, migration := instance, reconciles, migrations
 	mu.Unlock()
 	if runner != nil {
 		runner.start()
+	}
+	if migration != nil {
+		migration.start()
 	}
 	if w != nil {
 		w.run()
@@ -306,8 +372,11 @@ func Start() {
 // and counts whatever remains as dropped.
 func Stop(ctx context.Context) {
 	mu.Lock()
-	w, runner := instance, reconciles
+	w, runner, migration := instance, reconciles, migrations
 	mu.Unlock()
+	if migration != nil {
+		migration.stop(ctx)
+	}
 	if runner != nil {
 		runner.stop(ctx)
 	}

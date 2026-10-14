@@ -144,9 +144,12 @@ func (c *closer) closeParticipants(ctx context.Context, participants []confirmed
 
 // closeRoom closes a room, then its open participant sessions with the room's end time.
 func (c *closer) closeRoom(ctx context.Context, room confirmedRoom) error {
-	at := room.LastEventAt
-	if room.LastStatsAt != nil && room.LastStatsAt.After(at) {
-		at = *room.LastStatsAt
+	at := room.at
+	if at.IsZero() {
+		at = room.LastEventAt
+		if room.LastStatsAt != nil && room.LastStatsAt.After(at) {
+			at = *room.LastStatsAt
+		}
 	}
 	state := projection.RoomState{SID: room.SID, Name: room.Name, NodeID: room.NodeID, CreatedAt: room.CreatedAt,
 		LastEventAt: room.LastEventAt}
@@ -181,13 +184,16 @@ func (c *closer) closeRoom(ctx context.Context, room confirmedRoom) error {
 
 func (c *closer) closeEgress(ctx context.Context, candidate egressCandidate) error {
 	egress, room := candidate.egress, candidate.room
-	at := egress.UpdatedAt
-	if room.EndedAt != nil && room.EndedAt.After(at) {
-		at = *room.EndedAt
+	at, reason := candidate.at, firstNonEmpty(candidate.reason, reasonRoomClosedNodeDead)
+	if at.IsZero() {
+		at = egress.UpdatedAt
+		if room.EndedAt != nil && room.EndedAt.After(at) {
+			at = *room.EndedAt
+		}
 	}
 	state := projection.EgressState{ID: egress.ID, RoomSID: egress.RoomSID, RoomName: firstNonEmpty(egress.RoomName, room.Name),
 		NodeID: room.NodeID, Status: egress.Status, StartedAt: egress.StartedAt}
-	closure := projection.CloseEgress(state, at, reasonRoomClosedNodeDead, c.r.opts)
+	closure := projection.CloseEgress(state, at, reason, c.r.opts)
 	closed, err := c.r.store.CloseEntity(ctx, closure.Entity)
 	if err != nil {
 		return err
@@ -198,21 +204,23 @@ func (c *closer) closeEgress(ctx context.Context, candidate egressCandidate) err
 	}
 	c.add(closure)
 	c.report.closed.Egress++
-	c.r.logClosure(entityEgress, egress.ID, egress.RoomSID, room.NodeID, reasonRoomClosedNodeDead, nil, &egress.UpdatedAt,
-		"endedAt", at)
+	c.r.logClosure(entityEgress, egress.ID, egress.RoomSID, room.NodeID, reason, nil, &egress.UpdatedAt, "endedAt", at)
 	return nil
 }
 
 func (c *closer) closeIngressSession(ctx context.Context, candidate ingressSessionCandidate) error {
 	session, room := candidate.session, candidate.room
-	at := session.StartedAt
-	if room.EndedAt != nil && room.EndedAt.After(at) {
-		at = *room.EndedAt
+	at, reason := candidate.at, firstNonEmpty(candidate.reason, reasonRoomClosedNodeDead)
+	if at.IsZero() {
+		at = session.StartedAt
+		if room.EndedAt != nil && room.EndedAt.After(at) {
+			at = *room.EndedAt
+		}
 	}
 	state := projection.IngressSessionState{ID: session.ID, IngressID: session.IngressID, RoomSID: session.RoomSID,
 		RoomName: firstNonEmpty(session.RoomName, room.Name), NodeID: room.NodeID, Status: session.Status,
 		StartedAt: session.StartedAt}
-	closure := projection.CloseIngressSession(state, at, reasonRoomClosedNodeDead, c.r.opts)
+	closure := projection.CloseIngressSession(state, at, reason, c.r.opts)
 	closed, err := c.r.store.CloseEntity(ctx, closure.Entity)
 	if err != nil {
 		return err
@@ -223,8 +231,7 @@ func (c *closer) closeIngressSession(ctx context.Context, candidate ingressSessi
 	}
 	c.add(closure)
 	c.report.closed.IngressSession++
-	c.r.logClosure(entityIngressSession, session.ID, session.RoomSID, room.NodeID, reasonRoomClosedNodeDead, nil, nil,
-		"endedAt", at)
+	c.r.logClosure(entityIngressSession, session.ID, session.RoomSID, room.NodeID, reason, nil, nil, "endedAt", at)
 	return nil
 }
 

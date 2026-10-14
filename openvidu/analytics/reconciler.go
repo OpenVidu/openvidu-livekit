@@ -71,6 +71,8 @@ const (
 	reasonAbsentLive         = "absent-live"
 	reasonCascade            = "cascade"
 	reasonRoomClosedNodeDead = "room-closed-node-dead"
+	// reasonLegacyFixer closes an entity at the close event the legacy active-entities fixer inserted.
+	reasonLegacyFixer = "legacy-fixer"
 )
 
 // reconcilerStore is what the reconciler needs from the database; *store.Store implements it.
@@ -150,6 +152,9 @@ type reconciler struct {
 
 	continuationDelay time.Duration
 	lockErrorPause    time.Duration
+	// holdLegacy reports a legacy migration that has not completed, during which candidates of nodes that never
+	// wrote a heartbeat are not closed: they are entities the replay has not closed yet.
+	holdLegacy func(ctx context.Context) (bool, error)
 }
 
 func newReconciler(s reconcilerStore, live liveState, opts projection.Options, settings reconcilerSettings, nodeID string,
@@ -277,14 +282,18 @@ type lease interface {
 	Release(ctx context.Context) error
 }
 
-// redisLocker obtains the lock in Redis, retrying until its TTL elapses.
+// redisLocker obtains the lock in Redis, retrying every backoff until its TTL elapses, or once without backoff.
 type redisLocker struct {
 	client  *redislock.Client
 	backoff time.Duration
 }
 
 func (l redisLocker) Obtain(ctx context.Context, key string, ttl time.Duration) (lease, error) {
-	lock, err := l.client.Obtain(ctx, key, ttl, &redislock.Options{RetryStrategy: redislock.LinearBackoff(l.backoff)})
+	retry := redislock.NoRetry()
+	if l.backoff > 0 {
+		retry = redislock.LinearBackoff(l.backoff)
+	}
+	lock, err := l.client.Obtain(ctx, key, ttl, &redislock.Options{RetryStrategy: retry})
 	if err != nil {
 		return nil, err
 	}
