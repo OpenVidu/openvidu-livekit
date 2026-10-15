@@ -178,5 +178,5 @@ Go to `http://localhost:8081` to explore the MongoDB database with mongo-express
 
 - Unit tests: `go test ./openvidu/...`.
 - Integration tests, which need Docker: `go test -tags integration ./openvidu/analytics/...`. They start a MongoDB replica set with Testcontainers on `openvidu/mongodb:8.0.29-r1` (`ANALYTICS_TEST_MONGO_IMAGE` overrides it), or use the server of `ANALYTICS_TEST_MONGO_URI`.
-- Batch benchmark: the integration test `TestBatchPerformanceBudget` runs when `ANALYTICS_BENCH_MONGO_URI` and `ANALYTICS_BENCH_DB` name a database filled by the sizing generator of the OpenVidu Dashboard (`tools/research/sizing`, scenario M, 7 days).
+- Batch benchmark: the integration test `TestBatchPerformanceBudget` runs when `ANALYTICS_BENCH_MONGO_URI` and `ANALYTICS_BENCH_DB` name a database filled by the data generator of the OpenVidu Dashboard (`dashboard-ce/tools/data-generator`, scenario M, 7 days).
 - The recorded events and stats used by the tests are described in [`openvidu/analytics/testdata`](./openvidu/analytics/testdata/README.md), and the legacy documents in [`openvidu/analytics/migration/testdata`](./openvidu/analytics/migration/testdata/README.md).

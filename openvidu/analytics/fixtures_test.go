@@ -33,7 +33,7 @@ import (
 	"github.com/livekit/livekit-server/openvidu/openviduconfig"
 )
 
-// emittedTypes are the event types the server emits (docs/research/01-events-and-stats-catalogue.md, section 3).
+// emittedTypes are the event types the server emits.
 var emittedTypes = []livekit.AnalyticsEventType{
 	livekit.AnalyticsEventType_ROOM_CREATED, livekit.AnalyticsEventType_ROOM_ENDED,
 	livekit.AnalyticsEventType_PARTICIPANT_JOINED, livekit.AnalyticsEventType_PARTICIPANT_ACTIVE,

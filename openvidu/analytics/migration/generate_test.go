@@ -32,7 +32,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// Scenarios of the sizing study (docs/research/04-data-sizing-and-query-plan.md, section 5) of the OpenVidu Dashboard.
+// Scenarios of the data generator of the OpenVidu Dashboard (dashboard-ce/tools/data-generator).
 var legacyScenarios = map[string]struct{ roomsPerDay, avgRoomSize int }{
 	"S": {200, 4},
 	"M": {2000, 6},
@@ -46,7 +46,7 @@ const (
 	insertBatch             = 5000
 )
 
-// TestGenerateLegacyScenario fills a database with the collections the legacy writer stored for a sizing scenario:
+// TestGenerateLegacyScenario fills a database with the collections the legacy writer stored for a data scenario:
 // the protocol events and stats of the generated sessions, encoded as the legacy writer encoded them, with its indexes,
 // plus the close events its fixer inserted for the sessions of crashed nodes. It runs only when
 // MIGRATION_LEGACY_TARGET_URI, MIGRATION_LEGACY_TARGET_DB, MIGRATION_LEGACY_SCENARIO and MIGRATION_LEGACY_DAYS are set;

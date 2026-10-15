@@ -68,7 +68,7 @@ type legacyData struct {
 	stats  []bson.Raw
 }
 
-func studyData(t *testing.T) legacyData {
+func recordedData(t *testing.T) legacyData {
 	return legacyData{events: recordedLegacy(t, "events"), stats: recordedLegacy(t, "stats")}
 }
 
@@ -354,7 +354,7 @@ func TestMigrationStartup(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("legacy deployment upgraded", func(t *testing.T) {
-		data := studyData(t)
+		data := recordedData(t)
 		env := newMigrationEnv(t, client, "migration_upgrade", &data)
 		require.True(t, env.pending)
 		require.EqualValues(t, len(data.events), env.count(LegacyEventsCollection, bson.D{}))
@@ -429,7 +429,7 @@ func TestMigrationStartup(t *testing.T) {
 	})
 
 	t.Run("cursor query is index-backed", func(t *testing.T) {
-		data := studyData(t)
+		data := recordedData(t)
 		env := newMigrationEnv(t, client, "migration_plan", &data)
 		plan := explain(t, env.db, bson.D{{Key: "find", Value: LegacyEventsCollection},
 			{Key: "filter", Value: legacy.CursorFilter(legacy.EventTimestamp, 1791884000)},
@@ -443,8 +443,8 @@ func TestMigrationReplay(t *testing.T) {
 	client := mongotest.StartMongo(t)
 	ctx := context.Background()
 
-	t.Run("study snapshot with fixer closures", func(t *testing.T) {
-		data := studyData(t)
+	t.Run("recorded snapshot with fixer closures", func(t *testing.T) {
+		data := recordedData(t)
 		roomCreated := data.events[0]
 		for _, raw := range data.events {
 			if legacyOfType("ROOM_CREATED")(raw) {
@@ -464,7 +464,7 @@ func TestMigrationReplay(t *testing.T) {
 		// The fixer closed the room before its authentic ROOM_ENDED was written.
 		data.events = append(data.events, legacyFixerClose(t, roomCreated, livekit.AnalyticsEventType_ROOM_ENDED, endSeconds-1))
 
-		env := newMigrationEnv(t, client, "migration_study", &data)
+		env := newMigrationEnv(t, client, "migration_recorded", &data)
 		env.run()
 		env.checkInvariants(data)
 
@@ -543,14 +543,14 @@ func TestMigrationReplay(t *testing.T) {
 	})
 
 	t.Run("a fixer EGRESS_ENDED never makes an egress complete", func(t *testing.T) {
-		study := studyData(t)
-		started := study.events[0]
-		for _, raw := range study.events {
+		recorded := recordedData(t)
+		started := recorded.events[0]
+		for _, raw := range recorded.events {
 			if legacyOfType("EGRESS_STARTED")(raw) {
 				started = raw
 			}
 		}
-		data := study.without(func(raw bson.Raw) bool {
+		data := recorded.without(func(raw bson.Raw) bool {
 			eventType := lookupString(raw, "type")
 			return (eventType == "EGRESS_ENDED" || eventType == "EGRESS_UPDATED") &&
 				lookupString(raw, "egress_id") == lookupString(started, "egress_id")
@@ -566,7 +566,7 @@ func TestMigrationReplay(t *testing.T) {
 	})
 
 	t.Run("live events of a room active across the upgrade converge", func(t *testing.T) {
-		full := studyData(t)
+		full := recordedData(t)
 		reference := newMigrationEnv(t, client, "migration_live_reference", &full)
 		reference.run()
 
@@ -657,7 +657,7 @@ func TestMigrationResilience(t *testing.T) {
 	client := mongotest.StartMongo(t)
 
 	t.Run("resumes after a lost lock without reapplying a document", func(t *testing.T) {
-		data := studyData(t)
+		data := recordedData(t)
 		reference := newMigrationEnv(t, client, "migration_resume_reference", &data)
 		reference.run()
 

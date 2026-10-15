@@ -44,13 +44,13 @@ const (
 	benchMaxRoundTrips = 20
 )
 
-// TestBatchPerformanceBudget applies batches of a node at scale L against a database filled by
-// tools/research/sizing (scenario M, 7 days). It runs only when ANALYTICS_BENCH_MONGO_URI and ANALYTICS_BENCH_DB
+// TestBatchPerformanceBudget applies batches of a node at scale L against a database filled by the data generator of
+// the OpenVidu Dashboard (dashboard-ce/tools/data-generator, scenario M, 7 days). It runs only when ANALYTICS_BENCH_MONGO_URI and ANALYTICS_BENCH_DB
 // name that database.
 func TestBatchPerformanceBudget(t *testing.T) {
 	uri, database := os.Getenv("ANALYTICS_BENCH_MONGO_URI"), os.Getenv("ANALYTICS_BENCH_DB")
 	if uri == "" || database == "" {
-		t.Skip("set ANALYTICS_BENCH_MONGO_URI and ANALYTICS_BENCH_DB to a sizing dataset")
+		t.Skip("set ANALYTICS_BENCH_MONGO_URI and ANALYTICS_BENCH_DB to a generated dataset")
 	}
 	client, err := mongo.Connect(options.Client().ApplyURI(uri))
 	require.NoError(t, err)

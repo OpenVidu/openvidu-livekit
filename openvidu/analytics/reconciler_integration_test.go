@@ -201,7 +201,7 @@ func TestReconcilerQueryPlans(t *testing.T) {
 	env := newReconcilerEnv(t, client)
 	const limit = 50
 
-	// Scenario S of the sizing study in miniature: mostly closed history, a few hundred open sessions with fresh stats
+	// Scenario S of the dashboard data generator in miniature: mostly closed history, a few hundred open sessions with fresh stats
 	// and a handful of stale ones.
 	for r := range 40 {
 		room := fmt.Sprintf("RM_%03d", r)

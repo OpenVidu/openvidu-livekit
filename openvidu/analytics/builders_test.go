@@ -23,7 +23,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// Builders of protocol events shaped as the server emits them (docs/research/01-events-and-stats-catalogue.md).
+// Builders of protocol events shaped as the server emits them.
 
 const testNode = "ND_test"
 
