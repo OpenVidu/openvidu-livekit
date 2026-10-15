@@ -38,7 +38,7 @@ const (
 	benchEvents  = 1000
 	benchStats   = 5000
 	benchBatches = 20
-	// Performance budget of a batch (analytics-writer-v2 design): p95 latency, and round trips with every entity
+	// Performance budget of a batch: p95 latency, and round trips with every entity
 	// and rollup collection touched.
 	benchMaxP95        = 2 * time.Second
 	benchMaxRoundTrips = 20
