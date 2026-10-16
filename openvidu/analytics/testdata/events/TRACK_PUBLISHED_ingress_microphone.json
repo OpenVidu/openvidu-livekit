@@ -1,0 +1,40 @@
+{
+  "id": "AE_kXqvbZUYzi5d",
+  "type": "TRACK_PUBLISHED",
+  "timestamp": "2026-10-13T19:21:16.031239728Z",
+  "room_id": "RM_NXE2HStYnKQv",
+  "room": {
+    "sid": "RM_NXE2HStYnKQv",
+    "name": "fx-ingress"
+  },
+  "participant_id": "PA_tL88sTcX579C",
+  "participant": {
+    "sid": "PA_tL88sTcX579C",
+    "identity": "obs"
+  },
+  "track_id": "TR_AMLduSn8nMuY6i",
+  "track": {
+    "sid": "TR_AMLduSn8nMuY6i",
+    "source": "MICROPHONE",
+    "mime_type": "audio/opus",
+    "mid": "1",
+    "codecs": [
+      {
+        "mime_type": "audio/opus",
+        "mid": "1",
+        "cid": "TR_z5Bp5Dg5jjtx",
+        "video_layer_mode": "ONE_SPATIAL_LAYER_PER_STREAM"
+      }
+    ],
+    "stereo": true,
+    "stream": "camera",
+    "version": {
+      "unix_micro": "1791919276030024"
+    },
+    "audio_features": [
+      "TF_STEREO"
+    ],
+    "backup_codec_policy": "SIMULCAST"
+  },
+  "node_id": "ND_uWK64bdCvHNX"
+}

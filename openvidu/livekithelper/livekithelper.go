@@ -18,16 +18,24 @@ import (
 	"context"
 	"sync"
 
+	"github.com/livekit/livekit-server/openvidu/goutil"
+	"github.com/livekit/livekit-server/pkg/routing"
+	"github.com/livekit/livekit-server/pkg/routing/selector"
 	"github.com/livekit/livekit-server/pkg/service"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
-	"github.com/livekit/livekit-server/openvidu/goutil"
 )
 
 type LivekitHelper struct {
 	roomStore    *service.ObjectStore
 	egressStore  *service.EgressStore
 	ingressStore *service.IngressStore
+	nodes        nodeRegistry
+}
+
+// nodeRegistry is the part of routing.Router that reads LiveKit's node registry.
+type nodeRegistry interface {
+	ListNodes() ([]*livekit.Node, error)
 }
 
 var once sync.Once
@@ -66,10 +74,16 @@ func Init(server *service.LivekitServer) {
 					logger.Errorw("failed to retrieve IngressStore", err)
 					panic(err)
 				}
+				router, err := goutil.GetPrivateStructField[routing.Router](server, "router")
+				if err != nil {
+					logger.Errorw("failed to retrieve Router", err)
+					panic(err)
+				}
 				livekitHelperInstance = &LivekitHelper{
 					roomStore:    roomStore,
 					egressStore:  egressStore,
 					ingressStore: ingressStore,
+					nodes:        *router,
 				}
 			})
 	}
@@ -103,6 +117,25 @@ func (o *LivekitHelper) ListActiveParticipants() ([]*livekit.ParticipantInfo, er
 	}
 
 	return participants, nil
+}
+
+// ListParticipants returns the participants of a room as stored by LiveKit; none when the room does not exist.
+func (o *LivekitHelper) ListParticipants(roomName string) ([]*livekit.ParticipantInfo, error) {
+	return (*o.roomStore).ListParticipants(context.Background(), livekit.RoomName(roomName))
+}
+
+// IsNodeAvailable reports whether LiveKit's node registry lists the node and its stats are recent.
+func (o *LivekitHelper) IsNodeAvailable(nodeID string) (bool, error) {
+	nodes, err := o.nodes.ListNodes()
+	if err != nil {
+		return false, err
+	}
+	for _, node := range nodes {
+		if node.GetId() == nodeID {
+			return selector.IsAvailable(node), nil
+		}
+	}
+	return false, nil
 }
 
 func (o *LivekitHelper) ListActiveEgresses() ([]*livekit.EgressInfo, error) {

@@ -1,0 +1,96 @@
+{
+  "stats": [
+    {
+      "id": "AS_KztTqTewsWaA",
+      "time_stamp": "2026-10-13T19:21:48.279967339Z",
+      "node": "ND_uWK64bdCvHNX",
+      "room_id": "RM_NXE2HStYnKQv",
+      "room_name": "fx-ingress",
+      "participant_id": "PA_tL88sTcX579C",
+      "track_id": "TR_SGPA_tL88sTcX579C",
+      "streams": [
+        {
+          "primary_packets": 11,
+          "primary_bytes": "8875",
+          "start_time": "1970-01-01T00:00:00Z",
+          "end_time": "1970-01-01T00:00:00Z"
+        }
+      ]
+    },
+    {
+      "id": "AS_CaC9HaeeMEYw",
+      "time_stamp": "2026-10-13T19:21:48.279967339Z",
+      "node": "ND_uWK64bdCvHNX",
+      "room_id": "RM_NXE2HStYnKQv",
+      "room_name": "fx-ingress",
+      "participant_id": "PA_tL88sTcX579C",
+      "track_id": "TR_AMLduSn8nMuY6i",
+      "score": 3.9586668,
+      "streams": [
+        {
+          "primary_packets": 1247,
+          "primary_bytes": "315595",
+          "frames": 1247,
+          "rtt": 1,
+          "jitter": 2700,
+          "start_time": "2026-10-13T19:21:16.034067206Z",
+          "end_time": "2026-10-13T19:21:41.180404857Z"
+        }
+      ],
+      "mime": "audio/opus",
+      "min_score": 1.252,
+      "median_score": 4.5
+    },
+    {
+      "id": "AS_CrocjLQaxpr5",
+      "time_stamp": "2026-10-13T19:21:48.279967339Z",
+      "node": "ND_uWK64bdCvHNX",
+      "room_id": "RM_NXE2HStYnKQv",
+      "room_name": "fx-ingress",
+      "participant_id": "PA_tL88sTcX579C",
+      "track_id": "TR_VCuhc9AeXjXZAe",
+      "score": 3.9586668,
+      "streams": [
+        {
+          "primary_packets": 3017,
+          "primary_bytes": "2885919",
+          "frames": 1496,
+          "rtt": 1,
+          "jitter": 2746,
+          "plis": 2,
+          "video_layers": [
+            {
+              "layer": 1,
+              "packets": 2263,
+              "bytes": "2138258",
+              "frames": 748
+            }
+          ],
+          "start_time": "2026-10-13T19:21:16.049854644Z",
+          "end_time": "2026-10-13T19:21:41.178286664Z"
+        }
+      ],
+      "mime": "video/H264",
+      "min_score": 1.252,
+      "median_score": 4.5
+    },
+    {
+      "id": "AS_T4V33pNCoGpY",
+      "kind": "DOWNSTREAM",
+      "time_stamp": "2026-10-13T19:21:48.279967339Z",
+      "node": "ND_uWK64bdCvHNX",
+      "room_id": "RM_NXE2HStYnKQv",
+      "room_name": "fx-ingress",
+      "participant_id": "PA_tL88sTcX579C",
+      "track_id": "TR_SGPA_tL88sTcX579C",
+      "streams": [
+        {
+          "primary_packets": 34,
+          "primary_bytes": "12515",
+          "start_time": "1970-01-01T00:00:00Z",
+          "end_time": "1970-01-01T00:00:00Z"
+        }
+      ]
+    }
+  ]
+}

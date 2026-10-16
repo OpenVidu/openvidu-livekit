@@ -1,0 +1,70 @@
+{
+  "id": "AE_Dc6xYimtfh98",
+  "type": "PARTICIPANT_ACTIVE",
+  "timestamp": "2026-10-13T19:23:02.512051933Z",
+  "room_id": "RM_sqgCdXepgfgs",
+  "room": {
+    "sid": "RM_sqgCdXepgfgs",
+    "name": "fx-lifecycle",
+    "empty_timeout": 20,
+    "departure_timeout": 10,
+    "creation_time": "1791919382",
+    "creation_time_ms": "1791919382501",
+    "turn_password": "rI9xL9oCi8GEX6vRSoJe4EgFbEychZl3r4wefzRHGZGB",
+    "enabled_codecs": [
+      {
+        "mime": "audio/PCMU"
+      },
+      {
+        "mime": "audio/PCMA"
+      },
+      {
+        "mime": "audio/opus"
+      },
+      {
+        "mime": "audio/red"
+      },
+      {
+        "mime": "video/VP8"
+      },
+      {
+        "mime": "video/H264"
+      },
+      {
+        "mime": "video/VP9"
+      },
+      {
+        "mime": "video/AV1"
+      },
+      {
+        "mime": "video/H265"
+      },
+      {
+        "mime": "video/rtx"
+      }
+    ]
+  },
+  "participant_id": "PA_joBzDAREayuJ",
+  "participant": {
+    "sid": "PA_joBzDAREayuJ",
+    "identity": "alice",
+    "state": "ACTIVE",
+    "metadata": "{\"name\":\"Alice\"}",
+    "joined_at": "1791919382",
+    "joined_at_ms": "1791919382502",
+    "version": 2,
+    "permission": {
+      "can_subscribe": true,
+      "can_publish": true,
+      "can_publish_data": true
+    },
+    "attributes": {
+      "role": "host"
+    }
+  },
+  "client_meta": {
+    "client_connect_time": 9,
+    "connection_type": "udp"
+  },
+  "node_id": "ND_uWK64bdCvHNX"
+}

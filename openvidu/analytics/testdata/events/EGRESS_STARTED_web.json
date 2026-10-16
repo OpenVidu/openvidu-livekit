@@ -1,0 +1,29 @@
+{
+  "id": "AE_f3229HJPaj66",
+  "type": "EGRESS_STARTED",
+  "timestamp": "2026-10-13T19:19:06.978365489Z",
+  "egress_id": "EG_gsf8QHPZxHBW",
+  "egress": {
+    "egress_id": "EG_gsf8QHPZxHBW",
+    "started_at": "1791919146977413113",
+    "updated_at": "1791919146977413113",
+    "web": {
+      "url": "https://example.com/?token=SECRET-web-token",
+      "preset": "H264_720P_30",
+      "file_outputs": [
+        {
+          "filepath": "/home/egress/fx-web.mp4"
+        }
+      ]
+    },
+    "file_results": [
+      {
+        "filename": "/home/egress/fx-web.mp4"
+      }
+    ],
+    "file": {
+      "filename": "/home/egress/fx-web.mp4"
+    }
+  },
+  "node_id": "ND_gAWdUwUWW9JM"
+}

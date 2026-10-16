@@ -15,10 +15,13 @@
 package openvidu
 
 import (
+	"context"
+	"fmt"
 	"runtime"
 
 	"github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/livekit-server/pkg/service"
+	"github.com/livekit/livekit-server/pkg/telemetry"
 	"github.com/livekit/livekit-server/pkg/telemetry/prometheus"
 	"github.com/livekit/protocol/logger"
 
@@ -27,22 +30,38 @@ import (
 	"github.com/livekit/livekit-server/openvidu/livekithelper"
 )
 
-func Start(conf *config.Config, server *service.LivekitServer) {
+var analyticsEnabled bool
+
+// Start starts the OpenVidu services of the server. An error means the server must not start.
+func Start(conf *config.Config, server *service.LivekitServer) error {
 	if conf.OpenVidu.UseGlobalCpuMonitoring {
 		startGlobalCPUMonitor()
 	}
 
 	if conf.OpenVidu.Analytics.Enabled {
-		// Start livekit helper
 		livekithelper.Init(server)
-		// Start analytics
-		err := analytics.InitializeAnalytics(conf, livekithelper.GetInstance())
+		node := server.Node()
+		err := analytics.InitializeAnalytics(conf, analytics.Node{ID: node.GetId(), Region: node.GetRegion()},
+			livekithelper.GetInstance())
 		if err != nil {
-			logger.Errorw("failed to start analytics", err)
-			panic(err)
+			return fmt.Errorf("failed to start analytics: %w", err)
 		}
+		analyticsEnabled = true
 		go analytics.Start()
 	}
+	return nil
+}
+
+// Stop runs after the server has stopped and closed its rooms: it flushes the telemetry into the analytics writer
+// and writes the queued events and stats, waiting at most analytics.ShutdownTimeout.
+func Stop() {
+	if !analyticsEnabled {
+		return
+	}
+	telemetry.FlushAndStop()
+	ctx, cancel := context.WithTimeout(context.Background(), analytics.ShutdownTimeout)
+	defer cancel()
+	analytics.Stop(ctx)
 }
 
 func startGlobalCPUMonitor() {

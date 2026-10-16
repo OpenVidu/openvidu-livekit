@@ -1,0 +1,65 @@
+{
+  "id": "AE_DL4wwCeKXRXE",
+  "type": "PARTICIPANT_LEFT",
+  "timestamp": "2026-10-13T19:19:39.585282150Z",
+  "room_id": "RM_9WQu3pAiGG6U",
+  "room": {
+    "sid": "RM_9WQu3pAiGG6U",
+    "name": "fx-egress",
+    "empty_timeout": 20,
+    "departure_timeout": 10,
+    "creation_time": "1791919117",
+    "creation_time_ms": "1791919117804",
+    "turn_password": "FKtceLOYNhlcXX2kcv7OzVrwk5BWgQNBL8gGiqHzmmA",
+    "enabled_codecs": [
+      {
+        "mime": "audio/PCMU"
+      },
+      {
+        "mime": "audio/PCMA"
+      },
+      {
+        "mime": "audio/opus"
+      },
+      {
+        "mime": "audio/red"
+      },
+      {
+        "mime": "video/VP8"
+      },
+      {
+        "mime": "video/H264"
+      },
+      {
+        "mime": "video/VP9"
+      },
+      {
+        "mime": "video/AV1"
+      },
+      {
+        "mime": "video/H265"
+      },
+      {
+        "mime": "video/rtx"
+      }
+    ]
+  },
+  "participant_id": "PA_Nat5cdARLYYZ",
+  "participant": {
+    "sid": "PA_Nat5cdARLYYZ",
+    "identity": "alice",
+    "state": "DISCONNECTED",
+    "metadata": "{\"name\":\"Alice Updated\"}",
+    "joined_at": "1791919117",
+    "joined_at_ms": "1791919117804",
+    "version": 8,
+    "permission": {
+      "can_subscribe": true,
+      "can_publish": true,
+      "can_publish_data": true
+    },
+    "is_publisher": true,
+    "disconnect_reason": "PARTICIPANT_REMOVED"
+  },
+  "node_id": "ND_gAWdUwUWW9JM"
+}

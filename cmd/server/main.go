@@ -322,10 +322,15 @@ func startServer(ctx context.Context, c *cli.Command) error {
 	}()
 
 	// BEGIN OPENVIDU BLOCK
-	openvidu.Start(conf, server)
+	// main prints the error of a failed start and exits with 0; a failed OpenVidu start exits with 1.
+	if err := openvidu.Start(conf, server); err != nil {
+		logger.Errorw("failed to start the OpenVidu services", err)
+		os.Exit(1)
+	}
+	err = server.Start()
+	openvidu.Stop()
+	return err
 	// END OPENVIDU BLOCK
-
-	return server.Start()
 }
 
 func getConfigString(configFile string, inConfigBody string) (string, error) {

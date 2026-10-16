@@ -1,0 +1,46 @@
+{
+  "id": "AE_yBbibX3RWAQY",
+  "timestamp": "2026-10-13T19:23:02Z",
+  "room": {
+    "sid": "RM_sqgCdXepgfgs",
+    "name": "fx-lifecycle",
+    "empty_timeout": 20,
+    "departure_timeout": 10,
+    "creation_time": "1791919382",
+    "creation_time_ms": "1791919382501",
+    "turn_password": "rI9xL9oCi8GEX6vRSoJe4EgFbEychZl3r4wefzRHGZGB",
+    "enabled_codecs": [
+      {
+        "mime": "audio/PCMU"
+      },
+      {
+        "mime": "audio/PCMA"
+      },
+      {
+        "mime": "audio/opus"
+      },
+      {
+        "mime": "audio/red"
+      },
+      {
+        "mime": "video/VP8"
+      },
+      {
+        "mime": "video/H264"
+      },
+      {
+        "mime": "video/VP9"
+      },
+      {
+        "mime": "video/AV1"
+      },
+      {
+        "mime": "video/H265"
+      },
+      {
+        "mime": "video/rtx"
+      }
+    ]
+  },
+  "node_id": "ND_uWK64bdCvHNX"
+}

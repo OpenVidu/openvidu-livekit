@@ -1,0 +1,25 @@
+{
+  "id": "AE_joUpUzH7sKAS",
+  "type": "API_CALL",
+  "timestamp": "2026-10-13T19:23:20.562488958Z",
+  "node_id": "ND_uWK64bdCvHNX",
+  "api_call": {
+    "request": {
+      "mute_room_track_request": {
+        "room": "fx-lifecycle",
+        "identity": "alice",
+        "track_sid": "TR_VCwMkJBY8Rri9c",
+        "muted": true
+      }
+    },
+    "service": "RoomService",
+    "method": "MutePublishedTrack",
+    "node_id": "ND_uWK64bdCvHNX",
+    "status": 200,
+    "room_name": "fx-lifecycle",
+    "participant_identity": "alice",
+    "track_id": "TR_VCwMkJBY8Rri9c",
+    "started_at": "2026-10-13T19:23:20.561519686Z",
+    "duration_ns": "948022"
+  }
+}

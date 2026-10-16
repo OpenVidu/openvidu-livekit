@@ -1,0 +1,30 @@
+{
+  "id": "AE_XMjdEVmyebVC",
+  "type": "INGRESS_STARTED",
+  "timestamp": "2026-10-13T19:21:52.605260062Z",
+  "ingress_id": "IN_iwuXFX4xkybv",
+  "ingress": {
+    "ingress_id": "IN_iwuXFX4xkybv",
+    "name": "OBS fixtures",
+    "stream_key": "7h3eU7vuVLpi",
+    "url": "rtmp://localhost:11935/live",
+    "enable_transcoding": true,
+    "room_name": "fx-ingress",
+    "participant_identity": "obs",
+    "participant_name": "OBS",
+    "reusable": true,
+    "state": {
+      "status": "ENDPOINT_PUBLISHING",
+      "audio": {
+        "mime_type": "audio/aac",
+        "channels": 1,
+        "sample_rate": 44100
+      },
+      "room_id": "RM_NXE2HStYnKQv",
+      "started_at": "1791919312519216899",
+      "updated_at": "1791919312604289710",
+      "resource_id": "RT_QoQb72347uSu"
+    }
+  },
+  "node_id": "ND_uWK64bdCvHNX"
+}

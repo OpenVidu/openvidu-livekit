@@ -1,0 +1,20 @@
+{
+  "id": "AE_J5JUnr9nQ448",
+  "type": "TRACK_SUBSCRIBE_FAILED",
+  "timestamp": "2026-10-13T19:24:45.806105673Z",
+  "room_id": "RM_sqgCdXepgfgs",
+  "room": {
+    "sid": "RM_sqgCdXepgfgs",
+    "name": "fx-lifecycle"
+  },
+  "participant_id": "PA_hjrSPRKzMLuN",
+  "participant": {
+    "sid": "PA_hjrSPRKzMLuN"
+  },
+  "track_id": "TR_doesnotexist002",
+  "track": {
+    "sid": "TR_doesnotexist002"
+  },
+  "error": "track cannot be found",
+  "node_id": "ND_uWK64bdCvHNX"
+}

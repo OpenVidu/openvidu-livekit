@@ -1,0 +1,37 @@
+{
+  "id": "AE_fQEVEaZzGUoh",
+  "type": "EGRESS_UPDATED",
+  "timestamp": "2026-10-13T19:19:06.400708423Z",
+  "room_id": "RM_9WQu3pAiGG6U",
+  "egress_id": "EG_45aofE87CqML",
+  "egress": {
+    "egress_id": "EG_45aofE87CqML",
+    "room_id": "RM_9WQu3pAiGG6U",
+    "room_name": "fx-egress",
+    "status": "EGRESS_ENDING",
+    "started_at": "1791919126327217410",
+    "updated_at": "1791919146399842211",
+    "room_composite": {
+      "room_name": "fx-egress",
+      "layout": "grid",
+      "preset": "H264_720P_30",
+      "file_outputs": [
+        {
+          "filepath": "/home/egress/fx-room-composite.mp4"
+        }
+      ]
+    },
+    "file_results": [
+      {
+        "filename": "/home/egress/fx-room-composite.mp4",
+        "started_at": "1791919132798218008"
+      }
+    ],
+    "details": "End reason: StopEgress API",
+    "file": {
+      "filename": "/home/egress/fx-room-composite.mp4",
+      "started_at": "1791919132798218008"
+    }
+  },
+  "node_id": "ND_gAWdUwUWW9JM"
+}

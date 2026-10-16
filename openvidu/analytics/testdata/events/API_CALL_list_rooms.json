@@ -1,0 +1,17 @@
+{
+  "id": "AE_rZ5vokgBLHR5",
+  "type": "API_CALL",
+  "timestamp": "2026-10-13T19:19:39.424543799Z",
+  "node_id": "ND_gAWdUwUWW9JM",
+  "api_call": {
+    "request": {
+      "list_rooms_request": {}
+    },
+    "service": "RoomService",
+    "method": "ListRooms",
+    "node_id": "ND_gAWdUwUWW9JM",
+    "status": 200,
+    "started_at": "2026-10-13T19:19:39.424243714Z",
+    "duration_ns": "267124"
+  }
+}

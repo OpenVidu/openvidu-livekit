@@ -1,0 +1,36 @@
+{
+  "id": "AE_jsFgpJoyHYsp",
+  "type": "INGRESS_DELETED",
+  "timestamp": "2026-10-13T19:22:40.264557528Z",
+  "ingress_id": "IN_iwuXFX4xkybv",
+  "ingress": {
+    "ingress_id": "IN_iwuXFX4xkybv",
+    "name": "OBS fixtures",
+    "stream_key": "7h3eU7vuVLpi",
+    "url": "rtmp://localhost:11935/live",
+    "enable_transcoding": true,
+    "room_name": "fx-ingress",
+    "participant_identity": "obs",
+    "participant_name": "OBS",
+    "reusable": true,
+    "state": {
+      "video": {
+        "mime_type": "video/H264",
+        "width": 640,
+        "height": 360,
+        "framerate": 30
+      },
+      "audio": {
+        "mime_type": "audio/aac",
+        "channels": 1,
+        "sample_rate": 44100
+      },
+      "room_id": "RM_NXE2HStYnKQv",
+      "started_at": "1791919312519216899",
+      "ended_at": "1791919332801157834",
+      "updated_at": "1791919332801173904",
+      "resource_id": "RT_QoQb72347uSu"
+    }
+  },
+  "node_id": "ND_uWK64bdCvHNX"
+}

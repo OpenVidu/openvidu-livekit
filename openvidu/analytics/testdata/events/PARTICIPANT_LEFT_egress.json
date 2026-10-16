@@ -1,0 +1,70 @@
+{
+  "id": "AE_UZXjDhH4MjKE",
+  "type": "PARTICIPANT_LEFT",
+  "timestamp": "2026-10-13T19:19:27.849192161Z",
+  "room_id": "RM_9WQu3pAiGG6U",
+  "room": {
+    "sid": "RM_9WQu3pAiGG6U",
+    "name": "fx-egress",
+    "empty_timeout": 20,
+    "departure_timeout": 10,
+    "creation_time": "1791919117",
+    "creation_time_ms": "1791919117804",
+    "turn_password": "FKtceLOYNhlcXX2kcv7OzVrwk5BWgQNBL8gGiqHzmmA",
+    "enabled_codecs": [
+      {
+        "mime": "audio/PCMU"
+      },
+      {
+        "mime": "audio/PCMA"
+      },
+      {
+        "mime": "audio/opus"
+      },
+      {
+        "mime": "audio/red"
+      },
+      {
+        "mime": "video/VP8"
+      },
+      {
+        "mime": "video/H264"
+      },
+      {
+        "mime": "video/VP9"
+      },
+      {
+        "mime": "video/AV1"
+      },
+      {
+        "mime": "video/H265"
+      },
+      {
+        "mime": "video/rtx"
+      }
+    ],
+    "num_participants": 1,
+    "num_publishers": 1
+  },
+  "participant_id": "PA_TRmJWxJvd8QH",
+  "participant": {
+    "sid": "PA_TRmJWxJvd8QH",
+    "identity": "EG_45aofE87CqML",
+    "state": "DISCONNECTED",
+    "joined_at": "1791919128",
+    "joined_at_ms": "1791919128800",
+    "version": 3,
+    "permission": {
+      "can_subscribe": true,
+      "hidden": true,
+      "recorder": true
+    },
+    "kind": "EGRESS",
+    "disconnect_reason": "CONNECTION_TIMEOUT",
+    "client_protocol": 2,
+    "capabilities": [
+      "CAP_COMPRESSION_DEFLATE_RAW"
+    ]
+  },
+  "node_id": "ND_gAWdUwUWW9JM"
+}
