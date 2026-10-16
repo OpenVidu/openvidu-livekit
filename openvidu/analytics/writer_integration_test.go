@@ -162,24 +162,56 @@ func TestWriter(t *testing.T) {
 		require.NotNil(t, find[schema.HourlyRollupDocument](env, schema.CollectionAnalyticsHourly, "node:ND_test:2026-10-12T10:00:00Z").Rooms)
 	})
 
-	t.Run("dependent participants do not count as room size", func(t *testing.T) {
+	t.Run("only standard participants count as participants", func(t *testing.T) {
 		env := newEnv(t, client)
 		var ev events
+		created := at("0s")
 		a := participantInfo("PA_a", "alice", livekit.ParticipantInfo_STANDARD, at("1s"))
 		b := participantInfo("PA_b", "bob", livekit.ParticipantInfo_STANDARD, at("1s"))
 		recorder := participantInfo("PA_e", "EG_1", livekit.ParticipantInfo_EGRESS, at("1s"))
+		camera := participantInfo("PA_i", "cam-1", livekit.ParticipantInfo_INGRESS, at("1s"))
+		agent := participantInfo("PA_g", "agent-1", livekit.ParticipantInfo_AGENT, at("1s"))
+		phone := participantInfo("PA_s", "sip_+34600000000", livekit.ParticipantInfo_SIP, at("1s"))
 		env.apply([]*livekit.AnalyticsEvent{
-			ev.roomCreated("RM_1", "r", at("0s")),
+			ev.roomCreated("RM_1", "r", created),
 			ev.joined("RM_1", a, at("1s")), ev.active("RM_1", a, at("2s")),
 			ev.joined("RM_1", b, at("1s")), ev.active("RM_1", b, at("2s")),
 			ev.joined("RM_1", recorder, at("1s")), ev.active("RM_1", recorder, at("2s")),
+			ev.joined("RM_1", camera, at("1s")), ev.active("RM_1", camera, at("2s")),
+			ev.joined("RM_1", agent, at("1s")), ev.active("RM_1", agent, at("2s")),
+			ev.joined("RM_1", phone, at("1s")),
+			ev.aborted("RM_1", phone, at("20s"), livekit.DisconnectReason_CONNECTION_TIMEOUT),
+			ev.left("RM_1", agent, at("10m"), livekit.DisconnectReason_CLIENT_INITIATED),
 		})
 		room := find[schema.RoomDocument](env, schema.CollectionRooms, "RM_1")
-		require.EqualValues(t, 1, room.Participants.ByKind["EGRESS"])
-		require.EqualValues(t, 2, room.Participants.ByKind["STANDARD"])
+		require.Equal(t, map[string]int32{"STANDARD": 2, "EGRESS": 1, "INGRESS": 1, "AGENT": 1, "SIP": 1}, room.Participants.ByKind)
+		require.EqualValues(t, 2, room.Participants.Sessions)
+		require.EqualValues(t, 2, room.Participants.Unique)
 		require.EqualValues(t, 2, room.Participants.Active)
 		require.EqualValues(t, 2, room.Participants.PeakActive)
-		require.EqualValues(t, 3, room.Participants.Sessions)
+		require.EqualValues(t, 0, room.Participants.Aborted)
+
+		hourly := find[schema.HourlyRollupDocument](env, schema.CollectionAnalyticsHourly, "global:2026-10-12T10:00:00Z")
+		require.Equal(t, map[string]int32{"STANDARD": 2, "EGRESS": 1, "INGRESS": 1, "AGENT": 1, "SIP": 1}, hourly.Participants.ByKind)
+		require.EqualValues(t, 2, *hourly.Participants.Joined)
+		require.EqualValues(t, 2, *hourly.Participants.Active)
+		require.EqualValues(t, 2, hourly.Participants.BySDK["JS"])
+		require.Nil(t, hourly.Participants.Aborted)
+		require.Nil(t, hourly.Participants.Left)
+		require.Nil(t, hourly.Participants.Minutes)
+		require.Empty(t, hourly.Participants.DisconnectReasons)
+		fiveMinute := find[schema.FiveMinuteRollupDocument](env, schema.CollectionAnalytics5Min, "global:2026-10-12T10:00:00Z")
+		require.EqualValues(t, 2, *fiveMinute.Participants.Joined)
+		require.EqualValues(t, 2, *fiveMinute.Participants.Active)
+		require.Nil(t, fiveMinute.Participants.Aborted)
+
+		env.apply([]*livekit.AnalyticsEvent{
+			ev.left("RM_1", camera, at("15m"), livekit.DisconnectReason_CLIENT_INITIATED),
+			ev.roomEnded("RM_1", "r", created, at("20m"), livekit.RoomEndReason_ROOM_END_API_DELETE),
+		})
+		hourly = find[schema.HourlyRollupDocument](env, schema.CollectionAnalyticsHourly, "global:2026-10-12T10:00:00Z")
+		require.EqualValues(t, 2, *hourly.Rooms.ParticipantsSum)
+		require.Nil(t, hourly.Participants.Left)
 	})
 
 	t.Run("events out of order and status never regresses", func(t *testing.T) {

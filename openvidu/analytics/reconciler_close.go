@@ -122,7 +122,7 @@ func (c *closer) closeParticipants(ctx context.Context, participants []confirmed
 		}
 		state := projection.ParticipantState{
 			SID: participant.SID, RoomSID: participant.RoomSID, RoomName: participant.RoomName,
-			Identity: participant.Identity, NodeID: participant.NodeID, Status: participant.Status,
+			Identity: participant.Identity, Kind: participant.Kind, NodeID: participant.NodeID, Status: participant.Status,
 			JoinedAt: participant.JoinedAt, TrackSIDs: published[participant.SID],
 		}
 		closure := projection.CloseParticipant(state, participant.at, c.vetoFrom(), participant.reason, c.r.opts)

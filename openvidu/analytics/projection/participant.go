@@ -91,11 +91,11 @@ func (p *projector) participant() {
 
 	room := p.roomTouch(roomName)
 	room.set("internal.participantSids", union("internal.participantSids", sid))
-	if identity != "" {
+	standard := kind == StandardKind
+	if identity != "" && standard {
 		room.set("internal.identities", union("internal.identities", identity))
 	}
 	room.set("internal.kinds."+kind, union("internal.kinds."+kind, sid))
-	dependent := slices.Contains(DependentKinds, kind)
 
 	switch eventType {
 	case livekit.AnalyticsEventType_PARTICIPANT_JOINED:
@@ -117,7 +117,7 @@ func (p *projector) participant() {
 		} else {
 			f.set("internal.resumeEventIds", union("internal.resumeEventIds", p.event.GetId()))
 		}
-		if !dependent {
+		if standard {
 			room.set("internal.activeSids", union("internal.activeSids", sid))
 			room.set("participants.peakActive", maxOf("participants.peakActive", activeAfter(sid)))
 		}
@@ -125,7 +125,9 @@ func (p *projector) participant() {
 		status := participantLeft
 		if eventType == livekit.AnalyticsEventType_PARTICIPANT_CONNECTION_ABORTED {
 			status = participantAborted
-			room.set("internal.abortedSids", union("internal.abortedSids", sid))
+			if standard {
+				room.set("internal.abortedSids", union("internal.abortedSids", sid))
+			}
 		}
 		closedByEvent := eq(field("closedBy"), byEvent)
 		f.set("status", cond(closedByEvent, field("status"), status))

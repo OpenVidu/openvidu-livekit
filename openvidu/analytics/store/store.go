@@ -226,8 +226,8 @@ func (s *Store) InsertStats(ctx context.Context, stats []schema.TrackStatsDocume
 	return err
 }
 
-// ParticipantSessions returns, per room, the participant sessions that count towards room size (dependent kinds
-// excluded), for the participantsSum rollup of closed rooms.
+// ParticipantSessions returns, per room, the STANDARD participant sessions, for the participantsSum rollup of closed
+// rooms.
 func (s *Store) ParticipantSessions(ctx context.Context, roomSids []string) (map[string]int32, error) {
 	sessions := map[string]int32{}
 	if len(roomSids) == 0 {
@@ -236,28 +236,21 @@ func (s *Store) ParticipantSessions(ctx context.Context, roomSids []string) (map
 	s.roundTrips++
 	cursor, err := s.db.Collection(schema.CollectionRooms).Find(ctx,
 		bson.D{{Key: "_id", Value: bson.D{{Key: "$in", Value: roomSids}}}},
-		options.Find().SetProjection(bson.D{{Key: "participants.sessions", Value: 1}, {Key: "participants.byKind", Value: 1}}))
+		options.Find().SetProjection(bson.D{{Key: "participants.sessions", Value: 1}}))
 	if err != nil {
 		return nil, err
 	}
 	var rooms []struct {
 		ID           string `bson:"_id"`
 		Participants struct {
-			Sessions int32            `bson:"sessions"`
-			ByKind   map[string]int32 `bson:"byKind"`
+			Sessions int32 `bson:"sessions"`
 		} `bson:"participants"`
 	}
 	if err := cursor.All(ctx, &rooms); err != nil {
 		return nil, err
 	}
 	for _, room := range rooms {
-		count := room.Participants.Sessions
-		for kind, n := range room.Participants.ByKind {
-			if slices.Contains(projection.DependentKinds, kind) {
-				count -= n
-			}
-		}
-		sessions[room.ID] = count
+		sessions[room.ID] = room.Participants.Sessions
 	}
 	return sessions, nil
 }

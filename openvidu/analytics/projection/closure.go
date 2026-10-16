@@ -86,6 +86,8 @@ type ParticipantState struct {
 	RoomSID  string
 	RoomName string
 	Identity string
+	// Kind is the participant kind; empty is the protocol default, STANDARD.
+	Kind     string
 	NodeID   string
 	Status   string
 	JoinedAt time.Time
@@ -154,9 +156,10 @@ func CloseParticipant(state ParticipantState, at time.Time, vetoFrom time.Time, 
 	}
 
 	tracksRetention, _, _ := opts.Retention.Of(schema.RetentionTracks)
+	standard := state.Kind == "" || state.Kind == StandardKind
 	room := newFields()
 	room.set("internal.closedSids", union("internal.closedSids", state.SID))
-	if status == participantAborted {
+	if status == participantAborted && standard {
 		room.set("internal.abortedSids", union("internal.abortedSids", state.SID))
 	}
 
@@ -166,9 +169,14 @@ func CloseParticipant(state ParticipantState, at time.Time, vetoFrom time.Time, 
 	}
 	participant = append(participant, bson.E{Key: "disconnect_reason", Value: Reconciled})
 
-	counters := map[string]any{counter: one, "participants.disconnectReasons." + Reconciled: one}
-	if status == participantLeft && !state.JoinedAt.IsZero() {
-		counters["participants.minutes"] = float64(schema.DurationMs(state.JoinedAt, at)) / 60000
+	var increments []Increment
+	if standard {
+		counters := map[string]any{counter: one, "participants.disconnectReasons." + Reconciled: one}
+		if status == participantLeft && !state.JoinedAt.IsZero() {
+			counters["participants.minutes"] = float64(schema.DurationMs(state.JoinedAt, at)) / 60000
+		}
+		increments = append(periodIncrements(state.NodeID, at, counters),
+			fiveMinuteIncrements(state.NodeID, at, map[string]any{counter: one})...)
 	}
 
 	return Closure{
@@ -192,8 +200,7 @@ func CloseParticipant(state ParticipantState, at time.Time, vetoFrom time.Time, 
 				reconcilerPayload(reason),
 			},
 		},
-		Increments: append(periodIncrements(state.NodeID, at, counters),
-			fiveMinuteIncrements(state.NodeID, at, map[string]any{counter: one})...),
+		Increments: increments,
 	}
 }
 

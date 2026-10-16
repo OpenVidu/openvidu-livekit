@@ -44,6 +44,7 @@ type RoomConfig struct {
 	Metadata           string `bson:"metadata,omitempty"`
 }
 
+// RoomParticipantCounters count STANDARD sessions; ByKind counts the sessions of every kind.
 type RoomParticipantCounters struct {
 	Sessions   int32            `bson:"sessions"`
 	Unique     int32            `bson:"unique"`
@@ -462,6 +463,7 @@ type RollupRooms struct {
 	ParticipantsSum *int32           `bson:"participantsSum,omitempty"`
 }
 
+// RollupParticipants count STANDARD sessions; ByKind counts the sessions of every kind.
 type RollupParticipants struct {
 	Joined            *int32           `bson:"joined,omitempty"`
 	Active            *int32           `bson:"active,omitempty"`

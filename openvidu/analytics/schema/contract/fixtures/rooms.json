@@ -16,10 +16,10 @@
 			"departureTimeoutMs": { "$numberLong": "20000" }
 		},
 		"participants": {
-			"sessions": { "$numberInt": "7" },
-			"unique": { "$numberInt": "6" },
+			"sessions": { "$numberInt": "4" },
+			"unique": { "$numberInt": "3" },
 			"active": { "$numberInt": "0" },
-			"peakActive": { "$numberInt": "3" },
+			"peakActive": { "$numberInt": "2" },
 			"aborted": { "$numberInt": "1" },
 			"byKind": {
 				"STANDARD": { "$numberInt": "4" },
@@ -60,7 +60,7 @@
 				"PA_s1pCaller7Yx"
 			],
 			"activeParticipantSids": [],
-			"identities": ["alice", "bob", "carol", "EG_rec0rdMp4Kq2", "agent-assistant", "sip-caller-1"],
+			"identities": ["alice", "bob", "Carol"],
 			"trackSids": ["TR_aLiceCam3Vp8", "TR_aLiceMic0pus"],
 			"egressIds": ["EG_rec0rdMp4Kq2", "EG_trackF4iled9"]
 		},
@@ -80,10 +80,10 @@
 			"departureTimeoutMs": { "$numberLong": "20000" }
 		},
 		"participants": {
-			"sessions": { "$numberInt": "5" },
-			"unique": { "$numberInt": "4" },
-			"active": { "$numberInt": "2" },
-			"peakActive": { "$numberInt": "2" },
+			"sessions": { "$numberInt": "2" },
+			"unique": { "$numberInt": "2" },
+			"active": { "$numberInt": "1" },
+			"peakActive": { "$numberInt": "1" },
 			"aborted": { "$numberInt": "0" },
 			"byKind": {
 				"STANDARD": { "$numberInt": "2" },
@@ -120,8 +120,8 @@
 				"PA_1ngressSes02",
 				"PA_er1nJ0in9Qa"
 			],
-			"activeParticipantSids": ["PA_dav3Pub6Mn2", "PA_1ngressSes02"],
-			"identities": ["dave", "obs-studio", "EG_streamHls7Wz", "erin"],
+			"activeParticipantSids": ["PA_dav3Pub6Mn2"],
+			"identities": ["dave", "erin"],
 			"trackSids": ["TR_daveCamH264x", "TR_daveMic0pusx", "TR_1ngVid1H264a", "TR_1ngVid2H264b"],
 			"egressIds": ["EG_streamHls7Wz"],
 			"activeEgressIds": ["EG_streamHls7Wz"],

@@ -93,7 +93,7 @@ func roomCreationTime(room *livekit.Room) time.Time {
 	return schema.UnixSeconds(room.GetCreationTime())
 }
 
-// activeAfter is the number of active, non-dependent participants once sid joins the active set.
+// activeAfter is the number of active STANDARD participants once sid joins the active set.
 func activeAfter(sid string) any {
 	return size(difference(union("internal.activeSids", sid), emptyArray("internal.closedSids")))
 }
@@ -105,7 +105,7 @@ func deriveRoom(opts Options) *fields {
 	ingressSessions := sizeOf("internal.ingressSessionIds")
 
 	f := newFields()
-	f.set("participants.sessions", sizeOf("internal.participantSids"))
+	f.set("participants.sessions", sizeOf("internal.kinds."+StandardKind))
 	f.set("participants.unique", sizeOf("internal.identities"))
 	f.set("participants.active", active)
 	f.set("participants.peakActive", maxOf("participants.peakActive", active))

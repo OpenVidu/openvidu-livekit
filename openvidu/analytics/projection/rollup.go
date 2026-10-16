@@ -65,7 +65,7 @@ func periodIncrements(nodeID string, at time.Time, counters map[string]any) []In
 }
 
 // RoomEndedIncrements returns the participantsSum increments of a room closed at endedAt on nodeID, once the batch
-// knows its participant sessions excluding dependent kinds.
+// knows its STANDARD participant sessions.
 func RoomEndedIncrements(nodeID string, endedAt time.Time, participants int32) []Increment {
 	return periodIncrements(nodeID, endedAt, map[string]any{"rooms.participantsSum": participants})
 }
@@ -92,16 +92,20 @@ func (p *projector) rollups() {
 		p.fiveMinute(map[string]any{"rooms.ended": one})
 	case livekit.AnalyticsEventType_PARTICIPANT_JOINED:
 		info := p.event.GetParticipant()
-		client := p.event.GetClientInfo()
-		p.counters(map[string]any{
-			"participants.joined":                                          one,
-			"participants.byKind." + info.GetKind().String():               one,
-			"participants.bySdk." + client.GetSdk().String():               one,
-			"participants.byOs." + osFamily(client.GetOs()):                one,
-			"participants.byBrowser." + browserFamily(client.GetBrowser()): one,
-		})
-		p.fiveMinute(map[string]any{"participants.joined": one})
+		counters := map[string]any{"participants.byKind." + info.GetKind().String(): one}
+		if info.GetKind() == livekit.ParticipantInfo_STANDARD {
+			client := p.event.GetClientInfo()
+			counters["participants.joined"] = one
+			counters["participants.bySdk."+client.GetSdk().String()] = one
+			counters["participants.byOs."+osFamily(client.GetOs())] = one
+			counters["participants.byBrowser."+browserFamily(client.GetBrowser())] = one
+			p.fiveMinute(map[string]any{"participants.joined": one})
+		}
+		p.counters(counters)
 	case livekit.AnalyticsEventType_PARTICIPANT_ACTIVE:
+		if p.event.GetParticipant().GetKind() != livekit.ParticipantInfo_STANDARD {
+			return
+		}
 		meta := p.event.GetClientMeta()
 		counters := map[string]any{
 			"participants.active": one,
@@ -115,6 +119,9 @@ func (p *projector) rollups() {
 		p.fiveMinute(map[string]any{"participants.active": one})
 	case livekit.AnalyticsEventType_PARTICIPANT_LEFT, livekit.AnalyticsEventType_PARTICIPANT_CONNECTION_ABORTED:
 		info := p.event.GetParticipant()
+		if info.GetKind() != livekit.ParticipantInfo_STANDARD {
+			return
+		}
 		counter := "participants.left"
 		if p.event.GetType() == livekit.AnalyticsEventType_PARTICIPANT_CONNECTION_ABORTED {
 			counter = "participants.aborted"

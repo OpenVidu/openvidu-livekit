@@ -101,8 +101,11 @@ type EventResult struct {
 	EndedRoom string
 }
 
-// DependentKinds are participant kinds that depend on others and do not count towards room size.
+// DependentKinds are participant kinds that depend on others and do not keep a room open.
 var DependentKinds = []string{livekit.ParticipantInfo_EGRESS.String(), livekit.ParticipantInfo_AGENT.String()}
+
+// StandardKind is the only participant kind the participant counters count; byKind counts every kind.
+var StandardKind = livekit.ParticipantInfo_STANDARD.String()
 
 // Supported reports the event types the projection handles; any other type yields an empty result.
 func Supported(eventType livekit.AnalyticsEventType) bool {

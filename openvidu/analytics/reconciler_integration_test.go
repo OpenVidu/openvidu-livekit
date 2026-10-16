@@ -252,7 +252,8 @@ func TestReconcilerQueryPlans(t *testing.T) {
 	aggregate := explain(t, env.db, bson.D{{Key: "aggregate", Value: schema.CollectionParticipants},
 		{Key: "pipeline", Value: store.UniqueIdentitiesPipeline(before(24*time.Hour), reconcileNow)},
 		{Key: "cursor", Value: bson.D{}}})
-	require.Contains(t, aggregate.indexes, "joinedAt_id")
+	require.Contains(t, aggregate.indexes, "kind_status_joinedAt_id")
+	require.NotContains(t, aggregate.stages, "COLLSCAN")
 
 	found, err := env.r.candidates(ctx, reconcileNow)
 	require.NoError(t, err)
@@ -408,6 +409,35 @@ func TestReconcilerClosures(t *testing.T) {
 		require.Equal(t, report.closed, run.Closed)
 		require.False(t, run.Partial)
 		require.Empty(t, run.LastError)
+	})
+
+	t.Run("a service closure counts no participant", func(t *testing.T) {
+		env := newReconcilerEnv(t, client)
+		env.room("RM_s", nodeDead, before(time.Hour))
+		env.session("RM_s", nodeDead, "PA_alice", livekit.ParticipantInfo_STANDARD, before(30*time.Minute), false)
+		env.session("RM_s", nodeDead, "PA_cam", livekit.ParticipantInfo_INGRESS, before(30*time.Minute), false)
+		env.session("RM_s", nodeDead, "PA_sip", livekit.ParticipantInfo_SIP, before(30*time.Minute), true)
+
+		report := env.reconcile()
+		require.EqualValues(t, 3, report.closed.Participant)
+		cursor, err := env.db.Collection(schema.CollectionAnalyticsHourly).Find(ctx,
+			bson.D{{Key: "_id", Value: bson.D{{Key: "$regex", Value: "^global:"}}}})
+		require.NoError(t, err)
+		var hourly []schema.HourlyRollupDocument
+		require.NoError(t, cursor.All(ctx, &hourly))
+		var left, aborted, reconciled int32
+		for _, document := range hourly {
+			if document.Participants == nil {
+				continue
+			}
+			left += valueOf(document.Participants.Left)
+			aborted += valueOf(document.Participants.Aborted)
+			reconciled += document.Participants.DisconnectReasons["RECONCILED"]
+		}
+		require.Equal(t, []int32{1, 0, 1}, []int32{left, aborted, reconciled})
+		room := find[schema.RoomDocument](env.testEnv, schema.CollectionRooms, "RM_s")
+		require.EqualValues(t, 0, room.Participants.Active)
+		require.EqualValues(t, 0, room.Participants.Aborted)
 	})
 
 	t.Run("metrics of a closure", func(t *testing.T) {
@@ -684,14 +714,19 @@ func TestReconcilerUniqueIdentities(t *testing.T) {
 	env := newReconcilerEnv(t, client)
 	day1 := time.Date(2026, 10, 10, 9, 0, 0, 0, time.UTC)
 	day2 := day1.Add(24 * time.Hour)
-	join := func(room string, node string, sid string, identity string, at time.Time) {
-		info := participantInfo(sid, identity, livekit.ParticipantInfo_STANDARD, at)
+	joinAs := func(kind livekit.ParticipantInfo_Kind, room string, node string, sid string, identity string, at time.Time) {
+		info := participantInfo(sid, identity, kind, at)
 		env.apply([]*livekit.AnalyticsEvent{on(node, env.ev.joined(room, info, at)),
 			on(node, env.ev.left(room, info, at.Add(time.Minute), livekit.DisconnectReason_CLIENT_INITIATED))})
+	}
+	join := func(room string, node string, sid string, identity string, at time.Time) {
+		joinAs(livekit.ParticipantInfo_STANDARD, room, node, sid, identity, at)
 	}
 	env.room("RM_a1", "ND_a", day1)
 	env.room("RM_b1", "ND_b", day1)
 	join("RM_a1", "ND_a", "PA_1", "alice", day1)
+	joinAs(livekit.ParticipantInfo_INGRESS, "RM_a1", "ND_a", "PA_cam", "cam-1", day1)
+	joinAs(livekit.ParticipantInfo_EGRESS, "RM_b1", "ND_b", "PA_rec", "EG_1", day1)
 	join("RM_a1", "ND_a", "PA_2", "bob", day1.Add(time.Hour))
 	join("RM_b1", "ND_b", "PA_3", "bob", day1.Add(2*time.Hour))
 	join("RM_b1", "ND_b", "PA_4", "carol", day1.Add(3*time.Hour))
@@ -714,4 +749,11 @@ func TestReconcilerUniqueIdentities(t *testing.T) {
 	env.reconcile()
 	require.Equal(t, first, snapshot(env.testEnv, schema.CollectionAnalyticsDaily))
 	require.NotEmpty(t, env.logs.matching("debug", "unique identities"))
+}
+
+func valueOf(n *int32) int32 {
+	if n == nil {
+		return 0
+	}
+	return *n
 }

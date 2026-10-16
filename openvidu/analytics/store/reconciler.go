@@ -471,11 +471,14 @@ func (s *Store) DaysWithoutUniqueIdentities(ctx context.Context, from time.Time,
 	return days, nil
 }
 
-// UniqueIdentitiesPipeline counts the distinct identities of the participant sessions that joined in [from, to),
-// overall and per node.
+// UniqueIdentitiesPipeline counts the distinct identities of the STANDARD participant sessions that joined in
+// [from, to), overall and per node.
 func UniqueIdentitiesPipeline(from time.Time, to time.Time) mongo.Pipeline {
 	return mongo.Pipeline{
-		{{Key: "$match", Value: bson.D{{Key: "joinedAt", Value: bson.D{{Key: "$gte", Value: from}, {Key: "$lt", Value: to}}}}}},
+		{{Key: "$match", Value: bson.D{
+			{Key: "joinedAt", Value: bson.D{{Key: "$gte", Value: from}, {Key: "$lt", Value: to}}},
+			{Key: "kind", Value: projection.StandardKind},
+		}}},
 		{{Key: "$facet", Value: bson.D{
 			{Key: "global", Value: bson.A{
 				bson.D{{Key: "$group", Value: bson.D{{Key: "_id", Value: "$identity"}}}},
