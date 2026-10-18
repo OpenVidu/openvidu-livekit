@@ -369,6 +369,8 @@ func TestWriter(t *testing.T) {
 		require.Equal(t, "rtmps://live.example.com/app/***", egress.Outputs[1].URL)
 		require.Equal(t, int64(290_000), *egress.DurationMs)
 		require.Equal(t, "H264_720P_30", egress.Request.Preset)
+		require.Equal(t, "room-RM_1", egress.RoomName)
+		require.Equal(t, "room-rm_1", egress.RoomNameLower)
 
 		room := find[schema.RoomDocument](env, schema.CollectionRooms, "RM_1")
 		require.True(t, room.Features.Egress)
@@ -386,6 +388,7 @@ func TestWriter(t *testing.T) {
 		env.apply([]*livekit.AnalyticsEvent{ev.egress(livekit.AnalyticsEventType_EGRESS_STARTED, web, at("0s"))})
 		egress := find[schema.EgressDocument](env, schema.CollectionEgresses, "EG_w")
 		require.Empty(t, egress.RoomSID)
+		require.Empty(t, egress.RoomNameLower)
 		require.Equal(t, "web", egress.Type)
 		require.Equal(t, "https://app.example.com/***", egress.Request.URL)
 		require.Zero(t, count(env, schema.CollectionRooms, bson.D{}))
@@ -418,6 +421,9 @@ func TestWriter(t *testing.T) {
 		require.Equal(t, "RM_1", session.RoomSID)
 		require.Equal(t, int64(120_000), *session.DurationMs)
 		require.EqualValues(t, 1, count(env, schema.CollectionEvents, bson.D{{Key: "ingressSessionId", Value: "res_2"}, {Key: "type", Value: "INGRESS_STARTED"}}))
+		hourly := find[schema.HourlyRollupDocument](env, schema.CollectionAnalyticsHourly, "global:2026-10-12T10:00:00Z")
+		require.EqualValues(t, 2, *hourly.Ingress.SessionsStarted)
+		require.Equal(t, map[string]int32{"rtmp": 2}, hourly.Ingress.ByInputType)
 		assertNoSecrets(t, env)
 	})
 

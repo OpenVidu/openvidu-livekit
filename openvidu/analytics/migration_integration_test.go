@@ -314,6 +314,10 @@ func (e *migrationEnv) checkInvariants(data legacyData) {
 	require.EqualValues(t, len(rooms), e.count(schema.CollectionRooms, bson.D{}), "one room per legacy room sid")
 	require.EqualValues(t, len(participants), e.count(schema.CollectionParticipants, bson.D{}), "one participant per session")
 	require.EqualValues(t, len(egresses), e.count(schema.CollectionEgresses, bson.D{}), "one egress per egress id")
+	require.Zero(t, e.count(schema.CollectionEgresses, bson.D{
+		{Key: "roomName", Value: bson.D{{Key: "$exists", Value: true}}},
+		{Key: "$expr", Value: bson.D{{Key: "$ne", Value: bson.A{"$roomNameLower", bson.D{{Key: "$toLower", Value: "$roomName"}}}}}},
+	}), "every egress with a room name has its lower-cased search field")
 	require.EqualValues(t, len(sessions), e.count(schema.CollectionIngressSessions, bson.D{}), "one session per resource id")
 
 	require.Empty(t, e.secrets(), "no secret reaches the v2 collections")
@@ -563,6 +567,8 @@ func TestMigrationReplay(t *testing.T) {
 		require.Equal(t, "failed", egress.Status)
 		require.Equal(t, "reconciler", egress.ClosedBy)
 		require.Equal(t, projection.LostEgressError, egress.Error)
+		require.NotEmpty(t, egress.RoomName)
+		require.Equal(t, strings.ToLower(egress.RoomName), egress.RoomNameLower)
 	})
 
 	t.Run("live events of a room active across the upgrade converge", func(t *testing.T) {

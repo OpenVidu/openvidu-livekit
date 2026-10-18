@@ -67,7 +67,7 @@ type batchStore interface {
 	Identities(ctx context.Context, sids []string) (map[string]string, error)
 	ExistingEvents(ctx context.Context, ids []string) (map[string]bool, error)
 	Tracks(ctx context.Context, trackSids []string, publisherSids []string) (map[string]projection.TrackRef, map[string][]string, error)
-	Heartbeat(ctx context.Context, nodeID string, serverVersion string, region string, at time.Time) error
+	Heartbeat(ctx context.Context, nodeID string, serverVersion string, region string, batchInterval time.Duration, at time.Time) error
 	RoundTrips() int
 	ResetRoundTrips()
 }

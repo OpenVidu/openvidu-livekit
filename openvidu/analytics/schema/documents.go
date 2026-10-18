@@ -315,6 +315,7 @@ type EgressDocument struct {
 	ID                string               `bson:"_id"`
 	RoomSID           string               `bson:"roomSid,omitempty"`
 	RoomName          string               `bson:"roomName,omitempty"`
+	RoomNameLower     string               `bson:"roomNameLower,omitempty"`
 	Type              string               `bson:"type"`
 	SourceType        string               `bson:"sourceType"`
 	Status            string               `bson:"status"`
@@ -494,9 +495,10 @@ type RollupEgress struct {
 }
 
 type RollupIngress struct {
-	SessionsStarted *int32 `bson:"sessionsStarted,omitempty"`
-	SessionsEnded   *int32 `bson:"sessionsEnded,omitempty"`
-	DurationMs      *int64 `bson:"durationMs,omitempty"`
+	SessionsStarted *int32           `bson:"sessionsStarted,omitempty"`
+	SessionsEnded   *int32           `bson:"sessionsEnded,omitempty"`
+	ByInputType     map[string]int32 `bson:"byInputType,omitempty"`
+	DurationMs      *int64           `bson:"durationMs,omitempty"`
 }
 
 type RollupAPICalls struct {
@@ -559,11 +561,12 @@ type FiveMinuteRollupDocument struct {
 
 // NodeDocument is a `nodes` document, refreshed on every writer batch.
 type NodeDocument struct {
-	ID            string    `bson:"_id"`
-	FirstSeenAt   time.Time `bson:"firstSeenAt"`
-	LastSeenAt    time.Time `bson:"lastSeenAt"`
-	ServerVersion string    `bson:"serverVersion"`
-	Region        string    `bson:"region,omitempty"`
+	ID              string    `bson:"_id"`
+	FirstSeenAt     time.Time `bson:"firstSeenAt"`
+	LastSeenAt      time.Time `bson:"lastSeenAt"`
+	ServerVersion   string    `bson:"serverVersion"`
+	Region          string    `bson:"region,omitempty"`
+	BatchIntervalMs int32     `bson:"batchIntervalMs,omitempty"`
 }
 
 // Identifiers of the `schema_meta` documents.

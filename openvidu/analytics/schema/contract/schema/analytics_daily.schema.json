@@ -181,6 +181,16 @@
 			"properties": {
 				"sessionsStarted": { "bsonType": ["int", "long"] },
 				"sessionsEnded": { "bsonType": ["int", "long"] },
+				"byInputType": {
+					"bsonType": "object",
+					"properties": {
+						"rtmp": { "bsonType": ["int", "long"] },
+						"whip": { "bsonType": ["int", "long"] },
+						"url": { "bsonType": ["int", "long"] }
+					},
+					"additionalProperties": false,
+					"description": "Sessions started by input type"
+				},
 				"durationMs": { "bsonType": ["long", "int"] }
 			},
 			"additionalProperties": false

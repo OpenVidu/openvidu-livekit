@@ -58,6 +58,7 @@ func (p *projector) egress() {
 	}
 	if info.GetRoomName() != "" {
 		f.set("roomName", keep("roomName", info.GetRoomName()))
+		f.set("roomNameLower", keep("roomNameLower", strings.ToLower(info.GetRoomName())))
 	}
 	f.set("type", keep("type", kind))
 	f.set("sourceType", keep("sourceType", strings.ToLower(enumName(info.GetSourceType().String(), "EGRESS_SOURCE_TYPE_"))))

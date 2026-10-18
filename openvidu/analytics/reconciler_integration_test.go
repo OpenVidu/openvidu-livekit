@@ -67,7 +67,7 @@ func newReconcilerEnv(t *testing.T, client *mongo.Client, configure ...func(*ope
 
 func (e *reconcilerEnv) heartbeat(node string, at time.Time) {
 	e.t.Helper()
-	require.NoError(e.t, store.New(e.db).Heartbeat(context.Background(), node, "test", "", at))
+	require.NoError(e.t, store.New(e.db).Heartbeat(context.Background(), node, "test", "", 10*time.Second, at))
 }
 
 func (e *reconcilerEnv) reconcile() runReport {

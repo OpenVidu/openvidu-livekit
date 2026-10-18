@@ -341,8 +341,11 @@ func (s *Store) Tracks(ctx context.Context, trackSids []string, publisherSids []
 }
 
 // Heartbeat upserts the node document: firstSeenAt on insert, lastSeenAt advanced, version and region refreshed.
-func (s *Store) Heartbeat(ctx context.Context, nodeID string, serverVersion string, region string, at time.Time) error {
-	set := bson.D{{Key: "serverVersion", Value: serverVersion}}
+func (s *Store) Heartbeat(ctx context.Context, nodeID string, serverVersion string, region string, batchInterval time.Duration, at time.Time) error {
+	set := bson.D{
+		{Key: "serverVersion", Value: serverVersion},
+		{Key: "batchIntervalMs", Value: int32(batchInterval.Milliseconds())},
+	}
 	if region != "" {
 		set = append(set, bson.E{Key: "region", Value: region})
 	}

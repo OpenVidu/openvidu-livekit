@@ -154,7 +154,10 @@ func (p *projector) rollups() {
 		p.counters(counters)
 		p.fiveMinute(map[string]any{"egress.ended": one})
 	case livekit.AnalyticsEventType_INGRESS_STARTED:
-		p.counters(map[string]any{"ingress.sessionsStarted": one})
+		p.counters(map[string]any{
+			"ingress.sessionsStarted": one,
+			"ingress.byInputType." + ingressInputType(p.event.GetIngress().GetInputType()): one,
+		})
 	case livekit.AnalyticsEventType_INGRESS_ENDED:
 		state := p.event.GetIngress().GetState()
 		counters := map[string]any{"ingress.sessionsEnded": one}

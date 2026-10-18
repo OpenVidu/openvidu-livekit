@@ -107,8 +107,8 @@ func TestContractFixtures(t *testing.T) {
 			id        string
 			firstSeen time.Time
 		}{{scNodeAlpha, time.Date(2026, 10, 1, 8, 0, 0, 0, time.UTC)}, {scNodeBeta, time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)}} {
-			require.NoError(t, s.Heartbeat(ctx, node.id, scServerVersion, scRegion, node.firstSeen))
-			require.NoError(t, s.Heartbeat(ctx, node.id, scServerVersion, scRegion, sat("10:35:10")))
+			require.NoError(t, s.Heartbeat(ctx, node.id, scServerVersion, scRegion, 10*time.Second, node.firstSeen))
+			require.NoError(t, s.Heartbeat(ctx, node.id, scServerVersion, scRegion, 10*time.Second, sat("10:35:10")))
 		}
 		reconcileScenario(t, db, p.opts)
 

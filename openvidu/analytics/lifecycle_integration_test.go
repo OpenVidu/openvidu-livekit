@@ -71,6 +71,7 @@ func TestWriterLifecycle(t *testing.T) {
 		require.True(t, second.LastSeenAt.After(first.LastSeenAt))
 		require.Equal(t, "eu-west", second.Region)
 		require.NotEmpty(t, second.ServerVersion)
+		require.Equal(t, int32(env.settings.Interval.Milliseconds()), second.BatchIntervalMs)
 	})
 
 	t.Run("stop flushes the shutdown events and the final stats", func(t *testing.T) {

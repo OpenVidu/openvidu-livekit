@@ -64,6 +64,7 @@
 		"ingress": {
 			"sessionsStarted": { "$numberInt": "2" },
 			"sessionsEnded": { "$numberInt": "1" },
+			"byInputType": { "rtmp": { "$numberInt": "2" } },
 			"durationMs": { "$numberLong": "1190000" }
 		},
 		"bytes": { "up": { "$numberLong": "483800000" }, "down": { "$numberLong": "987120000" } },

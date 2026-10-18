@@ -253,6 +253,15 @@
 	},
 	{
 		"collection": "egresses",
+		"name": "roomNameLower_startedAt",
+		"key": [
+			["roomNameLower", 1],
+			["startedAt", -1]
+		],
+		"options": { "partialFilterExpression": { "roomNameLower": { "$exists": true } } }
+	},
+	{
+		"collection": "egresses",
 		"name": "expiresAt_ttl",
 		"key": [["expiresAt", 1]],
 		"options": { "expireAfterSeconds": 0 }
@@ -283,6 +292,15 @@
 			["createdAt", -1]
 		],
 		"options": {}
+	},
+	{
+		"collection": "ingresses",
+		"name": "lastSessionAt_id",
+		"key": [
+			["lastSessionAt", -1],
+			["_id", -1]
+		],
+		"options": { "partialFilterExpression": { "lastSessionAt": { "$exists": true } } }
 	},
 	{
 		"collection": "ingresses",

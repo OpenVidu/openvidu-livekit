@@ -135,7 +135,7 @@ func (w *writer) tick(ctx context.Context) error {
 func (w *writer) applyBatch(ctx context.Context, events []*eventEntry, stats []*statsEntry, started time.Time) error {
 	w.store.ResetRoundTrips()
 	err := w.processor.apply(ctx, events, stats)
-	if heartbeatErr := w.store.Heartbeat(ctx, w.node.ID, openviduversion.Version, w.node.Region, time.Now().UTC().Truncate(time.Millisecond)); err == nil {
+	if heartbeatErr := w.store.Heartbeat(ctx, w.node.ID, openviduversion.Version, w.node.Region, w.interval, time.Now().UTC().Truncate(time.Millisecond)); err == nil {
 		err = heartbeatErr
 	}
 	w.metrics.batchDuration.Observe(time.Since(started).Seconds())

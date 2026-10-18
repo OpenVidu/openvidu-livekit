@@ -19,6 +19,10 @@
 		"_id": { "bsonType": "string", "description": "Egress id" },
 		"roomSid": { "bsonType": "string", "description": "Absent for web egress" },
 		"roomName": { "bsonType": "string" },
+		"roomNameLower": {
+			"bsonType": "string",
+			"description": "Lower-cased roomName, for the room name prefix search"
+		},
 		"type": { "bsonType": "string", "enum": ["room_composite", "web", "participant", "track_composite", "track"] },
 		"sourceType": { "bsonType": "string", "enum": ["web", "sdk"] },
 		"status": {

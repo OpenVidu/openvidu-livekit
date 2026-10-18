@@ -120,7 +120,7 @@ func (f *fakeStore) Tracks(context.Context, []string, []string) (map[string]proj
 	return map[string]projection.TrackRef{}, map[string][]string{}, nil
 }
 
-func (f *fakeStore) Heartbeat(context.Context, string, string, string, time.Time) error {
+func (f *fakeStore) Heartbeat(context.Context, string, string, string, time.Duration, time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.heartbeats++
