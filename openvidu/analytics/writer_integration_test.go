@@ -225,7 +225,7 @@ func TestWriter(t *testing.T) {
 		require.True(t, at("5s").Equal(participant.JoinedAt))
 		require.True(t, at("6s").Equal(*participant.ActiveAt))
 		require.Equal(t, "JS", participant.Client.SDK)
-		require.Equal(t, "203.0.113.10", participant.Client.Address)
+		require.Equal(t, "Chrome", participant.Client.Browser)
 		require.EqualValues(t, 1, count(env, schema.CollectionParticipants, bson.D{}))
 	})
 
@@ -571,11 +571,18 @@ func TestWriter(t *testing.T) {
 		}
 	})
 
+	t.Run("IP addresses kept on request", func(t *testing.T) {
+		storeIP := false
+		env := newEnv(t, client, func(c *openviduconfig.AnalyticsConfig) { c.AnonymizeIP = &storeIP })
+		var ev events
+		alice := participantInfo("PA_a", "alice", livekit.ParticipantInfo_STANDARD, at("1s"))
+		env.apply([]*livekit.AnalyticsEvent{ev.roomCreated("RM_1", "r", at("0s")), ev.joined("RM_1", alice, at("1s"))})
+		participant := find[schema.ParticipantDocument](env, schema.CollectionParticipants, "PA_a")
+		require.NotEmpty(t, participant.Client.Address)
+	})
+
 	t.Run("personal data flags", func(t *testing.T) {
-		env := newEnv(t, client, func(c *openviduconfig.AnalyticsConfig) {
-			c.AnonymizeIP = true
-			c.StoreMetadata = true
-		})
+		env := newEnv(t, client, func(c *openviduconfig.AnalyticsConfig) { c.StoreMetadata = true })
 		var ev events
 		alice := participantInfo("PA_a", "alice", livekit.ParticipantInfo_STANDARD, at("1s"))
 		env.apply([]*livekit.AnalyticsEvent{ev.roomCreated("RM_1", "r", at("0s")), ev.joined("RM_1", alice, at("1s"))})

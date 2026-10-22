@@ -595,6 +595,7 @@ type SchemaMetaRetention struct {
 	StatsMs         int64     `bson:"statsMs"`
 	TracksMs        int64     `bson:"tracksMs"`
 	EntitiesMs      int64     `bson:"entitiesMs"`
+	Rollups5MinMs   int64     `bson:"rollups5MinMs"`
 	RollupsHourlyMs int64     `bson:"rollupsHourlyMs"`
 	RollupsDailyMs  *int64    `bson:"rollupsDailyMs"`
 	UpdatedAt       time.Time `bson:"updatedAt"`

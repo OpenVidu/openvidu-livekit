@@ -56,7 +56,7 @@ func newReconcilerEnv(t *testing.T, client *mongo.Client, configure ...func(*ope
 	env := &reconcilerEnv{testEnv: newEnv(t, client, configure...), live: newFakeLive(), logs: &capturedLog{},
 		metrics: buildReconcilerMetrics(), now: reconcileNow}
 	env.r = newReconciler(store.New(env.db), env.live, projectionOptions(env.settings), reconcilerSettings{
-		batchInterval: env.settings.Interval, interval: env.settings.FixerInterval, cleanupInterval: 3 * time.Minute,
+		batchInterval: env.settings.Interval, interval: env.settings.Reconciler.Interval, cleanupInterval: 3 * time.Minute,
 		maxClosures: env.settings.Reconciler.MaxClosuresPerRun, entitiesRetention: env.settings.Retention.Entities,
 	}, "ND_leader", env.metrics)
 	env.r.log = env.logs.sink()

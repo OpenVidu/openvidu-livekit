@@ -21,6 +21,7 @@
 				"statsMs",
 				"tracksMs",
 				"entitiesMs",
+				"rollups5MinMs",
 				"rollupsHourlyMs",
 				"rollupsDailyMs",
 				"updatedAt"
@@ -31,6 +32,7 @@
 				"statsMs": { "bsonType": ["long", "int"] },
 				"tracksMs": { "bsonType": ["long", "int"] },
 				"entitiesMs": { "bsonType": ["long", "int"] },
+				"rollups5MinMs": { "bsonType": ["long", "int"] },
 				"rollupsHourlyMs": { "bsonType": ["long", "int"] },
 				"rollupsDailyMs": {
 					"bsonType": ["long", "int", "null"],

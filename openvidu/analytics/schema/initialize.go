@@ -51,6 +51,8 @@ type InitResult struct {
 	CreatedCollections []string
 	CreatedIndexes     []string
 	UpdatedTTLs        []string
+	// DroppedIndexes are the TTL indexes of a retention class configured to keep its documents forever.
+	DroppedIndexes []string
 }
 
 type collectionInfo struct {
@@ -122,19 +124,26 @@ func (opts InitOptions) validate() error {
 	if opts.StatsDetail != "participant" && opts.StatsDetail != "track" {
 		return fmt.Errorf("stats detail must be participant or track, got %q", opts.StatsDetail)
 	}
-	for _, class := range []RetentionClass{RetentionEvents, RetentionStats, RetentionTracks, RetentionEntities, RetentionRollupsHourly} {
+	for _, class := range []RetentionClass{RetentionEvents, RetentionStats, RetentionTracks, RetentionEntities,
+		RetentionRollups5Min, RetentionRollupsHourly} {
 		retention, ok, err := opts.Retention.Of(class)
 		if err != nil {
 			return err
 		}
-		if !ok || retention%time.Second != 0 || retention.Seconds() > math.MaxInt32 {
+		if !ok || !validTTL(retention) {
 			return fmt.Errorf("retention %s must be a positive whole number of seconds below 2^31 s, got %s", class, retention)
 		}
 	}
-	if opts.Retention.RollupsDaily < 0 {
-		return fmt.Errorf("retention %s must not be negative", RetentionRollupsDaily)
+	if daily := opts.Retention.RollupsDaily; daily < 0 || (daily > 0 && !validTTL(daily)) {
+		return fmt.Errorf("retention %s must be zero (kept forever) or a whole number of seconds below 2^31 s, got %s",
+			RetentionRollupsDaily, daily)
 	}
 	return nil
+}
+
+// validTTL reports whether a retention fits the expireAfterSeconds of a TTL index.
+func validTTL(retention time.Duration) bool {
+	return retention%time.Second == 0 && retention.Seconds() <= math.MaxInt32
 }
 
 func detectServer(ctx context.Context, db *mongo.Database, result *InitResult) error {
@@ -333,12 +342,21 @@ func ensureIndexes(ctx context.Context, collection *mongo.Collection, definition
 		if definition.TimeseriesFallbackOnly && timeseries {
 			continue
 		}
-		ttl, err := expireAfterSeconds(definition, retention)
+		ttl, keep, err := expireAfterSeconds(definition, retention)
 		if err != nil {
 			return err
 		}
 
 		existing, found := byName[definition.Name]
+		if !keep {
+			if found {
+				if err := collection.Indexes().DropOne(ctx, definition.Name); err != nil && !isIndexNotFound(err) {
+					return fmt.Errorf("index %s: %w", definition.Name, err)
+				}
+				result.DroppedIndexes = append(result.DroppedIndexes, collection.Name()+"."+definition.Name)
+			}
+			continue
+		}
 		if !found {
 			models = append(models, indexModel(definition, ttl))
 			continue
@@ -370,23 +388,30 @@ func ensureIndexes(ctx context.Context, collection *mongo.Collection, definition
 	return nil
 }
 
-func expireAfterSeconds(definition IndexDefinition, retention Retention) (*int32, error) {
+// expireAfterSeconds returns the TTL of an index, nil when it has none; keep is false for the index of a retention
+// class that keeps its documents forever, which must not exist.
+func expireAfterSeconds(definition IndexDefinition, retention Retention) (ttl *int32, keep bool, err error) {
 	if definition.ExpireAfterSeconds != nil {
-		return definition.ExpireAfterSeconds, nil
+		return definition.ExpireAfterSeconds, true, nil
 	}
 	if definition.RetentionClass == "" {
-		return nil, nil
+		return nil, true, nil
 	}
-	ttl, ok, err := retention.Of(definition.RetentionClass)
+	value, ok, err := retention.Of(definition.RetentionClass)
 	if err != nil {
-		return nil, fmt.Errorf("index %s: %w", definition.Name, err)
+		return nil, false, fmt.Errorf("index %s: %w", definition.Name, err)
 	}
 	if !ok {
-		return nil, fmt.Errorf("index %s: retention class %s keeps documents forever and cannot back a TTL index",
-			definition.Name, definition.RetentionClass)
+		return nil, false, nil
 	}
-	seconds := int32(ttl.Seconds())
-	return &seconds, nil
+	seconds := int32(value.Seconds())
+	return &seconds, true, nil
+}
+
+// isIndexNotFound reports the IndexNotFound error (code 27) of a drop that another node already made.
+func isIndexNotFound(err error) bool {
+	var serverErr mongo.ServerError
+	return errors.As(err, &serverErr) && serverErr.HasErrorCode(27)
 }
 
 func indexModel(definition IndexDefinition, ttl *int32) mongo.IndexModel {
@@ -450,6 +475,7 @@ func writeSchemaMeta(ctx context.Context, db *mongo.Database, opts InitOptions, 
 		StatsMs:         opts.Retention.Stats.Milliseconds(),
 		TracksMs:        opts.Retention.Tracks.Milliseconds(),
 		EntitiesMs:      opts.Retention.Entities.Milliseconds(),
+		Rollups5MinMs:   opts.Retention.Rollups5Min.Milliseconds(),
 		RollupsHourlyMs: opts.Retention.RollupsHourly.Milliseconds(),
 		UpdatedAt:       now,
 	}

@@ -27,6 +27,7 @@ const (
 	RetentionStats         RetentionClass = "stats"
 	RetentionTracks        RetentionClass = "tracks"
 	RetentionEntities      RetentionClass = "entities"
+	RetentionRollups5Min   RetentionClass = "rollups5Min"
 	RetentionRollupsHourly RetentionClass = "rollupsHourly"
 	RetentionRollupsDaily  RetentionClass = "rollupsDaily"
 )
@@ -39,18 +40,20 @@ type Retention struct {
 	Stats         time.Duration
 	Tracks        time.Duration
 	Entities      time.Duration
+	Rollups5Min   time.Duration
 	RollupsHourly time.Duration
 	RollupsDaily  time.Duration
 }
 
-// DefaultRetention returns the contract defaults: events, stats and tracks 7 days, entities 90 days, hourly rollups
-// 400 days and daily rollups forever.
+// DefaultRetention returns the contract defaults: events, stats, tracks and 5-minute rollups 7 days, entities 90 days,
+// hourly rollups 400 days and daily rollups forever.
 func DefaultRetention() Retention {
 	return Retention{
 		Events:        7 * day,
 		Stats:         7 * day,
 		Tracks:        7 * day,
 		Entities:      90 * day,
+		Rollups5Min:   7 * day,
 		RollupsHourly: 400 * day,
 	}
 }
@@ -66,6 +69,8 @@ func (r Retention) Of(class RetentionClass) (retention time.Duration, ok bool, e
 		retention = r.Tracks
 	case RetentionEntities:
 		retention = r.Entities
+	case RetentionRollups5Min:
+		retention = r.Rollups5Min
 	case RetentionRollupsHourly:
 		retention = r.RollupsHourly
 	case RetentionRollupsDaily:

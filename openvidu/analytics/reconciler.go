@@ -30,7 +30,7 @@ import (
 )
 
 // The reconciler closes the rooms, participant sessions, egress and ingress sessions that stay open in the store
-// because their close event never arrived. One node at a time runs it, every fixer_interval, under a lock.
+// because their close event never arrived. One node at a time runs it, every reconciler.interval, under a lock.
 
 const (
 	// statsInterval is how often the server flushes the stats of every connected participant
@@ -38,7 +38,7 @@ const (
 	statsInterval = 30 * time.Second
 	// staleAfter is how long a session or a room goes without stats before it is a candidate.
 	staleAfter = 3 * statsInterval
-	// lockMargin is added to fixer_interval for the lock TTL and kept free at the end of the run's time budget.
+	// lockMargin is added to reconciler.interval for the lock TTL and kept free at the end of the run's time budget.
 	lockMargin = 5 * time.Second
 	// continuationDelay spaces the follow-up runs of a run that stopped at its closure limit or time budget.
 	continuationDelay = 5 * time.Second
@@ -110,7 +110,7 @@ type liveState interface {
 type reconcilerSettings struct {
 	// batchInterval is the writer's batch interval: a node without a heartbeat for two of them may be dead.
 	batchInterval time.Duration
-	// interval is fixer_interval: the period of the runs and the room grace (two of them).
+	// interval is reconciler.interval: the period of the runs and the room grace (two of them).
 	interval time.Duration
 	// cleanupInterval is LiveKit's dead node cleanup period: the egress and ingress grace (two of them).
 	cleanupInterval   time.Duration

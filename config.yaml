@@ -5,8 +5,8 @@ openvidu:
     mongo_url: mongodb://localhost:27017/?replicaSet=rs0&readPreference=primaryPreferred
     interval: 10s
     retention:
-      events: 168h
-      stats: 168h
+      events: 7d
+      stats: 7d
 
 # main TCP port for RoomService and RTC endpoint
 # for production setups, this port should be placed behind a load balancer with TLS

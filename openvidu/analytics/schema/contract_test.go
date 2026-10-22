@@ -15,7 +15,9 @@
 package schema
 
 import (
+	"math"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -65,10 +67,36 @@ func TestRetentionOf(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, 7*day, events)
 
+	fiveMinutes, ok, err := retention.Of(RetentionRollups5Min)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, 7*day, fiveMinutes)
+
 	_, ok, err = retention.Of(RetentionRollupsDaily)
 	require.NoError(t, err)
 	require.False(t, ok, "daily rollups are kept forever by default")
 
 	_, _, err = retention.Of("weekly")
 	require.Error(t, err)
+}
+
+func TestInitOptionsRetentionLimits(t *testing.T) {
+	valid := InitOptions{ValidationAction: "warn", StatsDetail: "participant", Retention: DefaultRetention()}
+	require.NoError(t, valid.validate())
+
+	daily := valid
+	daily.Retention.RollupsDaily = 1825 * day
+	require.NoError(t, daily.validate())
+
+	for name, modify := range map[string]func(*Retention){
+		"5-minute rollups unset":        func(r *Retention) { r.Rollups5Min = 0 },
+		"5-minute rollups too long":     func(r *Retention) { r.Rollups5Min = (math.MaxInt32 + 1) * time.Second },
+		"daily rollups negative":        func(r *Retention) { r.RollupsDaily = -day },
+		"daily rollups too long":        func(r *Retention) { r.RollupsDaily = (math.MaxInt32 + 1) * time.Second },
+		"daily rollups with a fraction": func(r *Retention) { r.RollupsDaily = day + time.Millisecond },
+	} {
+		invalid := valid
+		modify(&invalid.Retention)
+		require.Error(t, invalid.validate(), name)
+	}
 }

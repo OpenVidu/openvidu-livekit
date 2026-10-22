@@ -15,7 +15,10 @@
 package openviduconfig
 
 import (
+	"errors"
 	"fmt"
+	"math"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -32,16 +35,18 @@ var DefaultStatsDetail = "participant"
 // AnalyticsConfig is the `openvidu.analytics` section. Durations and the event type list are string kinds so that
 // LiveKit derives their LIVEKIT_OPENVIDU_ANALYTICS_* environment variables and CLI flags like any other string.
 type AnalyticsConfig struct {
-	Enabled       bool     `yaml:"enabled,omitempty"`
-	MongoUrl      string   `yaml:"mongo_url,omitempty"`
-	Database      string   `yaml:"database,omitempty"`
-	Interval      Duration `yaml:"interval,omitempty"`
+	Enabled  bool     `yaml:"enabled,omitempty"`
+	MongoUrl string   `yaml:"mongo_url,omitempty"`
+	Database string   `yaml:"database,omitempty"`
+	Interval Duration `yaml:"interval,omitempty"`
+	// Deprecated: mapped to Reconciler.Interval when that is absent.
 	FixerInterval Duration `yaml:"fixer_interval,omitempty"`
 	// Deprecated: mapped to Retention.Events and Retention.Stats when those are absent.
-	Expiration       Duration            `yaml:"expiration,omitempty"`
-	Retention        AnalyticsRetention  `yaml:"retention,omitempty"`
-	StatsDetail      string              `yaml:"stats_detail,omitempty"`
-	AnonymizeIP      bool                `yaml:"anonymize_ip,omitempty"`
+	Expiration  Duration           `yaml:"expiration,omitempty"`
+	Retention   AnalyticsRetention `yaml:"retention,omitempty"`
+	StatsDetail string             `yaml:"stats_detail,omitempty"`
+	// AnonymizeIP defaults to true when absent.
+	AnonymizeIP      *bool               `yaml:"anonymize_ip,omitempty"`
 	StoreMetadata    bool                `yaml:"store_metadata,omitempty"`
 	Events           AnalyticsEvents     `yaml:"events,omitempty"`
 	Queue            AnalyticsQueue      `yaml:"queue,omitempty"`
@@ -56,7 +61,10 @@ type AnalyticsRetention struct {
 	Stats         Duration `yaml:"stats,omitempty"`
 	Tracks        Duration `yaml:"tracks,omitempty"`
 	Entities      Duration `yaml:"entities,omitempty"`
+	Rollups5Min   Duration `yaml:"rollups_5min,omitempty"`
 	RollupsHourly Duration `yaml:"rollups_hourly,omitempty"`
+	// RollupsDaily keeps daily rollups forever when absent or zero.
+	RollupsDaily Duration `yaml:"rollups_daily,omitempty"`
 }
 
 // AnalyticsEvents configures the raw `events` collection.
@@ -74,8 +82,9 @@ type AnalyticsQueue struct {
 // AnalyticsReconciler configures the reconciler, which closes the entities whose end events never arrived.
 type AnalyticsReconciler struct {
 	// Enabled defaults to true when absent.
-	Enabled           *bool `yaml:"enabled,omitempty"`
-	MaxClosuresPerRun int   `yaml:"max_closures_per_run,omitempty"`
+	Enabled           *bool    `yaml:"enabled,omitempty"`
+	Interval          Duration `yaml:"interval,omitempty"`
+	MaxClosuresPerRun int      `yaml:"max_closures_per_run,omitempty"`
 }
 
 // AnalyticsMigration configures the migration of the data of the legacy analytics writer.
@@ -87,9 +96,13 @@ type AnalyticsMigration struct {
 	BatchSize int  `yaml:"batch_size,omitempty"`
 }
 
-// Duration is a duration in Go syntax ("10s", "168h"). A bare integer is read as nanoseconds, as the former
-// time.Duration fields accepted.
+// Duration is a duration in Go syntax ("10s", "168h"), optionally preceded by a whole number of days ("7d", "1d12h").
+// A bare integer is read as nanoseconds, as the former time.Duration fields accepted.
 type Duration string
+
+const day = 24 * time.Hour
+
+var leadingDays = regexp.MustCompile(`^(\d+)d(.*)$`)
 
 // Value parses the duration; the empty string is zero.
 func (d Duration) Value() (time.Duration, error) {
@@ -100,19 +113,71 @@ func (d Duration) Value() (time.Duration, error) {
 	if nanoseconds, err := strconv.ParseInt(text, 10, 64); err == nil {
 		return time.Duration(nanoseconds), nil
 	}
-	return time.ParseDuration(text)
+	value, err := parseDuration(text)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a duration: use a Go duration such as 10s or 168h, or whole days such as 7d "+
+			"or 1d12h", text)
+	}
+	return value, nil
 }
 
-// UnmarshalYAML accepts a duration string or an integer number of nanoseconds and rejects anything else.
+func parseDuration(text string) (time.Duration, error) {
+	match := leadingDays.FindStringSubmatch(text)
+	if match == nil {
+		return time.ParseDuration(text)
+	}
+	days, err := strconv.ParseInt(match[1], 10, 64)
+	if err != nil || days > math.MaxInt64/int64(day) {
+		return 0, errors.New("too many days")
+	}
+	value := time.Duration(days) * day
+	if match[2] == "" {
+		return value, nil
+	}
+	if strings.HasPrefix(match[2], "-") || strings.HasPrefix(match[2], "+") {
+		return 0, errors.New("signed remainder")
+	}
+	rest, err := time.ParseDuration(match[2])
+	if err != nil {
+		return 0, err
+	}
+	if rest > math.MaxInt64-value {
+		return 0, errors.New("too long")
+	}
+	return value + rest, nil
+}
+
+// FormatDuration writes a duration in the syntax Duration accepts: whole days first, then the rest without zero units
+// ("90d", "1d12h", "10s", "1m", "1h30m").
+func FormatDuration(d time.Duration) string {
+	if d <= 0 {
+		return d.String()
+	}
+	var text strings.Builder
+	if days := d / day; days > 0 {
+		fmt.Fprintf(&text, "%dd", days)
+		d -= days * day
+	}
+	if hours := d / time.Hour; hours > 0 {
+		fmt.Fprintf(&text, "%dh", hours)
+		d -= hours * time.Hour
+	}
+	if minutes := d / time.Minute; minutes > 0 {
+		fmt.Fprintf(&text, "%dm", minutes)
+		d -= minutes * time.Minute
+	}
+	if d > 0 {
+		text.WriteString(d.String())
+	}
+	return text.String()
+}
+
+// UnmarshalYAML accepts any scalar; Settings validates it, naming the key.
 func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 	if node.Kind != yaml.ScalarNode {
-		return fmt.Errorf("line %d: a duration must be a scalar such as 10s or 168h", node.Line)
+		return fmt.Errorf("line %d: a duration must be a scalar such as 10s, 168h or 7d", node.Line)
 	}
-	candidate := Duration(node.Value)
-	if _, err := candidate.Value(); err != nil {
-		return fmt.Errorf("line %d: invalid duration %q: %w", node.Line, node.Value, err)
-	}
-	*d = candidate
+	*d = Duration(node.Value)
 	return nil
 }
 
@@ -173,7 +238,6 @@ type AnalyticsSettings struct {
 	MongoURL         string
 	Database         string
 	Interval         time.Duration
-	FixerInterval    time.Duration
 	Retention        RetentionSettings
 	StatsDetail      string
 	AnonymizeIP      bool
@@ -196,28 +260,32 @@ type MigrationSettings struct {
 // ReconcilerSettings holds the effective reconciler configuration.
 type ReconcilerSettings struct {
 	Enabled           bool
+	Interval          time.Duration
 	MaxClosuresPerRun int
 }
 
-// RetentionSettings holds the effective retention per data class.
+// RetentionSettings holds the effective retention per data class. A zero RollupsDaily keeps daily rollups forever.
 type RetentionSettings struct {
 	Events        time.Duration
 	Stats         time.Duration
 	Tracks        time.Duration
 	Entities      time.Duration
+	Rollups5Min   time.Duration
 	RollupsHourly time.Duration
+	RollupsDaily  time.Duration
 }
 
 // Defaults of the analytics configuration.
 const (
 	DefaultAnalyticsDatabase      = "openvidu"
 	DefaultAnalyticsInterval      = 10 * time.Second
-	DefaultAnalyticsFixerInterval = 60 * time.Second
-	DefaultRetentionEvents        = 168 * time.Hour
-	DefaultRetentionStats         = 168 * time.Hour
-	DefaultRetentionTracks        = 168 * time.Hour
-	DefaultRetentionEntities      = 2160 * time.Hour
-	DefaultRetentionRollupsHourly = 9600 * time.Hour
+	DefaultReconcilerInterval     = 60 * time.Second
+	DefaultRetentionEvents        = 7 * day
+	DefaultRetentionStats         = 7 * day
+	DefaultRetentionTracks        = 7 * day
+	DefaultRetentionEntities      = 90 * day
+	DefaultRetentionRollups5Min   = 7 * day
+	DefaultRetentionRollupsHourly = 400 * day
 	DefaultQueueMaxEvents         = 20000
 	DefaultQueueMaxStats          = 50000
 	DefaultValidationAction       = "warn"
@@ -226,17 +294,25 @@ const (
 	DefaultMigrationBatchSize     = 500
 )
 
+// Limits of the retention values. The maximum is the largest expireAfterSeconds MongoDB accepts for a TTL index; the
+// entities minimum leaves the reconciler at least one closed day to compute its unique identities.
+const (
+	minRetention         = time.Hour
+	maxRetention         = math.MaxInt32 * time.Second
+	minEntitiesRetention = 2 * day
+)
+
 const keyPrefix = "openvidu.analytics."
 
-// Settings applies the defaults, maps the deprecated expiration key and validates every value. It returns the
-// deprecation warnings to log, or an error naming the offending key.
+// Settings applies the defaults, maps the deprecated expiration and fixer_interval keys and validates every value. It
+// returns the deprecation warnings to log, or an error naming the offending key.
 func (c AnalyticsConfig) Settings() (AnalyticsSettings, []string, error) {
 	var warnings []string
 	settings := AnalyticsSettings{
 		MongoURL:         c.MongoUrl,
 		Database:         c.Database,
 		StatsDetail:      c.StatsDetail,
-		AnonymizeIP:      c.AnonymizeIP,
+		AnonymizeIP:      c.AnonymizeIP == nil || *c.AnonymizeIP,
 		StoreMetadata:    c.StoreMetadata,
 		MaxEvents:        c.Queue.MaxEvents,
 		MaxStats:         c.Queue.MaxStats,
@@ -276,6 +352,18 @@ func (c AnalyticsConfig) Settings() (AnalyticsSettings, []string, error) {
 		settings.Migration.BatchSize = DefaultMigrationBatchSize
 	}
 
+	reconcilerKey, reconcilerInterval := "reconciler.interval", c.Reconciler.Interval
+	if c.FixerInterval != "" {
+		if c.Reconciler.Interval == "" {
+			reconcilerKey, reconcilerInterval = "fixer_interval", c.FixerInterval
+			warnings = append(warnings, fmt.Sprintf("%sfixer_interval is deprecated: its value now sets "+
+				"%sreconciler.interval; use that key instead", keyPrefix, keyPrefix))
+		} else {
+			warnings = append(warnings, fmt.Sprintf("%sfixer_interval is deprecated and ignored because "+
+				"%sreconciler.interval is set; remove it", keyPrefix, keyPrefix))
+		}
+	}
+
 	durations := []struct {
 		key      string
 		value    Duration
@@ -283,12 +371,14 @@ func (c AnalyticsConfig) Settings() (AnalyticsSettings, []string, error) {
 		target   *time.Duration
 	}{
 		{"interval", c.Interval, DefaultAnalyticsInterval, &settings.Interval},
-		{"fixer_interval", c.FixerInterval, DefaultAnalyticsFixerInterval, &settings.FixerInterval},
+		{reconcilerKey, reconcilerInterval, DefaultReconcilerInterval, &settings.Reconciler.Interval},
 		{"retention.events", c.Retention.Events, DefaultRetentionEvents, &settings.Retention.Events},
 		{"retention.stats", c.Retention.Stats, DefaultRetentionStats, &settings.Retention.Stats},
 		{"retention.tracks", c.Retention.Tracks, DefaultRetentionTracks, &settings.Retention.Tracks},
 		{"retention.entities", c.Retention.Entities, DefaultRetentionEntities, &settings.Retention.Entities},
+		{"retention.rollups_5min", c.Retention.Rollups5Min, DefaultRetentionRollups5Min, &settings.Retention.Rollups5Min},
 		{"retention.rollups_hourly", c.Retention.RollupsHourly, DefaultRetentionRollupsHourly, &settings.Retention.RollupsHourly},
+		{"retention.rollups_daily", c.Retention.RollupsDaily, 0, &settings.Retention.RollupsDaily},
 	}
 	for _, d := range durations {
 		value, err := d.value.Value()
@@ -330,6 +420,10 @@ func (c AnalyticsConfig) Settings() (AnalyticsSettings, []string, error) {
 	if err := settings.validate(); err != nil {
 		return settings, nil, err
 	}
+	if settings.Reconciler.Interval < settings.Interval {
+		return settings, nil, fmt.Errorf("%s%s (%s) must not be shorter than %sinterval (%s)", keyPrefix, reconcilerKey,
+			FormatDuration(settings.Reconciler.Interval), keyPrefix, FormatDuration(settings.Interval))
+	}
 	return settings, warnings, nil
 }
 
@@ -338,28 +432,41 @@ func (s AnalyticsSettings) validate() error {
 		return fmt.Errorf("%smongo_url must not be empty", keyPrefix)
 	}
 	if s.Interval < time.Second || s.Interval > time.Minute {
-		return fmt.Errorf("%sinterval must be between 1s and 60s, got %s", keyPrefix, s.Interval)
+		return fmt.Errorf("%sinterval must be between 1s and 60s, got %s", keyPrefix, FormatDuration(s.Interval))
 	}
-	if s.FixerInterval < s.Interval {
-		return fmt.Errorf("%sfixer_interval (%s) must not be shorter than %sinterval (%s)", keyPrefix, s.FixerInterval,
-			keyPrefix, s.Interval)
+	type retentionRange struct {
+		key            string
+		value, minimum time.Duration
+		// minimumKey names the key the minimum comes from, when it is another setting.
+		minimumKey string
 	}
-	retentions := []struct {
-		key   string
-		value time.Duration
-	}{
-		{"retention.events", s.Retention.Events},
-		{"retention.stats", s.Retention.Stats},
-		{"retention.tracks", s.Retention.Tracks},
-		{"retention.entities", s.Retention.Entities},
-		{"retention.rollups_hourly", s.Retention.RollupsHourly},
+	retentions := []retentionRange{
+		{"retention.events", s.Retention.Events, minRetention, ""},
+		{"retention.stats", s.Retention.Stats, minRetention, ""},
+		{"retention.tracks", s.Retention.Tracks, minRetention, ""},
+		{"retention.entities", s.Retention.Entities, minEntitiesRetention, ""},
+		{"retention.rollups_5min", s.Retention.Rollups5Min, minRetention, ""},
+		{"retention.rollups_hourly", s.Retention.RollupsHourly, minRetention, ""},
+	}
+	if s.Retention.RollupsDaily != 0 {
+		retentions = append(retentions, retentionRange{"retention.rollups_daily", s.Retention.RollupsDaily,
+			s.Retention.RollupsHourly, "retention.rollups_hourly"})
 	}
 	for _, r := range retentions {
-		if r.value < time.Hour {
-			return fmt.Errorf("%s%s must be at least 1h, got %s", keyPrefix, r.key, r.value)
+		if r.value < r.minimum && r.minimumKey != "" {
+			return fmt.Errorf("%s%s must not be shorter than %s%s (%s), got %s", keyPrefix, r.key, keyPrefix,
+				r.minimumKey, FormatDuration(r.minimum), FormatDuration(r.value))
+		}
+		if r.value < r.minimum {
+			return fmt.Errorf("%s%s must be at least %s, got %s", keyPrefix, r.key, FormatDuration(r.minimum),
+				FormatDuration(r.value))
+		}
+		if r.value > maxRetention {
+			return fmt.Errorf("%s%s must be at most %s (2^31-1 seconds, the MongoDB TTL limit), got %s", keyPrefix,
+				r.key, FormatDuration(maxRetention), FormatDuration(r.value))
 		}
 		if r.value%time.Second != 0 {
-			return fmt.Errorf("%s%s must be a whole number of seconds, got %s", keyPrefix, r.key, r.value)
+			return fmt.Errorf("%s%s must be a whole number of seconds, got %s", keyPrefix, r.key, FormatDuration(r.value))
 		}
 	}
 	if s.StatsDetail != "participant" && s.StatsDetail != "track" {
@@ -400,16 +507,21 @@ func (s AnalyticsSettings) Stores(eventType string) bool {
 // LogFields returns the effective configuration as key-value pairs for a log line, with the credentials of the
 // MongoDB URL redacted.
 func (s AnalyticsSettings) LogFields() []any {
+	rollupsDaily := "forever"
+	if s.Retention.RollupsDaily > 0 {
+		rollupsDaily = FormatDuration(s.Retention.RollupsDaily)
+	}
 	return []any{
 		"mongo_url", RedactMongoURL(s.MongoURL),
 		"database", s.Database,
-		"interval", s.Interval,
-		"fixer_interval", s.FixerInterval,
-		"retention.events", s.Retention.Events,
-		"retention.stats", s.Retention.Stats,
-		"retention.tracks", s.Retention.Tracks,
-		"retention.entities", s.Retention.Entities,
-		"retention.rollups_hourly", s.Retention.RollupsHourly,
+		"interval", FormatDuration(s.Interval),
+		"retention.events", FormatDuration(s.Retention.Events),
+		"retention.stats", FormatDuration(s.Retention.Stats),
+		"retention.tracks", FormatDuration(s.Retention.Tracks),
+		"retention.entities", FormatDuration(s.Retention.Entities),
+		"retention.rollups_5min", FormatDuration(s.Retention.Rollups5Min),
+		"retention.rollups_hourly", FormatDuration(s.Retention.RollupsHourly),
+		"retention.rollups_daily", rollupsDaily,
 		"stats_detail", s.StatsDetail,
 		"anonymize_ip", s.AnonymizeIP,
 		"store_metadata", s.StoreMetadata,
@@ -418,6 +530,7 @@ func (s AnalyticsSettings) LogFields() []any {
 		"queue.max_stats", s.MaxStats,
 		"validation_action", s.ValidationAction,
 		"reconciler.enabled", s.Reconciler.Enabled,
+		"reconciler.interval", FormatDuration(s.Reconciler.Interval),
 		"reconciler.max_closures_per_run", s.Reconciler.MaxClosuresPerRun,
 		"migration.enabled", s.Migration.Enabled,
 		"migration.rate", s.Migration.Rate,

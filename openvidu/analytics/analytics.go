@@ -217,7 +217,7 @@ func newReconcilerRunner(conf *config.Config, settings openviduconfig.AnalyticsS
 func reconcilerSettingsOf(conf *config.Config, settings openviduconfig.AnalyticsSettings) reconcilerSettings {
 	return reconcilerSettings{
 		batchInterval:     settings.Interval,
-		interval:          settings.FixerInterval,
+		interval:          settings.Reconciler.Interval,
 		cleanupInterval:   conf.OpenVidu.GetCleanupInterval(),
 		maxClosures:       settings.Reconciler.MaxClosuresPerRun,
 		entitiesRetention: settings.Retention.Entities,
@@ -233,7 +233,7 @@ func reconcilerLocker(conf *config.Config, settings openviduconfig.AnalyticsSett
 	if err != nil {
 		return nil, fmt.Errorf("analytics: connect to Redis for the reconciler lock: %w", err)
 	}
-	return redisLocker{client: redislock.New(client), backoff: settings.FixerInterval / 2}, nil
+	return redisLocker{client: redislock.New(client), backoff: settings.Reconciler.Interval / 2}, nil
 }
 
 // initialize renames the legacy events collection, initializes the database and builds the writer.
@@ -260,7 +260,9 @@ func retentionOf(settings openviduconfig.AnalyticsSettings) schema.Retention {
 		Stats:         settings.Retention.Stats,
 		Tracks:        settings.Retention.Tracks,
 		Entities:      settings.Retention.Entities,
+		Rollups5Min:   settings.Retention.Rollups5Min,
 		RollupsHourly: settings.Retention.RollupsHourly,
+		RollupsDaily:  settings.Retention.RollupsDaily,
 	}
 }
 
@@ -281,6 +283,7 @@ func logInitialization(result *schema.InitResult, settings openviduconfig.Analyt
 		"createdCollections", len(result.CreatedCollections),
 		"createdIndexes", len(result.CreatedIndexes),
 		"updatedTTLs", result.UpdatedTTLs,
+		"droppedIndexes", result.DroppedIndexes,
 		"statsDetail", settings.StatsDetail,
 	}
 	if result.TimeseriesError != nil {

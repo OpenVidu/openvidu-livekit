@@ -22,14 +22,16 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/urfave/cli/v3"
 
+	"github.com/livekit/livekit-server/openvidu/openviduconfig"
 	"github.com/livekit/livekit-server/pkg/config"
 )
 
 var analyticsKeys = []string{
 	"enabled", "mongo_url", "database", "interval", "fixer_interval", "expiration",
-	"retention.events", "retention.stats", "retention.tracks", "retention.entities", "retention.rollups_hourly",
-	"stats_detail", "anonymize_ip", "store_metadata", "events.store_types", "queue.max_events", "queue.max_stats",
-	"validation_action", "reconciler.enabled", "reconciler.max_closures_per_run", "migration.enabled", "migration.rate",
+	"retention.events", "retention.stats", "retention.tracks", "retention.entities", "retention.rollups_5min",
+	"retention.rollups_hourly", "retention.rollups_daily", "stats_detail", "anonymize_ip", "store_metadata",
+	"events.store_types", "queue.max_events", "queue.max_stats", "validation_action", "reconciler.enabled",
+	"reconciler.interval", "reconciler.max_closures_per_run", "migration.enabled", "migration.rate",
 	"migration.batch_size",
 }
 
@@ -48,22 +50,12 @@ func TestEveryAnalyticsKeyHasAnEnvironmentVariable(t *testing.T) {
 	}
 }
 
-func TestEnvironmentOverridesYAML(t *testing.T) {
-	t.Setenv("LIVEKIT_OPENVIDU_ANALYTICS_RETENTION_EVENTS", "720h")
-	t.Setenv("LIVEKIT_OPENVIDU_ANALYTICS_EVENTS_STORE_TYPES", "ROOM_CREATED,ROOM_ENDED")
-	t.Setenv("LIVEKIT_OPENVIDU_ANALYTICS_ANONYMIZE_IP", "true")
-
+// loadWithEnvironment loads the YAML document as the server does, with the environment variables of the test.
+func loadWithEnvironment(t *testing.T, yamlConfig string) (openviduconfig.AnalyticsSettings, []string) {
+	t.Helper()
 	flags, err := config.GenerateCLIFlags(nil, true)
 	require.NoError(t, err)
 
-	yamlConfig := `
-openvidu:
-  analytics:
-    enabled: true
-    mongo_url: mongodb://localhost:27017
-    retention:
-      events: 168h
-`
 	var loaded *config.Config
 	command := &cli.Command{
 		Name:  "test",
@@ -76,9 +68,50 @@ openvidu:
 	}
 	require.NoError(t, command.Run(context.Background(), []string{"test"}))
 
-	settings, _, err := loaded.OpenVidu.Analytics.Settings()
+	settings, warnings, err := loaded.OpenVidu.Analytics.Settings()
 	require.NoError(t, err)
-	require.Equal(t, 720*time.Hour, settings.Retention.Events)
+	return settings, warnings
+}
+
+const minimalYAML = `
+openvidu:
+  analytics:
+    enabled: true
+    mongo_url: mongodb://localhost:27017
+`
+
+func TestEnvironmentOverridesYAML(t *testing.T) {
+	t.Setenv("LIVEKIT_OPENVIDU_ANALYTICS_RETENTION_EVENTS", "30d")
+	t.Setenv("LIVEKIT_OPENVIDU_ANALYTICS_EVENTS_STORE_TYPES", "ROOM_CREATED,ROOM_ENDED")
+	t.Setenv("LIVEKIT_OPENVIDU_ANALYTICS_ANONYMIZE_IP", "false")
+
+	settings, _ := loadWithEnvironment(t, minimalYAML+`    retention:
+      events: 7d
+`)
+	require.Equal(t, 30*24*time.Hour, settings.Retention.Events)
 	require.Equal(t, []string{"ROOM_CREATED", "ROOM_ENDED"}, settings.StoreTypes)
-	require.True(t, settings.AnonymizeIP)
+	require.False(t, settings.AnonymizeIP)
+}
+
+func TestReconcilerIntervalFromTheEnvironment(t *testing.T) {
+	t.Setenv("LIVEKIT_OPENVIDU_ANALYTICS_RECONCILER_INTERVAL", "30s")
+	settings, warnings := loadWithEnvironment(t, minimalYAML)
+	require.Equal(t, 30*time.Second, settings.Reconciler.Interval)
+	require.Empty(t, warnings)
+}
+
+func TestFixerIntervalAliasFromTheEnvironment(t *testing.T) {
+	t.Setenv("LIVEKIT_OPENVIDU_ANALYTICS_FIXER_INTERVAL", "30s")
+	settings, warnings := loadWithEnvironment(t, minimalYAML)
+	require.Equal(t, 30*time.Second, settings.Reconciler.Interval)
+	require.Len(t, warnings, 1)
+	require.Contains(t, warnings[0], "openvidu.analytics.reconciler.interval")
+}
+
+func TestDailyRollupsUnlimitedFromTheEnvironment(t *testing.T) {
+	t.Setenv("LIVEKIT_OPENVIDU_ANALYTICS_RETENTION_ROLLUPS_DAILY", "0")
+	settings, _ := loadWithEnvironment(t, minimalYAML+`    retention:
+      rollups_daily: 1825d
+`)
+	require.Zero(t, settings.Retention.RollupsDaily)
 }

@@ -19,6 +19,7 @@ package schema_test
 import (
 	"context"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -75,14 +76,21 @@ func listIndexes(t *testing.T, collection *mongo.Collection) map[string]indexInf
 	return byName
 }
 
-func expectedIndexNames(t *testing.T, collection string, timeseries bool) []string {
+// expectedIndexNames lists the contract indexes of a collection, without those of a retention class kept forever.
+func expectedIndexNames(t *testing.T, collection string, timeseries bool, retention schema.Retention) []string {
 	indexes, err := schema.Indexes()
 	require.NoError(t, err)
 	var names []string
 	for _, index := range indexes {
-		if index.Collection == collection && (!timeseries || !index.TimeseriesFallbackOnly) {
-			names = append(names, index.Name)
+		if index.Collection != collection || (timeseries && index.TimeseriesFallbackOnly) {
+			continue
 		}
+		if index.RetentionClass != "" {
+			if _, limited, err := retention.Of(index.RetentionClass); err != nil || !limited {
+				continue
+			}
+		}
+		names = append(names, index.Name)
 	}
 	sort.Strings(names)
 	return names
@@ -133,7 +141,7 @@ func TestInitialize(t *testing.T) {
 				require.Equal(t, "error", info.Options["validationAction"], definition.Name)
 			}
 
-			expected := expectedIndexNames(t, definition.Name, timeseries)
+			expected := expectedIndexNames(t, definition.Name, timeseries, schema.DefaultRetention())
 			require.Equal(t, expected, contractIndexNames(listIndexes(t, db.Collection(definition.Name)), expected), definition.Name)
 		}
 
@@ -145,7 +153,10 @@ func TestInitialize(t *testing.T) {
 		var retention schema.SchemaMetaRetention
 		require.NoError(t, db.Collection(schema.CollectionSchemaMeta).FindOne(ctx, bson.D{{Key: "_id", Value: "retention"}}).Decode(&retention))
 		require.Equal(t, (7 * 24 * time.Hour).Milliseconds(), retention.EventsMs)
+		require.Equal(t, (7 * 24 * time.Hour).Milliseconds(), retention.Rollups5MinMs)
 		require.Nil(t, retention.RollupsDailyMs)
+		require.NotContains(t, listIndexes(t, db.Collection(schema.CollectionAnalyticsDaily)), "bucket_ttl",
+			"daily rollups are kept forever by default")
 
 		var capabilities schema.SchemaMetaCapabilities
 		require.NoError(t, db.Collection(schema.CollectionSchemaMeta).FindOne(ctx, bson.D{{Key: "_id", Value: "capabilities"}}).Decode(&capabilities))
@@ -222,7 +233,8 @@ func TestInitialize(t *testing.T) {
 		changed.Retention.Stats = 48 * time.Hour
 		result, err := schema.Initialize(ctx, db, changed)
 		require.NoError(t, err)
-		require.ElementsMatch(t, []string{"events.ts_ttl", "track_stats", "analytics_5min.bucket_ttl"}, result.UpdatedTTLs)
+		require.ElementsMatch(t, []string{"events.ts_ttl", "track_stats"}, result.UpdatedTTLs,
+			"5-minute rollups keep their own retention")
 
 		events := listIndexes(t, db.Collection(schema.CollectionEvents))
 		require.EqualValues(t, 2592000, *events["ts_ttl"].ExpireAfterSeconds)
@@ -231,6 +243,64 @@ func TestInitialize(t *testing.T) {
 		var retention schema.SchemaMetaRetention
 		require.NoError(t, db.Collection(schema.CollectionSchemaMeta).FindOne(ctx, bson.D{{Key: "_id", Value: "retention"}}).Decode(&retention))
 		require.Equal(t, (720 * time.Hour).Milliseconds(), retention.EventsMs)
+	})
+
+	t.Run("5-minute rollups retention", func(t *testing.T) {
+		db := client.Database("init_rollups_5min")
+		options := testOptions()
+		options.Retention.Rollups5Min = 48 * time.Hour
+		_, err := schema.Initialize(ctx, db, options)
+		require.NoError(t, err)
+
+		fiveMinutes := listIndexes(t, db.Collection(schema.CollectionAnalytics5Min))
+		require.EqualValues(t, 48*3600, *fiveMinutes["bucket_ttl"].ExpireAfterSeconds)
+		require.EqualValues(t, 7*24*3600, listCollections(t, db)[schema.CollectionTrackStats].Options["expireAfterSeconds"])
+
+		var retention schema.SchemaMetaRetention
+		require.NoError(t, db.Collection(schema.CollectionSchemaMeta).FindOne(ctx, bson.D{{Key: "_id", Value: "retention"}}).Decode(&retention))
+		require.Equal(t, (48 * time.Hour).Milliseconds(), retention.Rollups5MinMs)
+	})
+
+	t.Run("daily rollups retention set, removed and set again", func(t *testing.T) {
+		db := client.Database("init_rollups_daily")
+		daily := func() map[string]indexInfo { return listIndexes(t, db.Collection(schema.CollectionAnalyticsDaily)) }
+		readRetention := func() schema.SchemaMetaRetention {
+			var retention schema.SchemaMetaRetention
+			require.NoError(t, db.Collection(schema.CollectionSchemaMeta).FindOne(ctx, bson.D{{Key: "_id", Value: "retention"}}).Decode(&retention))
+			return retention
+		}
+		limited := testOptions()
+		limited.Retention.RollupsDaily = 1825 * 24 * time.Hour
+
+		_, err := schema.Initialize(ctx, db, testOptions())
+		require.NoError(t, err)
+		require.NotContains(t, daily(), "bucket_ttl")
+
+		result, err := schema.Initialize(ctx, db, limited)
+		require.NoError(t, err)
+		require.Equal(t, []string{"analytics_daily.bucket_ttl"}, result.CreatedIndexes)
+		require.EqualValues(t, 157_680_000, *daily()["bucket_ttl"].ExpireAfterSeconds)
+		require.EqualValues(t, 157_680_000_000, *readRetention().RollupsDailyMs)
+
+		results := make([]*schema.InitResult, 2)
+		errs := make([]error, 2)
+		var nodes sync.WaitGroup
+		for i := range results {
+			nodes.Add(1)
+			go func() {
+				defer nodes.Done()
+				results[i], errs[i] = schema.Initialize(ctx, db, testOptions())
+			}()
+		}
+		nodes.Wait()
+		require.NoError(t, errs[0])
+		require.NoError(t, errs[1])
+		require.NotContains(t, daily(), "bucket_ttl")
+		require.Nil(t, readRetention().RollupsDailyMs)
+
+		_, err = schema.Initialize(ctx, db, limited)
+		require.NoError(t, err)
+		require.Contains(t, daily(), "bucket_ttl")
 	})
 
 	t.Run("plain track_stats when time-series is unavailable", func(t *testing.T) {

@@ -168,7 +168,12 @@ func contractDatabase(t *testing.T, client *mongo.Client, name string) *mongo.Da
 }
 
 func contractProcessor(t *testing.T, db *mongo.Database, detail string) *processor {
-	settings := testSettings(t, func(c *openviduconfig.AnalyticsConfig) { c.StatsDetail = detail })
+	// The canonical fixtures carry client addresses.
+	storeIP := false
+	settings := testSettings(t, func(c *openviduconfig.AnalyticsConfig) {
+		c.StatsDetail = detail
+		c.AnonymizeIP = &storeIP
+	})
 	_, err := schema.Initialize(context.Background(), db, schema.InitOptions{
 		ValidationAction: "error", Retention: retentionOf(settings), StatsDetail: detail, WriterVersion: scServerVersion,
 		Now: func() time.Time { return sat("08:00:00") },

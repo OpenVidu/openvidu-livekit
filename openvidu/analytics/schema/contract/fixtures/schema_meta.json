@@ -11,6 +11,7 @@
 		"statsMs": { "$numberLong": "604800000" },
 		"tracksMs": { "$numberLong": "604800000" },
 		"entitiesMs": { "$numberLong": "7776000000" },
+		"rollups5MinMs": { "$numberLong": "604800000" },
 		"rollupsHourlyMs": { "$numberLong": "34560000000" },
 		"rollupsDailyMs": null,
 		"updatedAt": { "$date": "2026-10-12T08:00:00.000Z" }

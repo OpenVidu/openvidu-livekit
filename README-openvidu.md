@@ -4,7 +4,7 @@ This fork of [livekit](https://github.com/livekit/livekit) stores the analytics 
 
 ## Configuration
 
-Extend the native livekit configuration ([`.yaml` file](https://docs.livekit.io/realtime/self-hosting/deployment/#Configuration)) with the `openvidu.analytics` section. The example sets every key; apart from `enabled`, `mongo_url` and `events.store_types`, the values are the defaults:
+Extend the native livekit configuration ([`.yaml` file](https://docs.livekit.io/realtime/self-hosting/deployment/#Configuration)) with the `openvidu.analytics` section. The example sets every key but `retention.rollups_daily`; apart from `enabled`, `mongo_url` and `events.store_types`, the values are the defaults:
 
 ```yaml
 openvidu:
@@ -13,15 +13,15 @@ openvidu:
     mongo_url: mongodb://mongoadmin:mongopassword@localhost:27017/?replicaSet=rs0&readPreference=primaryPreferred
     database: openvidu
     interval: 10s
-    fixer_interval: 60s
     retention:
-      events: 168h
-      stats: 168h
-      tracks: 168h
-      entities: 2160h
-      rollups_hourly: 9600h
+      events: 7d
+      stats: 7d
+      tracks: 7d
+      entities: 90d
+      rollups_5min: 7d
+      rollups_hourly: 400d
     stats_detail: participant
-    anonymize_ip: false
+    anonymize_ip: true
     store_metadata: false
     events:
       store_types:
@@ -39,6 +39,7 @@ openvidu:
     validation_action: warn
     reconciler:
       enabled: true
+      interval: 60s
       max_closures_per_run: 500
     migration:
       enabled: true
@@ -52,31 +53,34 @@ openvidu:
 | `mongo_url`                | required                               | MongoDB [connection string](https://www.mongodb.com/docs/manual/reference/connection-string/). Its password is redacted in logs.                                                                                    |
 | `database`                 | `openvidu`                             | Database name.                                                                                                                                                                                                       |
 | `interval`                 | `10s`                                  | Period of the write batches, from `1s` to `60s`.                                                                                                                                                                     |
-| `fixer_interval`           | `60s`                                  | Period of the reconciler runs (see [Reconciler](#reconciler)). Not shorter than `interval`.                                                                                                                         |
-| `retention.events`         | `168h`                                 | Time raw events are kept.                                                                                                                                                                                            |
-| `retention.stats`          | `168h`                                 | Time statistics and 5-minute rollups are kept.                                                                                                                                                                       |
-| `retention.tracks`         | `168h`                                 | Time closed tracks and subscriptions are kept.                                                                                                                                                                       |
-| `retention.entities`       | `2160h`                                | Time closed rooms, participants, egress, ingress and ingress sessions are kept.                                                                                                                                      |
-| `retention.rollups_hourly` | `9600h`                                | Time hourly rollups are kept. Daily rollups are kept forever.                                                                                                                                                        |
+| `retention.events`         | `7d`                                   | Time raw events are kept.                                                                                                                                                                                            |
+| `retention.stats`          | `7d`                                   | Time statistics are kept.                                                                                                                                                                                            |
+| `retention.tracks`         | `7d`                                   | Time closed tracks and subscriptions are kept.                                                                                                                                                                       |
+| `retention.entities`       | `90d`                                  | Time closed rooms, participants, egress, ingress and ingress sessions are kept, at least `2d` (the daily unique identities are computed from them).                                                                |
+| `retention.rollups_5min`   | `7d`                                   | Time 5-minute rollups are kept.                                                                                                                                                                                      |
+| `retention.rollups_hourly` | `400d`                                 | Time hourly rollups are kept.                                                                                                                                                                                        |
+| `retention.rollups_daily`  | —                                      | Time daily rollups are kept, not shorter than `retention.rollups_hourly`. Absent or `0`: forever.                                                                                                                  |
 | `stats_detail`             | `participant` (CE), `track` (PRO)      | `participant`: one statistics document per participant and direction every 30 s. `track`: one per track and direction.                                                                                              |
-| `anonymize_ip`             | `false`                                | Leave client IP addresses out.                                                                                                                                                                                       |
+| `anonymize_ip`             | `true`                                 | Leave client IP addresses out; `false` stores them.                                                                                                                                                                  |
 | `store_metadata`           | `false`                                | Store room and participant metadata and attributes.                                                                                                                                                                  |
 | `events.store_types`       | every type but three (see below)       | Event types kept as raw events, as a YAML list or a comma-separated string. Every event updates the entities and rollups whatever this list says; `API_CALL` is never kept raw.                                   |
 | `queue.max_events`         | `20000`                                | Events queued in memory, at least `1000`. The oldest one is dropped when the queue is full, and a warning reports the drops at most once per `interval`.                                                           |
 | `queue.max_stats`          | `50000`                                | Statistics queued in memory, at least `1000`, dropped and reported the same way.                                                                                                                                    |
 | `validation_action`        | `warn`                                 | `warn` logs the documents that break the collection validators; `error` rejects them (used by tests).                                                                                                               |
 | `reconciler.enabled`       | `true`                                 | Close the entities whose end event never arrived. With `false` they stay open until their own event, if any, arrives.                                                                                               |
+| `reconciler.interval`      | `60s`                                  | Period of the reconciler runs (see [Reconciler](#reconciler)). Not shorter than `interval`.                                                                                                                         |
 | `reconciler.max_closures_per_run` | `500`                           | Entities closed by one run at most; a run that reaches it continues 5 s later.                                                                                                                                       |
 | `migration.enabled`        | `true`                                 | Migrate the data of the legacy analytics writer at the first start (see [Legacy data migration](#legacy-data-migration)). With `false` the migration stays pending. |
 | `migration.rate`           | `2000`                                 | Legacy documents replayed per second at most; `0` is unthrottled.                                                                                                     |
 | `migration.batch_size`     | `500`                                  | Legacy documents per batch, from `1` to `10000`; a batch always holds whole seconds.                                                                                   |
+| `fixer_interval`           | —                                      | **Deprecated.** Sets `reconciler.interval` when that key is absent and is ignored otherwise; a warning is logged in both cases.                                                                                     |
 | `expiration`               | —                                      | **Deprecated.** Sets `retention.events` and `retention.stats` when neither is set and is ignored otherwise; a warning is logged in both cases.                                                                      |
 
-Retentions are durations of at least `1h` in whole seconds. By default every event type the server emits is kept raw except `TRACK_PUBLISHED_UPDATE`, `TRACK_MAX_SUBSCRIBED_VIDEO_QUALITY` and `TRACK_SUBSCRIBE_REQUESTED`.
+Durations are Go durations (`10s`, `168h`, `1h30m`), optionally preceded by a whole number of days (`7d`, `400d`, `1d12h`); a bare integer is read as nanoseconds. Retentions are at least `1h`, at most 2^31−1 seconds (`24855d3h14m7s`, the MongoDB TTL limit) and in whole seconds. By default every event type the server emits is kept raw except `TRACK_PUBLISHED_UPDATE`, `TRACK_MAX_SUBSCRIBED_VIDEO_QUALITY` and `TRACK_SUBSCRIBE_REQUESTED`.
 
-Every key can also be set with an environment variable named `LIVEKIT_OPENVIDU_ANALYTICS_` plus the key path in upper case with `_` for `.`, for example `LIVEKIT_OPENVIDU_ANALYTICS_RETENTION_EVENTS=720h` or `LIVEKIT_OPENVIDU_ANALYTICS_EVENTS_STORE_TYPES=ROOM_CREATED,ROOM_ENDED`.
+Every key can also be set with an environment variable named `LIVEKIT_OPENVIDU_ANALYTICS_` plus the key path in upper case with `_` for `.`, for example `LIVEKIT_OPENVIDU_ANALYTICS_RETENTION_EVENTS=30d` or `LIVEKIT_OPENVIDU_ANALYTICS_EVENTS_STORE_TYPES=ROOM_CREATED,ROOM_ENDED`.
 
-An invalid value stops the server at startup with an error that names the key. The effective configuration is logged at startup.
+An invalid value stops the server at startup with an error that names the key. The effective configuration is logged at startup, with durations in the same syntax.
 
 ## What is written
 
@@ -116,15 +120,16 @@ previous version.
 ## Reconciler
 
 Rooms, participant sessions, egress and ingress sessions stay open in the store when their end event never arrives
-(a node crash, a shutdown that could not flush, a lost event). Every `fixer_interval`, one node closes them; the node is
-elected with the Redis lock `analytics-reconciler-lock` (TTL `fixer_interval` + 5 s), or is the only node without Redis.
+(a node crash, a shutdown that could not flush, a lost event). Every `reconciler.interval`, one node closes them; the
+node is elected with the Redis lock `analytics-reconciler-lock` (TTL `reconciler.interval` + 5 s), or is the only node
+without Redis.
 A node also runs once right after startup.
 
 - Candidates, found with indexed queries on the store only:
   - participant sessions without stats for 90 s (3 stats intervals), or, without any stats, active (joined when never
     active) for 90 s;
   - active rooms without stats for 90 s, without an open session of a kind that keeps a room open (every kind but
-    `EGRESS` and `AGENT`), whose last event is older than their empty timeout plus 2 × `fixer_interval`;
+    `EGRESS` and `AGENT`), whose last event is older than their empty timeout plus 2 × `reconciler.interval`;
   - egress and ingress sessions not ended whose room closed more than 2 × `openvidu.cleanup_interval` ago on a dead
     node; LiveKit ends the others itself with real events.
 - Confirmation: a node is dead when its heartbeat in `nodes` is older than 2 × `interval` and LiveKit's node registry

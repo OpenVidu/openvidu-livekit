@@ -419,7 +419,7 @@
 		"name": "bucket_ttl",
 		"key": [["bucket", 1]],
 		"options": {},
-		"retentionClass": "stats"
+		"retentionClass": "rollups5Min"
 	},
 	{
 		"collection": "analytics_hourly",
@@ -445,6 +445,13 @@
 			["bucket", 1]
 		],
 		"options": { "unique": true }
+	},
+	{
+		"collection": "analytics_daily",
+		"name": "bucket_ttl",
+		"key": [["bucket", 1]],
+		"options": {},
+		"retentionClass": "rollupsDaily"
 	},
 	{
 		"collection": "nodes",
