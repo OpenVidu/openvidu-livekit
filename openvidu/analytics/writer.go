@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/livekit/protocol/livekit"
@@ -46,6 +47,9 @@ type writer struct {
 
 	events *queue.Ring[*eventEntry]
 	stats  *queue.Ring[*livekit.AnalyticsStat]
+	// eventsOverflow and statsOverflow count the entries each full queue dropped since its last warning.
+	eventsOverflow atomic.Int64
+	statsOverflow  atomic.Int64
 	// pendingStats are stats batches interrupted by a transient error, retried before new stats.
 	pendingStats []*statsEntry
 
@@ -89,6 +93,7 @@ func (w *writer) enqueueEvents(events []*livekit.AnalyticsEvent) {
 	for _, event := range events {
 		if _, dropped := w.events.Push(&eventEntry{event: event}); dropped {
 			w.metrics.dropped.WithLabelValues("events", "overflow").Inc()
+			w.eventsOverflow.Add(1)
 		}
 	}
 	w.metrics.queueDepth.WithLabelValues("events").Set(float64(w.events.Len()))
@@ -98,6 +103,7 @@ func (w *writer) enqueueStats(stats []*livekit.AnalyticsStat) {
 	for _, stat := range stats {
 		if _, dropped := w.stats.Push(stat); dropped {
 			w.metrics.dropped.WithLabelValues("stats", "overflow").Inc()
+			w.statsOverflow.Add(1)
 		}
 	}
 	w.metrics.queueDepth.WithLabelValues("stats").Set(float64(w.stats.Len()))
@@ -129,7 +135,28 @@ func (w *writer) tick(ctx context.Context) error {
 	if drained := w.stats.Drain(0); len(drained) > 0 {
 		stats = append(stats, &statsEntry{stats: drained})
 	}
-	return w.applyBatch(ctx, events, stats, started)
+	err := w.applyBatch(ctx, events, stats, started)
+	w.reportOverflow()
+	return err
+}
+
+// reportOverflow warns, at most once per queue and interval, about the entries a full queue dropped. A suppressed
+// warning keeps its count for the next one.
+func (w *writer) reportOverflow() {
+	for _, q := range []struct {
+		name    string
+		limit   int
+		dropped *atomic.Int64
+	}{{"events", w.events.Cap(), &w.eventsOverflow}, {"stats", w.stats.Cap(), &w.statsOverflow}} {
+		dropped := q.dropped.Swap(0)
+		if dropped == 0 {
+			continue
+		}
+		if !w.logs.warn("overflow:"+q.name, "analytics: queue full, oldest entries dropped", "queue", q.name,
+			"limit", q.limit, "dropped", dropped) {
+			q.dropped.Add(dropped)
+		}
+	}
 }
 
 func (w *writer) applyBatch(ctx context.Context, events []*eventEntry, stats []*statsEntry, started time.Time) error {
@@ -167,6 +194,7 @@ func (w *writer) applyBatch(ctx context.Context, events []*eventEntry, stats []*
 	}
 	if dropped := w.events.Requeue(remaining); dropped > 0 {
 		w.metrics.dropped.WithLabelValues("events", "overflow").Add(float64(dropped))
+		w.eventsOverflow.Add(int64(dropped))
 	}
 	for _, entry := range stats {
 		if !entry.done() {

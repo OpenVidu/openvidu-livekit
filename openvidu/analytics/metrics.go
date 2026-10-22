@@ -84,13 +84,15 @@ func newRateLimitedLog(interval time.Duration) *rateLimitedLog {
 	}
 }
 
-func (l *rateLimitedLog) warn(cause string, message string, fields ...any) {
+// warn writes the warning unless another one of the same cause was written within the interval; it reports whether it
+// wrote it.
+func (l *rateLimitedLog) warn(cause string, message string, fields ...any) bool {
 	l.mu.Lock()
 	now := l.now()
 	if last, ok := l.last[cause]; ok && now.Sub(last) < l.interval {
 		l.suppressed[cause]++
 		l.mu.Unlock()
-		return
+		return false
 	}
 	suppressed := l.suppressed[cause]
 	l.last[cause] = now
@@ -100,4 +102,5 @@ func (l *rateLimitedLog) warn(cause string, message string, fields ...any) {
 		fields = append(fields, "suppressed", suppressed)
 	}
 	l.emit(message, fields...)
+	return true
 }

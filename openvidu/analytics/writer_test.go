@@ -172,6 +172,46 @@ func TestOverflowDropsOldestAndCounts(t *testing.T) {
 	require.Equal(t, "AE_ROOM_CREATED_0051", w.events.Drain(1)[0].event.GetId(), "the latest 100 events are kept")
 }
 
+func TestOverflowWarning(t *testing.T) {
+	settings := testSettings(t, nil)
+	settings.MaxEvents = 1000
+	w := newWriter(&fakeStore{}, settings, Node{ID: testNode}, newMetrics())
+	var lines []map[string]any
+	now := time.Unix(0, 0)
+	w.logs.now = func() time.Time { return now }
+	w.logs.emit = func(message string, fields ...any) {
+		line := map[string]any{"message": message}
+		for i := 0; i+1 < len(fields); i += 2 {
+			line[fields[i].(string)] = fields[i+1]
+		}
+		lines = append(lines, line)
+	}
+	ctx := context.Background()
+
+	w.enqueueEvents(roomEvents(1500))
+	require.NoError(t, w.tick(ctx))
+	require.Len(t, lines, 1)
+	require.Equal(t, "analytics: queue full, oldest entries dropped", lines[0]["message"])
+	require.Equal(t, "events", lines[0]["queue"])
+	require.Equal(t, 1000, lines[0]["limit"])
+	require.EqualValues(t, 500, lines[0]["dropped"])
+
+	w.enqueueEvents(roomEvents(1200))
+	now = now.Add(settings.Interval / 2)
+	require.NoError(t, w.tick(ctx))
+	require.Len(t, lines, 1, "at most one line per queue and interval")
+
+	w.enqueueEvents(roomEvents(1100))
+	now = now.Add(settings.Interval)
+	require.NoError(t, w.tick(ctx))
+	require.Len(t, lines, 2)
+	require.EqualValues(t, 300, lines[1]["dropped"], "the suppressed warning's drops are reported with the next one")
+
+	now = now.Add(2 * settings.Interval)
+	require.NoError(t, w.tick(ctx))
+	require.Len(t, lines, 2, "no line without drops")
+}
+
 func TestOneBatchInFlightAndSendNeverBlocks(t *testing.T) {
 	store := &fakeStore{delay: 200 * time.Millisecond}
 	settings := testSettings(t, nil)
