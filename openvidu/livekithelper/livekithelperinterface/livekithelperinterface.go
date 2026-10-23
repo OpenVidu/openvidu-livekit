@@ -20,6 +20,10 @@ import "github.com/livekit/protocol/livekit"
 type LivekitHelper interface {
 	ListActiveRooms() ([]*livekit.Room, error)
 	ListActiveParticipants() ([]*livekit.ParticipantInfo, error)
+	// ListParticipants returns the participants of a room; none when the room does not exist.
+	ListParticipants(roomName string) ([]*livekit.ParticipantInfo, error)
+	// IsNodeAvailable reports whether LiveKit's node registry lists the node with recent stats.
+	IsNodeAvailable(nodeID string) (bool, error)
 	ListActiveEgresses() ([]*livekit.EgressInfo, error)
 	ListActiveIngresses() ([]*livekit.IngressInfo, error)
 }

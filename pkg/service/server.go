@@ -128,6 +128,10 @@ func NewLivekitServer(conf *config.Config,
 			TwirpLogger(),
 			TwirpEgressID(),
 			TwirpRequestStatusReporter(),
+			// BEGIN OPENVIDU BLOCK
+			// API_CALL analytics events feed the API call counters of the analytics rollups.
+			TwirpTelemetry(currentNode.NodeID(), nil, roomManager.telemetry),
+			// END OPENVIDU BLOCK
 		)),
 	}
 	for _, opt := range xtwirp.DefaultServerOptions() {

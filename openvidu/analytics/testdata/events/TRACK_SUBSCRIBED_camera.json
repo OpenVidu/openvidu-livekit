@@ -1,0 +1,97 @@
+{
+  "id": "AE_yodZqiuEDYE5",
+  "type": "TRACK_SUBSCRIBED",
+  "timestamp": "2026-10-13T19:23:10.677905654Z",
+  "room_id": "RM_sqgCdXepgfgs",
+  "room": {
+    "sid": "RM_sqgCdXepgfgs",
+    "name": "fx-lifecycle"
+  },
+  "participant_id": "PA_eh4YYgfKooWZ",
+  "participant": {
+    "sid": "PA_eh4YYgfKooWZ"
+  },
+  "track_id": "TR_VCwMkJBY8Rri9c",
+  "track": {
+    "sid": "TR_VCwMkJBY8Rri9c",
+    "type": "VIDEO",
+    "name": "demo",
+    "width": 1280,
+    "height": 720,
+    "simulcast": true,
+    "source": "CAMERA",
+    "layers": [
+      {
+        "width": 320,
+        "height": 180,
+        "bitrate": 120000,
+        "ssrc": 893244404,
+        "rid": "q"
+      },
+      {
+        "quality": "MEDIUM",
+        "width": 640,
+        "height": 360,
+        "bitrate": 400000,
+        "ssrc": 1724668114,
+        "spatial_layer": 1,
+        "rid": "h"
+      },
+      {
+        "quality": "HIGH",
+        "width": 1280,
+        "height": 720,
+        "bitrate": 1500000,
+        "ssrc": 2762283070,
+        "spatial_layer": 2,
+        "rid": "f"
+      }
+    ],
+    "mime_type": "video/H264",
+    "mid": "0",
+    "codecs": [
+      {
+        "mime_type": "video/H264",
+        "mid": "0",
+        "cid": "demo-video",
+        "layers": [
+          {
+            "width": 320,
+            "height": 180,
+            "bitrate": 120000,
+            "ssrc": 893244404,
+            "rid": "q"
+          },
+          {
+            "quality": "MEDIUM",
+            "width": 640,
+            "height": 360,
+            "bitrate": 400000,
+            "ssrc": 1724668114,
+            "spatial_layer": 1,
+            "rid": "h"
+          },
+          {
+            "quality": "HIGH",
+            "width": 1280,
+            "height": 720,
+            "bitrate": 1500000,
+            "ssrc": 2762283070,
+            "spatial_layer": 2,
+            "rid": "f"
+          }
+        ],
+        "video_layer_mode": "ONE_SPATIAL_LAYER_PER_STREAM"
+      }
+    ],
+    "stream": "camera",
+    "version": {
+      "unix_micro": "1791919382583836"
+    }
+  },
+  "publisher": {
+    "sid": "PA_joBzDAREayuJ",
+    "identity": "alice"
+  },
+  "node_id": "ND_uWK64bdCvHNX"
+}

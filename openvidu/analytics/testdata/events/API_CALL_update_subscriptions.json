@@ -1,0 +1,26 @@
+{
+  "id": "AE_J42F2it48Dq4",
+  "type": "API_CALL",
+  "timestamp": "2026-10-13T19:23:44.803849412Z",
+  "node_id": "ND_uWK64bdCvHNX",
+  "api_call": {
+    "request": {
+      "update_subscriptions_request": {
+        "room": "fx-lifecycle",
+        "identity": "bob",
+        "track_sids": [
+          "TR_doesnotexist002"
+        ],
+        "subscribe": true
+      }
+    },
+    "service": "RoomService",
+    "method": "UpdateSubscriptions",
+    "node_id": "ND_uWK64bdCvHNX",
+    "status": 200,
+    "room_name": "fx-lifecycle",
+    "participant_identity": "bob",
+    "started_at": "2026-10-13T19:23:44.803207241Z",
+    "duration_ns": "621025"
+  }
+}

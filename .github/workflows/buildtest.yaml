@@ -74,11 +74,23 @@ jobs:
           set -euo pipefail
           MallocNanoZone=0 go test -race -json -v ./... 2>&1 | tee /tmp/gotest.log | go tool gotestfmt
 
+      # BEGIN OPENVIDU BLOCK
+      # Analytics writer against MongoDB containers started by Testcontainers.
+      - name: Analytics integration tests
+        run: |
+          set -euo pipefail
+          go test -race -tags integration -json -v ./openvidu/analytics/... 2>&1 | tee /tmp/gotest-integration.log | go tool gotestfmt
+      # END OPENVIDU BLOCK
+
       # Upload the original go test log as an artifact for later review.
       - name: Upload test log
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
           name: test-log
-          path: /tmp/gotest.log
+          # BEGIN OPENVIDU BLOCK
+          path: |
+            /tmp/gotest.log
+            /tmp/gotest-integration.log
+          # END OPENVIDU BLOCK
           if-no-files-found: error

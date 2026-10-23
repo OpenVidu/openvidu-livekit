@@ -1,0 +1,22 @@
+{
+  "id": "AE_6dR5TytEDcHL",
+  "type": "API_CALL",
+  "timestamp": "2026-10-13T19:19:39.585625046Z",
+  "node_id": "ND_gAWdUwUWW9JM",
+  "api_call": {
+    "request": {
+      "room_participant_identity": {
+        "room": "fx-egress",
+        "identity": "alice"
+      }
+    },
+    "service": "RoomService",
+    "method": "RemoveParticipant",
+    "node_id": "ND_gAWdUwUWW9JM",
+    "status": 200,
+    "room_name": "fx-egress",
+    "participant_identity": "alice",
+    "started_at": "2026-10-13T19:19:39.584142134Z",
+    "duration_ns": "1267444"
+  }
+}

@@ -5,6 +5,30 @@ OpenVidu. The changes of the upstream project are listed in `CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Added
+
+- **New analytics data model**: each node writes rooms, participants, tracks, subscriptions, egress, ingress, raw events, statistics and 5-minute, hourly and daily rollups to MongoDB in idempotent batches every `openvidu.analytics.interval`, with a retention per data class and a node heartbeat. Collections, validators and indexes are created or updated at startup. New `openvidu.analytics` options: `retention` (per data class: `events`, `stats`, `tracks`, `entities`, `rollups_5min`, `rollups_hourly` and the optional `rollups_daily`), `stats_detail`, `anonymize_ip`, `store_metadata`, `events.store_types`, `queue` and `validation_action`; new metrics `openvidu_analytics_*`.
+- **Analytics durations accept days**: `7d`, `400d` or `1d12h` besides Go durations, and the effective configuration is logged in that syntax. The server refuses to start on a retention above the MongoDB TTL limit (2^31−1 seconds), an entity retention under 2 days or a daily rollup retention shorter than the hourly one, naming the key.
+- **Dropped analytics entries are logged**: a full queue logs a warning with the number of entries it dropped, at most once per queue and `openvidu.analytics.interval`.
+- **API calls are analytics events**: every Twirp API response emits an `API_CALL` event, counted per method in the rollups.
+- **Legacy analytics data is migrated automatically**: the first start migrates the `events` and `stats` of previous versions to the new data model in the background, on one node at a time, throttled and resumable, while live events are written as usual; the close events of the legacy fixer become reconciler closures. Progress is recorded in `schema_meta` (`_id: migration`), logged and exposed as `openvidu_analytics_migration_*` metrics; new options `openvidu.analytics.migration.enabled`, `rate` and `batch_size`.
+- **Analytics reconciler**: rooms, participants (with their tracks and subscriptions), egress and ingress sessions whose end event never arrived are closed: the participants of a crashed node within about 2 minutes, its rooms with their last session once the dead node cleanup removed them from Redis (at the latest two `openvidu.cleanup_interval` after their last stats or event), and its egress and ingress sessions when LiveKit has not ended them two cleanup intervals after their room. Closed documents get an end time estimated from their last stats or event, `closedBy: reconciler` and the reason `RECONCILED`; an entity that still receives stats is never closed. One node at a time runs it every `openvidu.analytics.reconciler.interval`; new options `openvidu.analytics.reconciler.enabled`, `interval` and `max_closures_per_run`, and metrics `openvidu_analytics_reconciler_*`.
+
+### Changed
+
+- **Client IP addresses are no longer stored by default**: `openvidu.analytics.anonymize_ip` defaults to `true`; set it to `false` to store them.
+- **Analytics data survives a graceful shutdown**: queued events and statistics are written, for at most 5 s, before the process exits.
+- **The analytics `events` collection of previous versions is renamed to `legacy_events`** at the first start; it and the legacy `stats` expire by their own TTL after the migration, which drops `active_entities` and `last_alive`.
+
+### Deprecated
+
+- `openvidu.analytics.expiration`: mapped to `retention.events` and `retention.stats`, which replace it.
+- `openvidu.analytics.fixer_interval`: mapped to `openvidu.analytics.reconciler.interval`, which replaces it.
+
+### Removed
+
+- **Legacy analytics writer**: the `stats`, `active_entities` and `last_alive` collections, the legacy `events` document shape, the active-entities fixer (replaced by the analytics reconciler) and the Redis analytics sink.
+
 ### Fixed
 
 - **Idle TURN connections no longer pile up**: a client that reached the TURN server and then went silent — even with just a STUN Binding — held the connection, and any allocation behind it, open indefinitely. A TURN TCP connection idle in both directions is now closed after `turn.tcp_connection_idle_timeout_seconds` (default 60s; `<= 0` disables it); an active relay is never cut.

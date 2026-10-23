@@ -1,0 +1,76 @@
+{
+  "id": "AE_Bfzyaz8A2QBZ",
+  "type": "TRACK_SUBSCRIBE_STATS",
+  "timestamp": "2026-10-13T19:23:28.880324351Z",
+  "room_id": "RM_sqgCdXepgfgs",
+  "room": {
+    "sid": "RM_sqgCdXepgfgs",
+    "name": "fx-lifecycle"
+  },
+  "participant_id": "PA_eh4YYgfKooWZ",
+  "track_id": "TR_VCwMkJBY8Rri9c",
+  "mime": "video/H264",
+  "rtp_stats": {
+    "start_time": "2026-10-13T19:23:12.551588603Z",
+    "end_time": "2026-10-13T19:23:28.880039181Z",
+    "duration": 16.328450578,
+    "packets": 1769,
+    "packet_rate": 108.33850961850888,
+    "bytes": "1920673",
+    "header_bytes": "21228",
+    "bitrate": 941019.1081266718,
+    "frames": 311,
+    "frame_rate": 19.04651017035402,
+    "last_pli": "1970-01-01T00:00:00Z",
+    "last_fir": "0001-01-01T00:00:00Z",
+    "key_frames": 6,
+    "last_key_frame": "2026-10-13T19:23:26.551648276Z",
+    "layer_lock_plis": 25,
+    "last_layer_lock_pli": "2026-10-13T19:23:28.861693182Z",
+    "packet_drift": {
+      "start_time": "2026-10-13T19:23:12.550951248Z",
+      "end_time": "2026-10-13T19:23:28.847827613Z",
+      "duration": 16.296876365,
+      "start_timestamp": "2974615031",
+      "end_timestamp": "2976084807",
+      "rtp_clock_ticks": "1469776",
+      "drift_samples": "3058",
+      "drift_ms": 33.977777777777774,
+      "clock_rate": 90187.58976146899
+    },
+    "ntp_report_drift": {
+      "start_time": "2026-10-13T19:23:13.524232480Z",
+      "end_time": "2026-10-13T19:23:28.527623251Z",
+      "duration": 15.003390771,
+      "start_timestamp": "2974702636",
+      "end_timestamp": "2976052665",
+      "rtp_clock_ticks": "1350029",
+      "drift_samples": "-276",
+      "drift_ms": -3.066666666666667,
+      "clock_rate": 89981.59286829123
+    },
+    "rebased_report_drift": {
+      "start_time": "2026-10-13T19:23:13.524343402Z",
+      "end_time": "2026-10-13T19:23:28.527718391Z",
+      "duration": 15.003374989,
+      "start_timestamp": "2974702636",
+      "end_timestamp": "2976052665",
+      "rtp_clock_ticks": "1350029",
+      "drift_samples": "-274",
+      "drift_ms": -3.0444444444444443,
+      "clock_rate": 89981.68751962799
+    },
+    "received_report_drift": {
+      "start_time": "2026-10-13T19:23:13.524375564Z",
+      "end_time": "2026-10-13T19:23:28.527856154Z",
+      "duration": 15.00348059,
+      "start_timestamp": "2974702636",
+      "end_timestamp": "2976052665",
+      "rtp_clock_ticks": "1350029",
+      "drift_samples": "-284",
+      "drift_ms": -3.1555555555555554,
+      "clock_rate": 89981.05418950657
+    }
+  },
+  "node_id": "ND_uWK64bdCvHNX"
+}

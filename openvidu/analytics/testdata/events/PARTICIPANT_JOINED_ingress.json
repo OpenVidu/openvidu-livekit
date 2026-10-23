@@ -1,0 +1,77 @@
+{
+  "id": "AE_RkmMjdm5eqD4",
+  "type": "PARTICIPANT_JOINED",
+  "timestamp": "2026-10-13T19:21:15.960769412Z",
+  "room_id": "RM_NXE2HStYnKQv",
+  "room": {
+    "sid": "RM_NXE2HStYnKQv",
+    "name": "fx-ingress",
+    "empty_timeout": 20,
+    "departure_timeout": 10,
+    "creation_time": "1791919275",
+    "creation_time_ms": "1791919275478",
+    "turn_password": "vscTfRV2v0mcUR7x4We5KV63oJIhe4iQjhsjfgQF65AB",
+    "enabled_codecs": [
+      {
+        "mime": "audio/PCMU"
+      },
+      {
+        "mime": "audio/PCMA"
+      },
+      {
+        "mime": "audio/opus"
+      },
+      {
+        "mime": "audio/red"
+      },
+      {
+        "mime": "video/VP8"
+      },
+      {
+        "mime": "video/H264"
+      },
+      {
+        "mime": "video/VP9"
+      },
+      {
+        "mime": "video/AV1"
+      },
+      {
+        "mime": "video/H265"
+      },
+      {
+        "mime": "video/rtx"
+      }
+    ]
+  },
+  "participant_id": "PA_tL88sTcX579C",
+  "participant": {
+    "sid": "PA_tL88sTcX579C",
+    "identity": "obs",
+    "state": "JOINED",
+    "joined_at": "1791919275",
+    "joined_at_ms": "1791919275959",
+    "name": "OBS",
+    "version": 1,
+    "permission": {
+      "can_publish": true,
+      "can_publish_data": true,
+      "can_update_metadata": true
+    },
+    "kind": "INGRESS",
+    "attributes": {
+      "ingress.ingressID": "IN_iwuXFX4xkybv"
+    }
+  },
+  "client_info": {
+    "sdk": "GO",
+    "version": "2.18.2",
+    "protocol": 17,
+    "os": "linux",
+    "address": "172.17.0.4"
+  },
+  "client_meta": {
+    "node": "ND_uWK64bdCvHNX"
+  },
+  "node_id": "ND_uWK64bdCvHNX"
+}

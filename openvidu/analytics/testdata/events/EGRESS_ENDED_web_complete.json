@@ -1,0 +1,43 @@
+{
+  "id": "AE_J2oUvjzUARES",
+  "type": "EGRESS_ENDED",
+  "timestamp": "2026-10-13T19:19:22.113333030Z",
+  "egress_id": "EG_gsf8QHPZxHBW",
+  "egress": {
+    "egress_id": "EG_gsf8QHPZxHBW",
+    "status": "EGRESS_COMPLETE",
+    "started_at": "1791919146992325333",
+    "ended_at": "1791919162111931559",
+    "updated_at": "1791919162111931559",
+    "web": {
+      "url": "https://example.com/?token=SECRET-web-token",
+      "preset": "H264_720P_30",
+      "file_outputs": [
+        {
+          "filepath": "/home/egress/fx-web.mp4"
+        }
+      ]
+    },
+    "file_results": [
+      {
+        "filename": "/home/egress/fx-web.mp4",
+        "started_at": "1791919149870260688",
+        "ended_at": "1791919162052818057",
+        "duration": "12182557369",
+        "size": "467126",
+        "location": "/home/egress/fx-web.mp4"
+      }
+    ],
+    "details": "End reason: StopEgress API",
+    "manifest_location": "/home/egress/EG_gsf8QHPZxHBW.json",
+    "file": {
+      "filename": "/home/egress/fx-web.mp4",
+      "started_at": "1791919149870260688",
+      "ended_at": "1791919162052818057",
+      "duration": "12182557369",
+      "size": "467126",
+      "location": "/home/egress/fx-web.mp4"
+    }
+  },
+  "node_id": "ND_gAWdUwUWW9JM"
+}
