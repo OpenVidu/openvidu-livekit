@@ -81,6 +81,7 @@ type reconcilerStore interface {
 	OpenParticipants(ctx context.Context, roomSids []string) ([]store.OpenParticipant, error)
 	RoomsWithOpenSessions(ctx context.Context, roomSids []string, excludedKinds []string) (map[string]bool, error)
 	StaleRooms(ctx context.Context, now time.Time, grace time.Duration, statsFrom time.Time, limit int) ([]store.OpenRoom, error)
+	IdleRooms(ctx context.Context, before time.Time, limit int) ([]store.OpenRoom, error)
 	Rooms(ctx context.Context, sids []string) (map[string]store.RoomRef, error)
 	OpenEgresses(ctx context.Context, limit int) ([]store.OpenEgress, error)
 	OpenIngressSessions(ctx context.Context, limit int) ([]store.OpenIngressSession, error)

@@ -26,8 +26,11 @@ import (
 
 // candidateSet holds the candidates of a run and the liveness of their nodes.
 type candidateSet struct {
-	participants    []store.OpenParticipant
+	participants []store.OpenParticipant
+	// rooms holds the room candidates of alive nodes, deadRooms those of dead nodes, whose open sessions are checked
+	// after the run's participant closures.
 	rooms           []store.OpenRoom
+	deadRooms       []store.OpenRoom
 	egresses        []egressCandidate
 	ingressSessions []ingressSessionCandidate
 	// dead holds the nodes of the candidates that are dead.
@@ -55,7 +58,7 @@ type ingressSessionCandidate struct {
 
 func (c candidateSet) counts() schema.ReconcilerCounts {
 	return schema.ReconcilerCounts{
-		Room:           int32(len(c.rooms)),
+		Room:           int32(len(c.rooms) + len(c.deadRooms)),
 		Participant:    int32(len(c.participants)),
 		Egress:         int32(len(c.egresses)),
 		IngressSession: int32(len(c.ingressSessions)),
@@ -66,6 +69,7 @@ func (c candidateSet) counts() schema.ReconcilerCounts {
 //   - participant sessions without stats for staleAfter (or, without any stats, active or joined that long ago);
 //   - active rooms without stats for staleAfter, without an open session of a kind that keeps a room open, whose
 //     last event is older than their empty timeout plus two intervals;
+//   - active rooms of dead nodes without stats or events for staleAfter, whatever their open sessions;
 //   - open egresses and ingress sessions whose room closed more than two cleanup intervals ago on a dead node.
 func (r *reconciler) candidates(ctx context.Context, now time.Time) (candidateSet, error) {
 	hold := false
@@ -87,23 +91,12 @@ func (r *reconciler) candidates(ctx context.Context, now time.Time) (candidateSe
 	if err != nil {
 		return found, err
 	}
-	found.participants = participants
-	found.truncated = len(participants) >= limit || len(rooms) >= limit
-	if len(rooms) > 0 {
-		sids := make([]string, len(rooms))
-		for i, room := range rooms {
-			sids[i] = room.SID
-		}
-		keptOpen, err := r.store.RoomsWithOpenSessions(ctx, sids, projection.DependentKinds)
-		if err != nil {
-			return found, err
-		}
-		for _, room := range rooms {
-			if !keptOpen[room.SID] {
-				found.rooms = append(found.rooms, room)
-			}
-		}
+	idle, err := r.store.IdleRooms(ctx, staleBefore, limit)
+	if err != nil {
+		return found, err
 	}
+	found.participants = participants
+	found.truncated = len(participants) >= limit || len(rooms) >= limit || len(idle) >= limit
 
 	egresses, sessions, err := r.mediaOfClosedRooms(ctx, now)
 	if err != nil {
@@ -114,7 +107,7 @@ func (r *reconciler) candidates(ctx context.Context, now time.Time) (candidateSe
 	for _, participant := range found.participants {
 		nodes = append(nodes, participant.NodeID)
 	}
-	for _, room := range found.rooms {
+	for _, room := range slices.Concat(rooms, idle) {
 		nodes = append(nodes, room.NodeID)
 	}
 	for _, candidate := range egresses {
@@ -128,15 +121,20 @@ func (r *reconciler) candidates(ctx context.Context, now time.Time) (candidateSe
 	if err != nil {
 		return found, err
 	}
+	if found.rooms, found.deadRooms, err = r.splitRooms(ctx, rooms, idle, found.dead); err != nil {
+		return found, err
+	}
 	if hold {
 		// The legacy migration replays entities of nodes that never wrote a heartbeat, closed later in the replay.
 		legacy := func(node string) bool { return !seen[node] }
-		held := len(found.participants) + len(found.rooms) + len(egresses) + len(sessions)
+		held := len(found.participants) + len(found.rooms) + len(found.deadRooms) + len(egresses) + len(sessions)
+		legacyRoom := func(room store.OpenRoom) bool { return legacy(room.NodeID) }
 		found.participants = slices.DeleteFunc(found.participants, func(p store.OpenParticipant) bool { return legacy(p.NodeID) })
-		found.rooms = slices.DeleteFunc(found.rooms, func(room store.OpenRoom) bool { return legacy(room.NodeID) })
+		found.rooms = slices.DeleteFunc(found.rooms, legacyRoom)
+		found.deadRooms = slices.DeleteFunc(found.deadRooms, legacyRoom)
 		egresses = slices.DeleteFunc(egresses, func(c egressCandidate) bool { return legacy(c.room.NodeID) })
 		sessions = slices.DeleteFunc(sessions, func(c ingressSessionCandidate) bool { return legacy(c.room.NodeID) })
-		if held -= len(found.participants) + len(found.rooms) + len(egresses) + len(sessions); held > 0 {
+		if held -= len(found.participants) + len(found.rooms) + len(found.deadRooms) + len(egresses) + len(sessions); held > 0 {
 			r.log.debugw("analytics reconciler: candidates of legacy nodes held until the migration completes", "count", held)
 		}
 	}
@@ -151,6 +149,41 @@ func (r *reconciler) candidates(ctx context.Context, now time.Time) (candidateSe
 		}
 	}
 	return found, nil
+}
+
+// splitRooms returns the timeout candidates of alive nodes without an open session of a kind that keeps a room open,
+// and the rooms of dead nodes among the timeout candidates and the idle rooms; idle rooms of alive nodes are dropped.
+func (r *reconciler) splitRooms(ctx context.Context, timedOut []store.OpenRoom, idle []store.OpenRoom,
+	dead map[string]bool) ([]store.OpenRoom, []store.OpenRoom, error) {
+	var alive, deadRooms []store.OpenRoom
+	listed := map[string]bool{}
+	for _, room := range timedOut {
+		listed[room.SID] = true
+		if dead[room.NodeID] {
+			deadRooms = append(deadRooms, room)
+		} else {
+			alive = append(alive, room)
+		}
+	}
+	for _, room := range idle {
+		if dead[room.NodeID] && !listed[room.SID] {
+			listed[room.SID] = true
+			deadRooms = append(deadRooms, room)
+		}
+	}
+	if len(alive) == 0 {
+		return nil, deadRooms, nil
+	}
+	sids := make([]string, len(alive))
+	for i, room := range alive {
+		sids[i] = room.SID
+	}
+	keptOpen, err := r.store.RoomsWithOpenSessions(ctx, sids, projection.DependentKinds)
+	if err != nil {
+		return nil, nil, err
+	}
+	alive = slices.DeleteFunc(alive, func(room store.OpenRoom) bool { return keptOpen[room.SID] })
+	return alive, deadRooms, nil
 }
 
 // mediaOfClosedRooms returns the open egresses and ingress sessions whose room closed more than two cleanup intervals

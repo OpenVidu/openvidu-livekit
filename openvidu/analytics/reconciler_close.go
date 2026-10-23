@@ -17,6 +17,7 @@ package analytics
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/livekit/livekit-server/openvidu/analytics/projection"
@@ -77,7 +78,11 @@ func (c *closer) closeAll(ctx context.Context, confirmed confirmation) error {
 	if err := c.closeParticipants(ctx, confirmed.participants); err != nil {
 		return err
 	}
-	for _, room := range confirmed.rooms {
+	deadRooms, err := c.withoutOpenSessions(ctx, confirmed.deadRooms)
+	if err != nil {
+		return err
+	}
+	for _, room := range slices.Concat(confirmed.rooms, deadRooms) {
 		if !c.allowed() {
 			return nil
 		}
@@ -142,14 +147,36 @@ func (c *closer) closeParticipants(ctx context.Context, participants []confirmed
 	return nil
 }
 
+// withoutOpenSessions returns the rooms that the participant closures left without an open session of a kind that
+// keeps a room open.
+func (c *closer) withoutOpenSessions(ctx context.Context, rooms []confirmedRoom) ([]confirmedRoom, error) {
+	if len(rooms) == 0 || c.stopped {
+		return nil, nil
+	}
+	sids := make([]string, len(rooms))
+	for i, room := range rooms {
+		sids[i] = room.SID
+	}
+	keptOpen, err := c.r.store.RoomsWithOpenSessions(ctx, sids, projection.DependentKinds)
+	if err != nil {
+		return nil, err
+	}
+	var closable []confirmedRoom
+	for _, room := range rooms {
+		if keptOpen[room.SID] {
+			c.r.log.debugw("analytics reconciler: room of a dead node kept, it still has open sessions", "roomSid", room.SID)
+			continue
+		}
+		closable = append(closable, room)
+	}
+	return closable, nil
+}
+
 // closeRoom closes a room, then its open participant sessions with the room's end time.
 func (c *closer) closeRoom(ctx context.Context, room confirmedRoom) error {
 	at := room.at
 	if at.IsZero() {
-		at = room.LastEventAt
-		if room.LastStatsAt != nil && room.LastStatsAt.After(at) {
-			at = *room.LastStatsAt
-		}
+		at = lastSignal(room.OpenRoom)
 	}
 	state := projection.RoomState{SID: room.SID, Name: room.Name, NodeID: room.NodeID, CreatedAt: room.CreatedAt,
 		LastEventAt: room.LastEventAt}

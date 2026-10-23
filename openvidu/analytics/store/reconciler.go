@@ -225,14 +225,38 @@ func StaleRoomQuery(now time.Time, grace time.Duration, statsFrom time.Time, lim
 	}
 }
 
+var openRoomFields = bson.D{
+	{Key: "name", Value: 1}, {Key: "nodeId", Value: 1}, {Key: "createdAt", Value: 1}, {Key: "lastEventAt", Value: 1},
+	{Key: "lastStatsAt", Value: 1},
+}
+
 // StaleRooms returns, at most limit and the stalest first, the active rooms whose last event is older than their empty
 // timeout plus grace and without a stats flush since statsFrom.
 func (s *Store) StaleRooms(ctx context.Context, now time.Time, grace time.Duration, statsFrom time.Time, limit int) ([]OpenRoom, error) {
 	var rooms []OpenRoom
-	err := s.find(ctx, StaleRoomQuery(now, grace, statsFrom, limit), bson.D{
-		{Key: "name", Value: 1}, {Key: "nodeId", Value: 1}, {Key: "createdAt", Value: 1}, {Key: "lastEventAt", Value: 1},
-		{Key: "lastStatsAt", Value: 1},
-	}, &rooms)
+	err := s.find(ctx, StaleRoomQuery(now, grace, statsFrom, limit), openRoomFields, &rooms)
+	return rooms, err
+}
+
+// IdleRoomQuery is the query of IdleRooms.
+func IdleRoomQuery(before time.Time, limit int) Query {
+	return Query{
+		Collection: schema.CollectionRooms,
+		Filter: bson.D{
+			{Key: "status", Value: "active"},
+			{Key: "lastEventAt", Value: bson.D{{Key: "$lt", Value: before}}},
+			{Key: "lastStatsAt", Value: bson.D{{Key: "$not", Value: bson.D{{Key: "$gte", Value: before}}}}},
+		},
+		Sort:  bson.D{{Key: "lastEventAt", Value: -1}},
+		Limit: int64(limit),
+	}
+}
+
+// IdleRooms returns, at most limit and the most recently active first, the active rooms without an event or a stats
+// flush since before.
+func (s *Store) IdleRooms(ctx context.Context, before time.Time, limit int) ([]OpenRoom, error) {
+	var rooms []OpenRoom
+	err := s.find(ctx, IdleRoomQuery(before, limit), openRoomFields, &rooms)
 	return rooms, err
 }
 
@@ -316,8 +340,7 @@ func (s *Store) OpenRoomsByID(ctx context.Context, sids []string) ([]OpenRoom, e
 	}
 	err := s.find(ctx, Query{Collection: schema.CollectionRooms, Filter: bson.D{
 		{Key: "_id", Value: bson.D{{Key: "$in", Value: sids}}}, {Key: "status", Value: "active"},
-	}}, bson.D{{Key: "name", Value: 1}, {Key: "nodeId", Value: 1}, {Key: "createdAt", Value: 1},
-		{Key: "lastEventAt", Value: 1}, {Key: "lastStatsAt", Value: 1}}, &rooms)
+	}}, openRoomFields, &rooms)
 	return rooms, err
 }
 

@@ -154,14 +154,24 @@ func TestReconcilerCandidates(t *testing.T) {
 		env.room("RM_streaming", nodeAlive, before(30*time.Minute))
 		env.session("RM_streaming", nodeAlive, "PA_streamer", livekit.ParticipantInfo_EGRESS, before(20*time.Minute), false)
 		env.statsAt("RM_streaming", nodeAlive, "PA_streamer", before(time.Minute))
+		// A dead node's room does not wait for its empty timeout, nor for its open sessions to close.
+		env.room("RM_dead_recent", nodeDead, before(2*time.Minute))
+		env.session("RM_dead_recent", nodeDead, "PA_crashed", livekit.ParticipantInfo_STANDARD, before(2*time.Minute), false)
+		env.statsAt("RM_dead_recent", nodeDead, "PA_crashed", before(100*time.Second))
+		env.room("RM_alive_waiting", nodeAlive, before(2*time.Minute))
 
 		found, err := env.r.candidates(ctx, reconcileNow)
 		require.NoError(t, err)
-		var sids []string
-		for _, room := range found.rooms {
-			sids = append(sids, room.SID)
+		sidsOf := func(rooms []store.OpenRoom) []string {
+			var sids []string
+			for _, room := range rooms {
+				sids = append(sids, room.SID)
+			}
+			return sids
 		}
-		require.ElementsMatch(t, []string{"RM_empty", "RM_dependent"}, sids)
+		require.ElementsMatch(t, []string{"RM_empty", "RM_dependent"}, sidsOf(found.rooms))
+		require.Equal(t, []string{"RM_dead_recent"}, sidsOf(found.deadRooms))
+		require.EqualValues(t, 3, found.counts().Room)
 	})
 
 	t.Run("egress and ingress session thresholds", func(t *testing.T) {
@@ -237,12 +247,13 @@ func TestReconcilerQueryPlans(t *testing.T) {
 
 	staleBefore := reconcileNow.Add(-staleAfter)
 	for _, query := range append(store.StaleParticipantQueries(staleBefore, limit),
-		store.StaleRoomQuery(reconcileNow, 2*time.Minute, staleBefore, limit)) {
+		store.StaleRoomQuery(reconcileNow, 2*time.Minute, staleBefore, limit), store.IdleRoomQuery(staleBefore, limit)) {
 		stats := explainFind(t, env.db, query)
 		require.NotContains(t, stats.stages, "COLLSCAN", query.Collection)
 		require.Contains(t, stats.stages, "IXSCAN", query.Collection)
 		require.LessOrEqual(t, stats.docsExamined, int64(limit), "%s %v", query.Collection, query.Filter)
 	}
+	require.Contains(t, explainFind(t, env.db, store.IdleRoomQuery(staleBefore, limit)).indexes, "status_lastEventAt_active")
 
 	distinct := explain(t, env.db, bson.D{{Key: "distinct", Value: schema.CollectionParticipants}, {Key: "key", Value: "roomSid"},
 		{Key: "query", Value: store.OpenSessionsFilter([]string{"RM_001", "RM_002"}, projection.DependentKinds)}})
@@ -575,6 +586,73 @@ func TestReconcilerClosures(t *testing.T) {
 			"global:"+before(time.Minute).Truncate(time.Hour).Format(time.RFC3339))
 		require.EqualValues(t, 1, *hourly.Rooms.Ended)
 		require.NotContains(t, hourly.Rooms.EndedByReason, "IDLE_TIMEOUT")
+	})
+
+	t.Run("a room of a dead node closes with its last session", func(t *testing.T) {
+		env := newReconcilerEnv(t, client)
+		created := before(2 * time.Minute)
+		env.room("RM_d", nodeDead, created)
+		env.session("RM_d", nodeDead, "PA_a", livekit.ParticipantInfo_STANDARD, created, false)
+		env.session("RM_d", nodeDead, "PA_b", livekit.ParticipantInfo_STANDARD, created, false)
+		env.statsAt("RM_d", nodeDead, "PA_a", before(110*time.Second))
+		env.statsAt("RM_d", nodeDead, "PA_b", before(100*time.Second))
+
+		report := env.reconcile()
+		require.Equal(t, schema.ReconcilerClosures{Room: 1, Participant: 2}, report.closed)
+		closed := find[schema.RoomDocument](env.testEnv, schema.CollectionRooms, "RM_d")
+		require.Equal(t, "closed", closed.Status)
+		require.Equal(t, "RECONCILED", closed.EndReason)
+		require.Equal(t, "reconciler", closed.ClosedBy)
+		last := find[schema.ParticipantDocument](env.testEnv, schema.CollectionParticipants, "PA_b")
+		require.True(t, before(100*time.Second).Equal(*last.LeftAt))
+		require.True(t, last.LeftAt.Equal(*closed.EndedAt), "the room ends with its last session")
+		require.EqualValues(t, 1, count(env.testEnv, schema.CollectionEvents, bson.D{{Key: "_id", Value: "AE_SYN_RM_d"},
+			{Key: "type", Value: "ROOM_ENDED"}, {Key: "payload.reconciler.reason", Value: reasonNodeDead}}))
+		hourly := find[schema.HourlyRollupDocument](env.testEnv, schema.CollectionAnalyticsHourly,
+			"global:"+closed.EndedAt.Truncate(time.Hour).Format(time.RFC3339))
+		require.EqualValues(t, 1, *hourly.Rooms.Ended)
+	})
+
+	t.Run("a room still listed waits for the dead node cleanup", func(t *testing.T) {
+		env := newReconcilerEnv(t, client)
+		env.room("RM_w", nodeDead, before(2*time.Minute))
+		env.session("RM_w", nodeDead, "PA_w", livekit.ParticipantInfo_STANDARD, before(2*time.Minute), false)
+		env.statsAt("RM_w", nodeDead, "PA_w", before(100*time.Second))
+		env.live.addRoom("room-RM_w", "RM_w")
+
+		require.Equal(t, schema.ReconcilerClosures{Participant: 1}, env.reconcile().closed)
+		require.Equal(t, "active", find[schema.RoomDocument](env.testEnv, schema.CollectionRooms, "RM_w").Status)
+		require.Len(t, env.logs.matching("debug", "room of a dead node kept, LiveKit still lists it"), 1)
+
+		delete(env.live.rooms, "room-RM_w")
+		env.now = reconcileNow.Add(time.Minute)
+		env.heartbeat(nodeAlive, env.now.Add(-time.Second))
+		require.Equal(t, schema.ReconcilerClosures{Room: 1}, env.reconcile().closed)
+		closed := find[schema.RoomDocument](env.testEnv, schema.CollectionRooms, "RM_w")
+		participant := find[schema.ParticipantDocument](env.testEnv, schema.CollectionParticipants, "PA_w")
+		require.Equal(t, "closed", closed.Status)
+		require.True(t, participant.LeftAt.Equal(*closed.EndedAt), "the end is its last session's, not the run's")
+	})
+
+	t.Run("the closure limit keeps the room of a dead node open", func(t *testing.T) {
+		env := newReconcilerEnv(t, client, func(c *openviduconfig.AnalyticsConfig) { c.Reconciler.MaxClosuresPerRun = 2 })
+		env.room("RM_l", nodeDead, before(2*time.Minute))
+		for i := range 3 {
+			sid := fmt.Sprintf("PA_l%d", i)
+			env.session("RM_l", nodeDead, sid, livekit.ParticipantInfo_STANDARD, before(2*time.Minute), false)
+			env.statsAt("RM_l", nodeDead, sid, before(100*time.Second))
+		}
+
+		first := env.r.reconcile(ctx, false)
+		require.NoError(t, first.err)
+		require.Equal(t, schema.ReconcilerClosures{Participant: 2}, first.closed)
+		require.True(t, first.partial)
+		require.Equal(t, "active", find[schema.RoomDocument](env.testEnv, schema.CollectionRooms, "RM_l").Status)
+
+		next := env.r.reconcile(ctx, true)
+		require.NoError(t, next.err)
+		require.Equal(t, schema.ReconcilerClosures{Room: 1, Participant: 1}, next.closed)
+		require.Equal(t, "closed", find[schema.RoomDocument](env.testEnv, schema.CollectionRooms, "RM_l").Status)
 	})
 
 	t.Run("egress and ingress sessions lost with their node", func(t *testing.T) {

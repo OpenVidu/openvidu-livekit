@@ -43,19 +43,23 @@ type confirmedRoom struct {
 
 // confirmation holds the candidates of a run that are confirmed for closure.
 type confirmation struct {
-	participants    []confirmedParticipant
-	rooms           []confirmedRoom
+	participants []confirmedParticipant
+	rooms        []confirmedRoom
+	// deadRooms are rooms of dead nodes, closed only once the run's closures left them without an open session.
+	deadRooms       []confirmedRoom
 	egresses        []egressCandidate
 	ingressSessions []ingressSessionCandidate
 }
 
-// confirm keeps the candidates to close. A candidate of a dead node is confirmed without LiveKit's live state: a dead
-// process cannot have removed it from there. A candidate of an alive node is confirmed when it is absent from a trusted
-// live listing in two consecutive runs. Egress and ingress session candidates are confirmed by detection.
+// confirm keeps the candidates to close. A participant session of a dead node is confirmed without LiveKit's live
+// state: a dead process cannot have removed it from there. A room of a dead node is confirmed once a trusted live
+// listing no longer lists its SID, since LiveKit recreates it with that SID on another node until its dead node cleanup
+// removes it, or once its last signal is older than two cleanup intervals. A candidate of an alive node is confirmed
+// when it is absent from a trusted live listing in two consecutive runs. Egress and ingress session candidates are
+// confirmed by detection.
 func (r *reconciler) confirm(ctx context.Context, now time.Time, found candidateSet, report *runReport) (confirmation, error) {
 	confirmed := confirmation{egresses: found.egresses, ingressSessions: found.ingressSessions}
 	var aliveParticipants []store.OpenParticipant
-	var aliveRooms []store.OpenRoom
 	for _, participant := range found.participants {
 		if found.dead[participant.NodeID] {
 			confirmed.participants = append(confirmed.participants,
@@ -64,33 +68,36 @@ func (r *reconciler) confirm(ctx context.Context, now time.Time, found candidate
 			aliveParticipants = append(aliveParticipants, participant)
 		}
 	}
-	for _, room := range found.rooms {
-		if found.dead[room.NodeID] {
-			confirmed.rooms = append(confirmed.rooms, confirmedRoom{OpenRoom: room, reason: reasonNodeDead})
+	cleanupGraceFrom := now.Add(-2 * r.settings.cleanupInterval)
+	var heldRooms []store.OpenRoom
+	for _, room := range found.deadRooms {
+		if lastSignal(room).Before(cleanupGraceFrom) {
+			confirmed.deadRooms = append(confirmed.deadRooms, confirmedRoom{OpenRoom: room, reason: reasonNodeDead})
 		} else {
-			aliveRooms = append(aliveRooms, room)
+			heldRooms = append(heldRooms, room)
 		}
 	}
 
-	if len(aliveParticipants)+len(aliveRooms) > 0 {
+	if len(aliveParticipants)+len(found.rooms)+len(heldRooms) > 0 {
 		listing, err := r.readListing(ctx, now)
 		if err != nil {
 			return confirmed, err
 		}
 		if listing.trusted {
-			participants, rooms, err := r.confirmAbsent(ctx, listing, aliveParticipants, aliveRooms)
+			participants, rooms, err := r.confirmAbsent(ctx, listing, aliveParticipants, found.rooms)
 			if err != nil {
 				return confirmed, err
 			}
 			if listing.trusted {
 				confirmed.participants = append(confirmed.participants, participants...)
 				confirmed.rooms = append(confirmed.rooms, rooms...)
+				confirmed.deadRooms = append(confirmed.deadRooms, r.releasedRooms(listing, heldRooms)...)
 			}
 		}
 		if !listing.trusted {
 			clear(r.absent)
 			report.result = listing.result
-			r.log.warnw("analytics reconciler: LiveKit's live state is not trusted, only candidates of dead nodes are closed",
+			r.log.warnw("analytics reconciler: LiveKit's live state is not trusted, only candidates confirmed without it are closed",
 				listing.err, "result", listing.result)
 		}
 	}
@@ -150,6 +157,20 @@ func (r *reconciler) confirmAbsent(ctx context.Context, listing *liveListing, pa
 	return confirmedParticipants, confirmedRooms, nil
 }
 
+// releasedRooms returns the rooms of dead nodes that the listing no longer holds under their SID.
+func (r *reconciler) releasedRooms(listing *liveListing, rooms []store.OpenRoom) []confirmedRoom {
+	var released []confirmedRoom
+	for _, room := range rooms {
+		if listing.sids[room.SID] {
+			r.log.debugw("analytics reconciler: room of a dead node kept, LiveKit still lists it", "roomSid", room.SID,
+				"nodeId", room.NodeID, "lastSignal", lastSignal(room))
+			continue
+		}
+		released = append(released, confirmedRoom{OpenRoom: room, reason: reasonNodeDead})
+	}
+	return released
+}
+
 // absentTwice records that a candidate is absent from the listing and reports whether the previous regular run saw
 // it absent too.
 func (r *reconciler) absentTwice(id string) bool {
@@ -202,8 +223,10 @@ func (r *reconciler) warnKept(kept []store.OpenParticipant) {
 
 // liveListing is LiveKit's live state as read in one run: every room, and the participants of the rooms asked for.
 type liveListing struct {
-	live         liveState
+	live liveState
+	// rooms maps the names of the listed rooms to their SIDs, and sids holds those SIDs.
 	rooms        map[string]string
+	sids         map[string]bool
 	participants map[string]map[string]bool
 	trusted      bool
 	result       string
@@ -242,8 +265,8 @@ func (l *liveListing) hasParticipant(roomName string, sid string) (bool, error) 
 // readListing reads the rooms LiveKit lists. The listing is untrusted when the read fails, or when it lists no room
 // while rooms of alive nodes still receive stats, as right after a Redis restart.
 func (r *reconciler) readListing(ctx context.Context, now time.Time) (*liveListing, error) {
-	listing := &liveListing{live: r.live, rooms: map[string]string{}, participants: map[string]map[string]bool{},
-		trusted: true}
+	listing := &liveListing{live: r.live, rooms: map[string]string{}, sids: map[string]bool{},
+		participants: map[string]map[string]bool{}, trusted: true}
 	rooms, err := r.live.ListActiveRooms()
 	if err != nil {
 		listing.untrust(resultLiveStateError, err)
@@ -251,6 +274,7 @@ func (r *reconciler) readListing(ctx context.Context, now time.Time) (*liveListi
 	}
 	for _, room := range rooms {
 		listing.rooms[room.GetName()] = room.GetSid()
+		listing.sids[room.GetSid()] = true
 	}
 	if len(rooms) > 0 {
 		return listing, nil
@@ -270,6 +294,14 @@ func (r *reconciler) readListing(ctx context.Context, now time.Time) (*liveListi
 		}
 	}
 	return listing, nil
+}
+
+// lastSignal is the last event or stats flush of a room, the end time of its closure.
+func lastSignal(room store.OpenRoom) time.Time {
+	if room.LastStatsAt != nil && room.LastStatsAt.After(room.LastEventAt) {
+		return *room.LastStatsAt
+	}
+	return room.LastEventAt
 }
 
 // endOfParticipant estimates when a session ended: its last stats flush or its last event, whichever is later.

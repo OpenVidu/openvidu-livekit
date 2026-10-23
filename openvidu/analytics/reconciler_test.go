@@ -140,6 +140,10 @@ func (f *fakeReconcilerStore) StaleRooms(context.Context, time.Time, time.Durati
 	return nil, nil
 }
 
+func (f *fakeReconcilerStore) IdleRooms(context.Context, time.Time, int) ([]store.OpenRoom, error) {
+	return nil, nil
+}
+
 func (f *fakeReconcilerStore) OpenEgresses(context.Context, int) ([]store.OpenEgress, error) {
 	return nil, nil
 }
@@ -252,7 +256,7 @@ func confirmedSids(c confirmation) map[string]string {
 	for _, participant := range c.participants {
 		sids[participant.SID] = participant.reason
 	}
-	for _, room := range c.rooms {
+	for _, room := range append(c.rooms, c.deadRooms...) {
 		sids[room.SID] = room.reason
 	}
 	return sids
@@ -429,6 +433,63 @@ func TestConfirmation(t *testing.T) {
 				require.Equal(t, map[string]string{"RM_daily": reasonAbsentLive}, confirmedSids(confirmed))
 			}
 		}
+	})
+
+	deadRoom := func(lastEvent time.Duration) candidateSet {
+		room := store.OpenRoom{SID: "RM_daily", Name: "daily", NodeID: "ND_dead", LastEventAt: reconcileNow.Add(-lastEvent)}
+		return candidateSet{deadRooms: []store.OpenRoom{room}, dead: map[string]bool{"ND_dead": true}}
+	}
+
+	t.Run("a room of a dead node waits until LiveKit no longer lists its SID", func(t *testing.T) {
+		live := newFakeLive()
+		live.addRoom("daily", "RM_daily")
+		r, logs := newTestReconciler(newFakeReconcilerStore(), live)
+		r.run = 1
+		confirmed, err := r.confirm(ctx, reconcileNow, deadRoom(2*time.Minute), &runReport{result: resultOK})
+		require.NoError(t, err)
+		require.Empty(t, confirmedSids(confirmed), "the dead node cleanup has not removed it yet")
+		require.Len(t, logs.matching("debug", "room of a dead node kept"), 1)
+
+		live.addRoom("daily", "RM_recreated")
+		r.run = 2
+		confirmed, err = r.confirm(ctx, reconcileNow, deadRoom(2*time.Minute), &runReport{result: resultOK})
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"RM_daily": reasonNodeDead}, confirmedSids(confirmed),
+			"another room with its name is another SID")
+
+		delete(live.rooms, "daily")
+		r.run = 3
+		confirmed, err = r.confirm(ctx, reconcileNow, deadRoom(2*time.Minute), &runReport{result: resultOK})
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"RM_daily": reasonNodeDead}, confirmedSids(confirmed), "one absence is enough")
+	})
+
+	t.Run("a room of a dead node closes after two cleanup intervals whatever the listing", func(t *testing.T) {
+		live := newFakeLive()
+		live.addRoom("daily", "RM_daily")
+		r, _ := newTestReconciler(newFakeReconcilerStore(), live)
+		r.run = 1
+		confirmed, err := r.confirm(ctx, reconcileNow, deadRoom(7*time.Minute), &runReport{result: resultOK})
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"RM_daily": reasonNodeDead}, confirmedSids(confirmed))
+
+		live.roomsErr = errors.New("redis: connection refused")
+		confirmed, err = r.confirm(ctx, reconcileNow, deadRoom(7*time.Minute), &runReport{result: resultOK})
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"RM_daily": reasonNodeDead}, confirmedSids(confirmed))
+	})
+
+	t.Run("a failing listing keeps a recent room of a dead node, not its sessions", func(t *testing.T) {
+		live := newFakeLive()
+		live.roomsErr = errors.New("redis: connection refused")
+		r, _ := newTestReconciler(newFakeReconcilerStore(), live)
+		found := deadRoom(2 * time.Minute)
+		found.participants = []store.OpenParticipant{crashed}
+		report := &runReport{result: resultOK}
+		confirmed, err := r.confirm(ctx, reconcileNow, found, report)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"PA_crashed": reasonNodeDead}, confirmedSids(confirmed))
+		require.Equal(t, resultLiveStateError, report.result)
 	})
 }
 

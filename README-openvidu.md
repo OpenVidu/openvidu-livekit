@@ -130,11 +130,16 @@ A node also runs once right after startup.
     active) for 90 s;
   - active rooms without stats for 90 s, without an open session of a kind that keeps a room open (every kind but
     `EGRESS` and `AGENT`), whose last event is older than their empty timeout plus 2 × `reconciler.interval`;
+  - active rooms of a dead node without stats or events for 90 s, whatever their open sessions and empty timeout;
   - egress and ingress sessions not ended whose room closed more than 2 × `openvidu.cleanup_interval` ago on a dead
     node; LiveKit ends the others itself with real events.
 - Confirmation: a node is dead when its heartbeat in `nodes` is older than 2 × `interval` and LiveKit's node registry
-  does not list it as available. Candidates of a dead node are confirmed at once. Candidates of an alive node are
-  confirmed when they are absent from LiveKit's live state in two consecutive runs. A live state that cannot be read,
+  does not list it as available. Participant sessions of a dead node are confirmed at once. Its rooms are confirmed
+  once LiveKit's live state no longer lists their SID, since LiveKit recreates a room with the same SID on another
+  node until the dead node cleanup removes it from Redis, or once their last signal is older than
+  2 × `openvidu.cleanup_interval`; they close in the run that closes their last session, or in the first run after
+  the cleanup. Candidates of an alive node are confirmed when they are absent from LiveKit's live state in two
+  consecutive runs. A live state that cannot be read,
   or that lists no room while rooms of alive nodes receive stats (as right after a Redis restart), confirms nothing.
 - Closure: the end time is the last signal of the entity, `max(lastStatsAt, lastEventAt)`; a stats flush during the
   last 30 s vetoes it. Closed documents carry `closedBy: reconciler` and the reason `RECONCILED` (egress: `failed` with
