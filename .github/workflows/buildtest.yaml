@@ -85,12 +85,16 @@ jobs:
       # Upload the original go test log as an artifact for later review.
       - name: Upload test log
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        if: always()
+        # BEGIN OPENVIDU BLOCK
+        # Only failures need the log, and private forks count it against the shared artifact storage.
+        if: failure()
+        # END OPENVIDU BLOCK
         with:
           name: test-log
           # BEGIN OPENVIDU BLOCK
           path: |
             /tmp/gotest.log
             /tmp/gotest-integration.log
+          retention-days: 2
           # END OPENVIDU BLOCK
           if-no-files-found: error
