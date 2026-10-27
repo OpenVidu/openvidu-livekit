@@ -255,6 +255,24 @@ func TestTransientErrorRetriesTheSameBatchFirst(t *testing.T) {
 	require.Equal(t, before, counterValue(w.metrics.dropped, "events", "error"))
 }
 
+func TestIsTransient(t *testing.T) {
+	for name, err := range map[string]error{
+		"not primary": mongo.CommandError{Code: 10107, Message: "not primary"},
+		"signing keys not loaded": mongo.CommandError{Code: 211, Name: "KeyNotFound",
+			Message: "No keys found for HMAC that is valid for time"},
+		"deadline": context.DeadlineExceeded,
+	} {
+		require.True(t, isTransient(err), name)
+	}
+	for name, err := range map[string]error{
+		"authentication failed": mongo.CommandError{Code: 18, Name: "AuthenticationFailed"},
+		"encoding":              fmt.Errorf("cannot encode"),
+		"none":                  nil,
+	} {
+		require.False(t, isTransient(err), name)
+	}
+}
+
 func TestNonTransientErrorDropsTheBatch(t *testing.T) {
 	store := &fakeStore{failures: 1, failWith: fmt.Errorf("cannot encode")}
 	w := newWriter(store, testSettings(t, nil), Node{ID: testNode}, newMetrics())
