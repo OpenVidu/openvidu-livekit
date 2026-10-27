@@ -67,6 +67,9 @@ type LivekitServer struct {
 	running      atomic.Bool
 	doneChan     chan struct{}
 	closedChan   chan struct{}
+	// BEGIN OPENVIDU BLOCK
+	stopRequested atomic.Bool
+	// END OPENVIDU BLOCK
 }
 
 func NewLivekitServer(conf *config.Config,
@@ -99,6 +102,10 @@ func NewLivekitServer(conf *config.Config,
 		turnServer:  turnServer,
 		currentNode: currentNode,
 		closedChan:  make(chan struct{}),
+		// BEGIN OPENVIDU BLOCK
+		// Created with the server, so that a Stop requested while it starts is not lost.
+		doneChan: make(chan struct{}),
+		// END OPENVIDU BLOCK
 	}
 
 	middlewares := []negroni.Handler{
@@ -250,7 +257,10 @@ func (s *LivekitServer) Start() error {
 	if s.running.Load() {
 		return errors.New("already running")
 	}
-	s.doneChan = make(chan struct{})
+	// BEGIN OPENVIDU BLOCK
+	// Stop waits for closedChan, also when Start fails.
+	defer close(s.closedChan)
+	// END OPENVIDU BLOCK
 
 	if err := s.router.RegisterNode(); err != nil {
 		return err
@@ -370,6 +380,12 @@ func (s *LivekitServer) Start() error {
 
 	<-s.doneChan
 
+	// BEGIN OPENVIDU BLOCK
+	// Here rather than in Stop, which may run before the router starts.
+	s.running.Store(false)
+	s.router.Stop()
+	// END OPENVIDU BLOCK
+
 	// wait for shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
@@ -386,7 +402,6 @@ func (s *LivekitServer) Start() error {
 	s.signalServer.Stop()
 	s.ioService.Stop()
 
-	close(s.closedChan)
 	return nil
 }
 
@@ -402,12 +417,12 @@ func (s *LivekitServer) Stop(force bool) {
 	}
 	partTicker.Stop()
 
-	if !s.running.Swap(false) {
-		return
+	// BEGIN OPENVIDU BLOCK
+	// A Stop that arrives while the server starts is kept: Start shuts it down as soon as it is up.
+	if !s.stopRequested.Swap(true) {
+		close(s.doneChan)
 	}
-
-	s.router.Stop()
-	close(s.doneChan)
+	// END OPENVIDU BLOCK
 
 	// wait for fully closed
 	<-s.closedChan

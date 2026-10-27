@@ -32,6 +32,7 @@ OpenVidu. The changes of the upstream project are listed in `CHANGELOG.md`.
 ### Fixed
 
 - **Idle TURN connections no longer pile up**: a client that reached the TURN server and then went silent — even with just a STUN Binding — held the connection, and any allocation behind it, open indefinitely. A TURN TCP connection idle in both directions is now closed after `turn.tcp_connection_idle_timeout_seconds` (default 60s; `<= 0` disables it); an active relay is never cut.
+- **A stop signal during startup is no longer lost**: a `SIGTERM` or `SIGINT` received while the server was starting was ignored, and the process ran until a second signal or a kill; the server now stops as soon as it has started.
 
 ## [3.9.0]
 
