@@ -83,7 +83,7 @@ func (p *projector) participant() {
 			for _, key := range sortedKeys(info.GetAttributes()) {
 				attributes = append(attributes, bson.E{Key: key, Value: info.GetAttributes()[key]})
 			}
-			f.set("attributes", attributes)
+			f.set("attributes", literal(attributes))
 		}
 	}
 	f.set("lastEventAt", maxDate("lastEventAt", p.ts))

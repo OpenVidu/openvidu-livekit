@@ -358,12 +358,12 @@ func deriveTrack(opts Options) *fields {
 	retention, _, _ := opts.Retention.Of(schema.RetentionTracks)
 	layers := bson.D{{Key: "$map", Value: bson.D{
 		{Key: "input", Value: bson.D{{Key: "$objectToArray", Value: ifNull("internal.publishStats", bson.D{})}}},
-		{Key: "in", Value: "$$this.v"},
+		{Key: "in", Value: ref("$$this.v")},
 	}}}
 	statsOf := func(key string, operator string) bson.D {
 		return bson.D{{Key: operator, Value: bson.D{{Key: "$map", Value: bson.D{
 			{Key: "input", Value: layers},
-			{Key: "in", Value: "$$this." + key},
+			{Key: "in", Value: ref("$$this." + key)},
 		}}}}}
 	}
 	lost := statsOf("packetsLost", "$sum")
@@ -376,8 +376,8 @@ func deriveTrack(opts Options) *fields {
 		{Key: "input", Value: bson.D{{Key: "$map", Value: bson.D{
 			{Key: "input", Value: layers},
 			{Key: "in", Value: bson.D{
-				{Key: "layer", Value: "$$this.layer"}, {Key: "bytes", Value: "$$this.bytes"},
-				{Key: "packets", Value: "$$this.packets"}, {Key: "frames", Value: "$$this.frames"},
+				{Key: "layer", Value: ref("$$this.layer")}, {Key: "bytes", Value: ref("$$this.bytes")},
+				{Key: "packets", Value: ref("$$this.packets")}, {Key: "frames", Value: ref("$$this.frames")},
 			}},
 		}}}},
 		{Key: "sortBy", Value: bson.D{{Key: "layer", Value: 1}}},

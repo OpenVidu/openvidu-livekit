@@ -388,6 +388,32 @@ func TestWriter(t *testing.T) {
 		assertNoSecrets(t, env)
 	})
 
+	t.Run("values starting with $ stored as they are", func(t *testing.T) {
+		env := newEnv(t, client, func(c *openviduconfig.AnalyticsConfig) { c.StoreMetadata = true })
+		var ev events
+		created := ev.roomCreated("RM_1", "$room", at("0s"))
+		created.Room.Metadata = "$$ROOT"
+		alice := participantInfo("PA_a", "$$ROOT", livekit.ParticipantInfo_STANDARD, at("1s"))
+		alice.Name = "$name"
+		alice.Metadata = "$metadata"
+		alice.Attributes = map[string]string{"$role": "$host", "team.name": "$blue"}
+		failed := roomCompositeEgress("EG_1", "RM_1", livekit.EgressStatus_EGRESS_FAILED, at("2s"), at("3s"))
+		failed.Error = "$error"
+		env.apply([]*livekit.AnalyticsEvent{created, ev.joined("RM_1", alice, at("1s")),
+			ev.egress(livekit.AnalyticsEventType_EGRESS_ENDED, failed, at("3s"))})
+
+		room := find[schema.RoomDocument](env, schema.CollectionRooms, "RM_1")
+		require.Equal(t, "$room", room.Name)
+		require.Equal(t, "$$ROOT", room.Config.Metadata)
+		require.EqualValues(t, 1, room.Participants.Unique)
+		participant := find[schema.ParticipantDocument](env, schema.CollectionParticipants, "PA_a")
+		require.Equal(t, "$$ROOT", participant.Identity)
+		require.Equal(t, "$name", participant.Name)
+		require.Equal(t, "$metadata", participant.Metadata)
+		require.Equal(t, map[string]string{"$role": "$host", "team.name": "$blue"}, participant.Attributes)
+		require.Equal(t, "$error", find[schema.EgressDocument](env, schema.CollectionEgresses, "EG_1").Error)
+	})
+
 	t.Run("raw request stored as encoded", func(t *testing.T) {
 		env := newEnv(t, client)
 		var ev events

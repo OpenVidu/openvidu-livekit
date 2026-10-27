@@ -15,6 +15,7 @@
 package projection
 
 import (
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -23,8 +24,12 @@ import (
 // Aggregation expressions used by the update pipelines. Each helper reads the document as it is before the stage
 // that contains the expression.
 
-func field(path string) string {
-	return "$" + path
+// ref is a field path or a variable of an aggregation expression. stage stores every other string as data, so a
+// value starting with $ (a room name, an identity, an error) is never read as one.
+type ref string
+
+func field(path string) ref {
+	return ref("$" + path)
 }
 
 func ifNull(path string, fallback any) bson.D {
@@ -73,9 +78,9 @@ func sizesOf(path string) bson.D {
 	return bson.D{{Key: "$arrayToObject", Value: bson.D{{Key: "$map", Value: bson.D{
 		{Key: "input", Value: bson.D{{Key: "$filter", Value: bson.D{
 			{Key: "input", Value: bson.D{{Key: "$objectToArray", Value: ifNull(path, bson.D{})}}},
-			{Key: "cond", Value: bson.D{{Key: "$gt", Value: bson.A{size("$$this.v"), 0}}}},
+			{Key: "cond", Value: bson.D{{Key: "$gt", Value: bson.A{size(ref("$$this.v")), 0}}}},
 		}}}},
-		{Key: "in", Value: bson.D{{Key: "k", Value: "$$this.k"}, {Key: "v", Value: size("$$this.v")}}},
+		{Key: "in", Value: bson.D{{Key: "k", Value: ref("$$this.k")}, {Key: "v", Value: size(ref("$$this.v"))}}},
 	}}}}}
 }
 
@@ -112,7 +117,7 @@ func exists(path string) bson.D {
 }
 
 // remove evaluates to the special variable that drops a field from the output of $set.
-const remove = "$$REMOVE"
+const remove ref = "$$REMOVE"
 
 // rank orders the statuses of a lifecycle; statuses of equal rank (terminal ones) do not replace each other.
 type rank struct {
@@ -140,14 +145,52 @@ func latest(path string, atPath string, at time.Time, value any) bson.D {
 	return cond(gte(at, ifNull(atPath, time.Unix(0, 0).UTC())), value, field(path))
 }
 
-// literal stores value as is: in an update pipeline a string starting with $ would be read as a field path.
+// literal stores value as is; a document with keys of its own (a map) needs it, since its keys would be read as
+// operators or field paths.
 func literal(value any) bson.D {
 	return bson.D{{Key: "$literal", Value: value}}
 }
 
-// stage builds a {$set: fields} pipeline stage.
+// stage builds a {$set: fields} pipeline stage with its data escaped.
 func stage(fields bson.D) bson.D {
-	return bson.D{{Key: "$set", Value: fields}}
+	return bson.D{{Key: "$set", Value: escape(fields)}}
+}
+
+// escape wraps in $literal every string starting with $ that is not a ref, at any depth of an expression, and turns
+// every ref into its string; a $literal is left as is.
+func escape(value any) any {
+	switch v := value.(type) {
+	case ref:
+		return string(v)
+	case string:
+		if strings.HasPrefix(v, "$") {
+			return literal(v)
+		}
+		return v
+	case bson.D:
+		if len(v) == 1 && v[0].Key == "$literal" {
+			return v
+		}
+		escaped := make(bson.D, len(v))
+		for i, element := range v {
+			escaped[i] = bson.E{Key: element.Key, Value: escape(element.Value)}
+		}
+		return escaped
+	case bson.A:
+		escaped := make(bson.A, len(v))
+		for i, item := range v {
+			escaped[i] = escape(item)
+		}
+		return escaped
+	case []string:
+		escaped := make(bson.A, len(v))
+		for i, item := range v {
+			escaped[i] = escape(item)
+		}
+		return escaped
+	default:
+		return value
+	}
 }
 
 // maxOf keeps the highest of the number at path (0 when missing) and value.

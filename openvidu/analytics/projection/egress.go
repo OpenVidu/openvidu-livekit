@@ -76,7 +76,7 @@ func (p *projector) egress() {
 	}
 	f.set("request", egressRequest(info, p.opts.Encode))
 	if raw := egressRawRequest(info, p.opts.Encode); raw != nil {
-		f.set("rawRequest", literal(raw))
+		f.set("rawRequest", raw)
 	}
 	if outputs := egressOutputs(info); len(outputs) > 0 {
 		f.set("outputs", latest("outputs", "updatedAt", updatedAt, outputs))

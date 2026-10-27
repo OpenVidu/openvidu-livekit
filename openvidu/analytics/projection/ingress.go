@@ -196,7 +196,7 @@ func deriveIngress(opts Options) *fields {
 	retention, _, _ := opts.Retention.Of(schema.RetentionEntities)
 	durations := bson.D{{Key: "$map", Value: bson.D{
 		{Key: "input", Value: bson.D{{Key: "$objectToArray", Value: ifNull("internal.endedSessionDurations", bson.D{})}}},
-		{Key: "in", Value: "$$this.v"},
+		{Key: "in", Value: ref("$$this.v")},
 	}}}
 	f := newFields()
 	f.set("sessions", sizeOf("internal.sessionIds"))
