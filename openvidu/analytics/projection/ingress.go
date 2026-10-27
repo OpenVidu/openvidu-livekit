@@ -108,8 +108,13 @@ func (p *projector) ingress() {
 	if info.GetParticipantIdentity() != "" {
 		s.set("participantIdentity", info.GetParticipantIdentity())
 	}
+	sessionStatus := stateStatus
+	// The server-side reconciler ends a lost session as inactive, so that the ingress stays reusable, with an error.
+	if eventType == livekit.AnalyticsEventType_INGRESS_ENDED && stateStatus == "inactive" && state.GetError() != "" {
+		sessionStatus = "error"
+	}
 	sessionTerminal := in(field("status"), ingressTerminal)
-	s.set("status", cond(sessionTerminal, field("status"), stateStatus))
+	s.set("status", cond(sessionTerminal, field("status"), sessionStatus))
 	if state.GetError() != "" {
 		s.set("error", state.GetError())
 	}

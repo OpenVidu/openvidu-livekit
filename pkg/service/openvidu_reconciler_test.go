@@ -494,7 +494,7 @@ func TestReconcileResetsTheStateOfAnIngressWhoseRoomIsGone(t *testing.T) {
 	require.Equal(t, f.now.UnixNano(), state.EndedAt)
 	require.Equal(t, "res-IN_gone", state.ResourceId)
 	require.Empty(t, state.Tracks)
-	require.Empty(t, state.Error)
+	require.Equal(t, "ingress lost", state.Error)
 	require.Equal(t, 1, f.tel.IngressEndedCallCount())
 }
 

@@ -447,6 +447,23 @@ func TestWriter(t *testing.T) {
 		assertNoSecrets(t, env)
 	})
 
+	t.Run("ingress session lost on the server ends in error", func(t *testing.T) {
+		env := newEnv(t, client)
+		var ev events
+		publishing := rtmpIngress("IN_1", "room-RM_1", ingressState(livekit.IngressState_ENDPOINT_PUBLISHING, "RM_1", "res_1", at("1m"), time.Time{}))
+		lost := rtmpIngress("IN_1", "room-RM_1", ingressState(livekit.IngressState_ENDPOINT_INACTIVE, "RM_1", "res_1", at("1m"), at("3m")))
+		lost.State.Error = "ingress lost"
+		env.apply([]*livekit.AnalyticsEvent{
+			ev.ingress(livekit.AnalyticsEventType_INGRESS_STARTED, publishing, at("1m")),
+			ev.ingress(livekit.AnalyticsEventType_INGRESS_ENDED, lost, at("3m")),
+		})
+		session := find[schema.IngressSessionDocument](env, schema.CollectionIngressSessions, "res_1")
+		require.Equal(t, "error", session.Status)
+		require.Equal(t, "ingress lost", session.Error)
+		require.Equal(t, "event", session.ClosedBy)
+		require.Equal(t, "inactive", find[schema.IngressDocument](env, schema.CollectionIngresses, "IN_1").Status)
+	})
+
 	t.Run("reusable ingress with two sessions and no stream key", func(t *testing.T) {
 		env := newEnv(t, client)
 		var ev events

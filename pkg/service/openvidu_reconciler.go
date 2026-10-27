@@ -141,6 +141,9 @@ func reconcileEgresses(ctx context.Context, store reconcileStore, egress rtc.Egr
 	}
 }
 
+// ingressLostError is the error of the state a lost ingress session is reset to.
+const ingressLostError = "ingress lost"
+
 // reconcileIngresses resets the state of ingress sessions whose room, or
 // participant in it, is gone: the ingress service that owned them died before
 // reporting their end, and nothing else ever will.
@@ -170,7 +173,9 @@ func reconcileIngresses(ctx context.Context, store reconcileStore, tel telemetry
 			continue
 		}
 		ended := proto.Clone(state).(*livekit.IngressState)
+		// inactive, so that a reusable ingress takes its next session; the error tells the end apart from a normal one
 		ended.Status = livekit.IngressState_ENDPOINT_INACTIVE
+		ended.Error = ingressLostError
 		ended.EndedAt = reconcileNow().UnixNano()
 		ended.UpdatedAt = ended.EndedAt
 		ended.Tracks = nil
