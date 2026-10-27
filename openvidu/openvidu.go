@@ -16,6 +16,7 @@ package openvidu
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 
@@ -43,6 +44,10 @@ func Start(conf *config.Config, server *service.LivekitServer) error {
 		node := server.Node()
 		err := analytics.InitializeAnalytics(conf, analytics.Node{ID: node.GetId(), Region: node.GetRegion()},
 			livekithelper.GetInstance())
+		if errors.Is(err, analytics.ErrUnsupportedDatabase) {
+			logger.Errorw("analytics disabled: OpenVidu analytics and the dashboard require MongoDB", err)
+			return nil
+		}
 		if err != nil {
 			return fmt.Errorf("failed to start analytics: %w", err)
 		}

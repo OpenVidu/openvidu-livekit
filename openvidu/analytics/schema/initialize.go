@@ -63,6 +63,42 @@ type collectionInfo struct {
 	} `bson:"options"`
 }
 
+// ErrPipelineUpdatesUnsupported is the error of CheckPipelineUpdates for a database that rejects updates with an
+// aggregation pipeline, such as Amazon DocumentDB: the writer projects every entity with one.
+var ErrPipelineUpdatesUnsupported = errors.New("the database does not support updates with an aggregation pipeline")
+
+// CheckPipelineUpdates asks the database to explain an update of schema_meta, without and with an aggregation
+// pipeline; an explain writes nothing. It returns ErrPipelineUpdatesUnsupported when only the pipeline form is
+// rejected, and any other failure as it is.
+func CheckPipelineUpdates(ctx context.Context, db *mongo.Database) error {
+	set := bson.D{{Key: "$set", Value: bson.D{{Key: "probe", Value: true}}}}
+	return classifyPipelineProbe(explainUpdate(ctx, db, set), explainUpdate(ctx, db, bson.A{set}))
+}
+
+func explainUpdate(ctx context.Context, db *mongo.Database, update any) error {
+	return db.RunCommand(ctx, bson.D{
+		{Key: "explain", Value: bson.D{
+			{Key: "update", Value: CollectionSchemaMeta},
+			{Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "probe"}}}, {Key: "u", Value: update}}}},
+		}},
+		{Key: "verbosity", Value: "queryPlanner"},
+	}).Err()
+}
+
+func classifyPipelineProbe(plain error, pipeline error) error {
+	if pipeline == nil {
+		return nil
+	}
+	if plain != nil {
+		return fmt.Errorf("explain an update: %w", plain)
+	}
+	var rejected mongo.CommandError
+	if errors.As(pipeline, &rejected) {
+		return fmt.Errorf("%w: %s", ErrPipelineUpdatesUnsupported, rejected.Message)
+	}
+	return fmt.Errorf("explain an update with an aggregation pipeline: %w", pipeline)
+}
+
 // Initialize creates or updates the collections, validators, indexes and TTL values of the contract and writes the
 // schema, retention, capabilities and config documents of schema_meta. It is idempotent: a second run with the same
 // options changes nothing but the schema_meta timestamps.

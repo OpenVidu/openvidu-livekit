@@ -115,6 +115,12 @@ func TestInitialize(t *testing.T) {
 	client := testutil.StartMongo(t)
 	ctx := context.Background()
 
+	t.Run("pipeline updates supported, nothing written", func(t *testing.T) {
+		db := client.Database("init_probe")
+		require.NoError(t, schema.CheckPipelineUpdates(ctx, db))
+		require.Empty(t, listCollections(t, db))
+	})
+
 	t.Run("empty database", func(t *testing.T) {
 		db := client.Database("init_empty")
 		result, err := schema.Initialize(ctx, db, testOptions())

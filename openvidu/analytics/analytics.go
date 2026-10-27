@@ -116,8 +116,13 @@ type Node struct {
 	Region string
 }
 
+// ErrUnsupportedDatabase is the error of InitializeAnalytics for a database without updates with an aggregation
+// pipeline, such as Amazon DocumentDB: the server runs without analytics.
+var ErrUnsupportedDatabase = schema.ErrPipelineUpdatesUnsupported
+
 // InitializeAnalytics validates the configuration, connects to MongoDB, initializes the collections, validators,
-// indexes and schema_meta, and prepares the writer and the reconciler. Any failure stops the server.
+// indexes and schema_meta, and prepares the writer and the reconciler. Any failure but ErrUnsupportedDatabase stops
+// the server.
 func InitializeAnalytics(conf *config.Config, node Node, helper livekithelperinterface.LivekitHelper) error {
 	settings, warnings, err := conf.OpenVidu.Analytics.Settings()
 	if err != nil {
@@ -138,6 +143,10 @@ func InitializeAnalytics(conf *config.Config, node Node, helper livekithelperint
 		return fmt.Errorf("analytics: MongoDB unreachable: %w", err)
 	}
 	db := client.Database(settings.Database)
+	if err := schema.CheckPipelineUpdates(ctx, db); err != nil {
+		_ = client.Disconnect(context.Background())
+		return fmt.Errorf("analytics: %w", err)
+	}
 	w, err := initialize(ctx, db, settings, node)
 	if err != nil {
 		return err

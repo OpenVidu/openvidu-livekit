@@ -16,6 +16,7 @@ OpenVidu. The changes of the upstream project are listed in `CHANGELOG.md`.
 
 ### Changed
 
+- **Analytics requires MongoDB**: on a database without updates with an aggregation pipeline, such as Amazon DocumentDB, the server starts with analytics disabled and logs why; the analytics data and the dashboard need MongoDB.
 - **Client IP addresses are no longer stored by default**: `openvidu.analytics.anonymize_ip` defaults to `true`; set it to `false` to store them.
 - **Analytics data survives a graceful shutdown**: queued events and statistics are written, for at most 5 s, before the process exits.
 - **The analytics `events` collection of previous versions is renamed to `legacy_events`** at the first start; it and the legacy `stats` expire by their own TTL after the migration, which drops `active_entities` and `last_alive`.
