@@ -59,8 +59,8 @@ func New(db *mongo.Database) *Store {
 	return &Store{db: db}
 }
 
-// WriteError is a write rejected by the server for a reason that a retry cannot fix (validation, document too
-// large); the rest of the operation was applied.
+// WriteError is a write rejected for a reason that a retry cannot fix (validation, document too large, a value the
+// driver cannot encode); the rest of the operation was applied.
 type WriteError struct {
 	Collection string
 	Count      int
@@ -167,6 +167,9 @@ func (s *Store) bulkWrite(ctx context.Context, collection string, models []mongo
 	}
 	s.roundTrips++
 	_, err := s.db.Collection(collection).BulkWrite(ctx, models, options.BulkWrite().SetOrdered(false))
+	if encodable, rejected := splitUnencodable(collection, err, models, encodeModel); rejected != nil {
+		return withRejected(rejected, s.bulkWrite(ctx, collection, encodable))
+	}
 	var bulkErr mongo.BulkWriteException
 	if errors.As(err, &bulkErr) && bulkErr.WriteConcernError == nil && len(bulkErr.WriteErrors) > 0 {
 		return &WriteError{Collection: collection, Count: len(bulkErr.WriteErrors), Err: bulkErr.WriteErrors[0]}
@@ -190,6 +193,10 @@ func (s *Store) InsertEvents(ctx context.Context, events []schema.EventDocument)
 	_, err := s.db.Collection(schema.CollectionEvents).InsertMany(ctx, documents, options.InsertMany().SetOrdered(false))
 	if err == nil {
 		return inserted, nil
+	}
+	if encodable, rejected := splitUnencodable(schema.CollectionEvents, err, events, encodeDocument); rejected != nil {
+		inserted, err := s.InsertEvents(ctx, encodable)
+		return inserted, withRejected(rejected, err)
 	}
 	var bulkErr mongo.BulkWriteException
 	if !errors.As(err, &bulkErr) || bulkErr.WriteConcernError != nil {
@@ -219,10 +226,67 @@ func (s *Store) InsertStats(ctx context.Context, stats []schema.TrackStatsDocume
 	}
 	s.roundTrips++
 	_, err := s.db.Collection(schema.CollectionTrackStats).InsertMany(ctx, documents, options.InsertMany().SetOrdered(false))
+	if encodable, rejected := splitUnencodable(schema.CollectionTrackStats, err, stats, encodeDocument); rejected != nil {
+		return withRejected(rejected, s.InsertStats(ctx, encodable))
+	}
 	var bulkErr mongo.BulkWriteException
 	if errors.As(err, &bulkErr) && bulkErr.WriteConcernError == nil && len(bulkErr.WriteErrors) > 0 {
 		return &WriteError{Collection: schema.CollectionTrackStats, Count: len(bulkErr.WriteErrors), Err: bulkErr.WriteErrors[0]}
 	}
+	return err
+}
+
+// splitUnencodable finds, after a failed write, the items the driver cannot encode, which make it fail before sending
+// anything: it returns the others and a WriteError that counts them, or a nil WriteError when every item encodes. An
+// error of the server, the network or a deadline never comes from encoding.
+func splitUnencodable[T any](collection string, err error, items []T, encode func(T) error) ([]T, *WriteError) {
+	var serverErr mongo.ServerError
+	if err == nil || errors.As(err, &serverErr) || mongo.IsNetworkError(err) || mongo.IsTimeout(err) ||
+		errors.Is(err, context.Canceled) {
+		return nil, nil
+	}
+	var encodable []T
+	var rejected *WriteError
+	for _, item := range items {
+		if encodeErr := encode(item); encodeErr != nil {
+			if rejected == nil {
+				rejected = &WriteError{Collection: collection, Err: encodeErr}
+			}
+			rejected.Count++
+			continue
+		}
+		encodable = append(encodable, item)
+	}
+	return encodable, rejected
+}
+
+// withRejected adds the writes rejected before a write to its result. Any other error is returned alone: the caller
+// retries or drops the whole step, which finds the unencodable items again.
+func withRejected(rejected *WriteError, err error) error {
+	if err == nil {
+		return rejected
+	}
+	var writeErr *WriteError
+	if !errors.As(err, &writeErr) {
+		return err
+	}
+	return &WriteError{Collection: rejected.Collection, Count: rejected.Count + writeErr.Count, Err: rejected.Err}
+}
+
+func encodeModel(model mongo.WriteModel) error {
+	var filter, update any
+	switch m := model.(type) {
+	case *mongo.UpdateOneModel:
+		filter, update = m.Filter, m.Update
+	case *mongo.UpdateManyModel:
+		filter, update = m.Filter, m.Update
+	}
+	_, err := bson.Marshal(bson.D{{Key: "q", Value: filter}, {Key: "u", Value: update}})
+	return err
+}
+
+func encodeDocument[T any](document T) error {
+	_, err := bson.Marshal(document)
 	return err
 }
 

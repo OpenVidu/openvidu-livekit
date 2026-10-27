@@ -149,7 +149,7 @@ func newMigrator(db *mongo.Database, settings openviduconfig.AnalyticsSettings, 
 		backoff: migrationBackoff, lockRetry: migrationLockRetry}
 	mig.processor = &processor{store: store.New(db), opts: opts, cache: newRefCache(),
 		onWriteErrors: func(err *store.WriteError) {
-			mig.log.warnw("analytics migration: writes rejected by MongoDB and dropped", err.Err,
+			mig.log.warnw("analytics migration: writes rejected and dropped", err.Err,
 				"collection", err.Collection, "count", err.Count)
 		}}
 	return mig

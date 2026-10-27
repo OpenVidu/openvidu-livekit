@@ -158,7 +158,7 @@ A node also runs once right after startup.
 | `openvidu_analytics_batches_total`          | `result`              | Batches by result: `success`, `retry`, `failed`. |
 | `openvidu_analytics_batch_duration_seconds` |                       | Duration of a batch.                            |
 | `openvidu_analytics_dropped_total`          | `queue`, `reason`     | Entries dropped: `overflow`, `error`, `unsupported`, `shutdown`. |
-| `openvidu_analytics_write_errors_total`     | `collection`, `kind`  | Writes rejected by MongoDB.                     |
+| `openvidu_analytics_write_errors_total`     | `collection`, `kind`  | Writes rejected by MongoDB or that the driver cannot encode. |
 | `openvidu_analytics_reconciler_runs_total`  | `result`              | Reconciler runs: `ok`, `partial`, `live-state-error`, `live-state-untrusted`, `error`. |
 | `openvidu_analytics_reconciler_closed_total` | `entity`             | Entities closed: `room`, `participant`, `track`, `subscription`, `egress`, `ingress_session`. |
 | `openvidu_analytics_reconciler_candidates`  | `entity`              | Candidates of the last run.                     |

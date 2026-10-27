@@ -78,7 +78,7 @@ func newWriter(s batchStore, settings openviduconfig.AnalyticsSettings, node Nod
 		cache: newRefCache(),
 		onWriteErrors: func(err *store.WriteError) {
 			m.writeErrors.WithLabelValues(err.Collection, "rejected").Add(float64(err.Count))
-			w.logs.warn("rejected:"+err.Collection, "analytics: writes rejected by MongoDB and dropped",
+			w.logs.warn("rejected:"+err.Collection, "analytics: writes rejected and dropped",
 				"collection", err.Collection, "count", err.Count, "error", err.Err.Error())
 		},
 		onUnsupported: func(event *livekit.AnalyticsEvent) {

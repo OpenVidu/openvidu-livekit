@@ -57,6 +57,30 @@ func TestWriterLifecycle(t *testing.T) {
 		require.Zero(t, w.events.Len())
 	})
 
+	t.Run("an unencodable document drops only its writes", func(t *testing.T) {
+		env := newEnv(t, client, func(c *openviduconfig.AnalyticsConfig) { c.StoreMetadata = true })
+		w := newWriter(store.New(env.db), env.settings, Node{ID: testNode}, newMetrics())
+		participantsBefore := counterValue(w.metrics.writeErrors, schema.CollectionParticipants, "rejected")
+		eventsBefore := counterValue(w.metrics.writeErrors, schema.CollectionEvents, "rejected")
+
+		var ev events
+		// A BSON key cannot hold a null byte: the driver cannot encode this participant nor its raw event.
+		unencodable := participantInfo("PA_bad", "bad", livekit.ParticipantInfo_STANDARD, at("1s"))
+		unencodable.Attributes["a\x00b"] = "value"
+		valid := participantInfo("PA_good", "good", livekit.ParticipantInfo_STANDARD, at("1s"))
+		w.enqueueEvents([]*livekit.AnalyticsEvent{ev.roomCreated("RM_1", "r", at("0s")),
+			ev.joined("RM_1", unencodable, at("1s")), ev.joined("RM_1", valid, at("1s"))})
+
+		require.NoError(t, w.tick(ctx))
+		require.Equal(t, int64(1), count(env, schema.CollectionParticipants, bson.D{{Key: "_id", Value: "PA_good"}}))
+		require.Zero(t, count(env, schema.CollectionParticipants, bson.D{{Key: "_id", Value: "PA_bad"}}))
+		require.Equal(t, int64(1), count(env, schema.CollectionEvents, bson.D{{Key: "participantSid", Value: "PA_good"}}))
+		require.Zero(t, count(env, schema.CollectionEvents, bson.D{{Key: "participantSid", Value: "PA_bad"}}))
+		require.Equal(t, float64(1), counterValue(w.metrics.writeErrors, schema.CollectionParticipants, "rejected")-participantsBefore)
+		require.Equal(t, float64(1), counterValue(w.metrics.writeErrors, schema.CollectionEvents, "rejected")-eventsBefore)
+		require.Zero(t, w.events.Len())
+	})
+
 	t.Run("heartbeat advances lastSeenAt on an idle node", func(t *testing.T) {
 		env := newEnv(t, client)
 		w := newWriter(store.New(env.db), env.settings, Node{ID: testNode, Region: "eu-west"}, newMetrics())

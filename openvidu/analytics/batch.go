@@ -78,7 +78,8 @@ type processor struct {
 	store batchStore
 	opts  projection.Options
 	cache *refCache
-	// onWriteErrors receives rejected writes (validation in error mode, oversized documents); they are dropped.
+	// onWriteErrors receives rejected writes (validation in error mode, oversized or unencodable documents); they are
+	// dropped.
 	onWriteErrors func(err *store.WriteError)
 	// onUnsupported receives events of a type the projection does not handle.
 	onUnsupported func(event *livekit.AnalyticsEvent)
