@@ -435,6 +435,23 @@ func TestStreamURLRedacted(t *testing.T) {
 	require.Equal(t, "rtmp://live.example.com/live/***", lookup(results[0].(bson.D), "url"))
 }
 
+func TestCustomBaseURLRedacted(t *testing.T) {
+	customBaseURL := "https://layouts.example.com/app/index.html?token=abc"
+	roomComposite := Encode(&livekit.EgressInfo{
+		Request: &livekit.EgressInfo_RoomComposite{RoomComposite: &livekit.RoomCompositeEgressRequest{CustomBaseUrl: customBaseURL}},
+	}, EncodeOptions{})
+	template := Encode(&livekit.EgressInfo{
+		Request: &livekit.EgressInfo_Egress{Egress: &livekit.StartEgressRequest{
+			Source: &livekit.StartEgressRequest_Template{Template: &livekit.TemplateSource{CustomBaseUrl: customBaseURL}},
+		}},
+	}, EncodeOptions{})
+
+	request := lookup(lookup(roomComposite, "request").(bson.D), "room_composite").(bson.D)
+	require.Equal(t, "https://layouts.example.com/app/***", lookup(request, "custom_base_url"))
+	source := lookup(lookup(lookup(lookup(template, "request").(bson.D), "egress").(bson.D), "source").(bson.D), "template").(bson.D)
+	require.Equal(t, "https://layouts.example.com/app/***", lookup(source, "custom_base_url"))
+}
+
 func TestURLHelpers(t *testing.T) {
 	require.Equal(t, "rtmps://live.example.com/app/***", RedactURL("rtmps://user:pw@live.example.com/app/live_123?token=abc"))
 	require.Equal(t, "https://example.com/***", RedactURL("https://example.com/page?jwt=x#y"))

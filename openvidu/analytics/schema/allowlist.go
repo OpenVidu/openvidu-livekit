@@ -100,7 +100,7 @@ var allowList = map[protoreflect.FullName]map[protoreflect.Name]fieldRule{
 	},
 	"livekit.RoomCompositeEgressRequest": {
 		"room_name": keep, "layout": keep, "audio_only": keep, "audio_mixing": keep, "video_only": keep,
-		"custom_base_url": keep, "file": keep, "stream": keep, "segments": keep, "preset": keep, "advanced": keep,
+		"custom_base_url": redactURL, "file": keep, "stream": keep, "segments": keep, "preset": keep, "advanced": keep,
 		"file_outputs": keep, "stream_outputs": keep, "segment_outputs": keep, "image_outputs": keep,
 	},
 	"livekit.WebEgressRequest": {
@@ -126,7 +126,7 @@ var allowList = map[protoreflect.FullName]map[protoreflect.Name]fieldRule{
 		"replay_id": keep, "start_offset_ms": keep, "end_offset_ms": keep, "template": keep, "web": keep,
 		"media": keep, "preset": keep, "advanced": keep, "outputs": keep,
 	},
-	"livekit.TemplateSource":      {"layout": keep, "audio_only": keep, "video_only": keep, "custom_base_url": keep},
+	"livekit.TemplateSource":      {"layout": keep, "audio_only": keep, "video_only": keep, "custom_base_url": redactURL},
 	"livekit.WebSource":           {"url": redactURL, "audio_only": keep, "video_only": keep, "await_start_signal": keep},
 	"livekit.MediaSource":         {"video_track_id": keep, "participant_video": keep, "audio": keep},
 	"livekit.ParticipantVideo":    {"identity": keep, "prefer_screen_share": keep},

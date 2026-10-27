@@ -192,7 +192,7 @@ func roomCompositeEgress(id string, room string, status livekit.EgressStatus, st
 		EgressId: id, RoomId: room, RoomName: "room-" + room, Status: status,
 		StartedAt: started.UnixNano(), UpdatedAt: updated.UnixNano(),
 		Request: &livekit.EgressInfo_RoomComposite{RoomComposite: &livekit.RoomCompositeEgressRequest{
-			RoomName: "room-" + room, Layout: "speaker",
+			RoomName: "room-" + room, Layout: "speaker", CustomBaseUrl: "https://layouts.example.com/app/index.html?token=SECRET-layout",
 			Options: &livekit.RoomCompositeEgressRequest_Preset{Preset: livekit.EncodingOptionsPreset_H264_720P_30},
 			FileOutputs: []*livekit.EncodedFileOutput{{
 				Filepath: "recordings/room.mp4",
