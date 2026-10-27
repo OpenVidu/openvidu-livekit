@@ -369,6 +369,14 @@ func TestWriter(t *testing.T) {
 		require.Equal(t, "rtmps://live.example.com/app/***", egress.Outputs[1].URL)
 		require.Equal(t, int64(290_000), *egress.DurationMs)
 		require.Equal(t, "H264_720P_30", egress.Request.Preset)
+		require.Equal(t, bson.D{{Key: "room_composite", Value: bson.D{
+			{Key: "room_name", Value: "room-RM_1"},
+			{Key: "layout", Value: "speaker"},
+			{Key: "custom_base_url", Value: "https://layouts.example.com/app/***"},
+			{Key: "options", Value: bson.D{{Key: "preset", Value: "H264_720P_30"}}},
+			{Key: "file_outputs", Value: bson.A{bson.D{{Key: "filepath", Value: "recordings/room.mp4"}}}},
+			{Key: "stream_outputs", Value: bson.A{bson.D{{Key: "urls", Value: bson.A{"rtmps://live.example.com/app/***"}}}}},
+		}}}, egress.RawRequest)
 		require.Equal(t, "room-RM_1", egress.RoomName)
 		require.Equal(t, "room-rm_1", egress.RoomNameLower)
 
@@ -377,6 +385,24 @@ func TestWriter(t *testing.T) {
 		require.EqualValues(t, 1, room.Egress.Total)
 		require.EqualValues(t, 0, room.Egress.Active)
 
+		assertNoSecrets(t, env)
+	})
+
+	t.Run("raw request stored as encoded", func(t *testing.T) {
+		env := newEnv(t, client)
+		var ev events
+		track := &livekit.EgressInfo{EgressId: "EG_t", RoomId: "RM_1", RoomName: "room-RM_1",
+			Status: livekit.EgressStatus_EGRESS_STARTING, StartedAt: at("0s").UnixNano(),
+			Request: &livekit.EgressInfo_Track{Track: &livekit.TrackEgressRequest{RoomName: "room-RM_1", TrackId: "TR_1",
+				Output: &livekit.TrackEgressRequest_File{File: &livekit.DirectFileOutput{Filepath: "$recordings/{track_id}.ogg",
+					Output: &livekit.DirectFileOutput_S3{S3: &livekit.S3Upload{AccessKey: "SECRET-access", Secret: "SECRET-secret"}}}}}}}
+		env.apply([]*livekit.AnalyticsEvent{ev.egress(livekit.AnalyticsEventType_EGRESS_STARTED, track, at("0s"))})
+		egress := find[schema.EgressDocument](env, schema.CollectionEgresses, "EG_t")
+		require.Equal(t, bson.D{{Key: "track", Value: bson.D{
+			{Key: "room_name", Value: "room-RM_1"},
+			{Key: "track_id", Value: "TR_1"},
+			{Key: "output", Value: bson.D{{Key: "file", Value: bson.D{{Key: "filepath", Value: "$recordings/{track_id}.ogg"}}}}},
+		}}}, egress.RawRequest)
 		assertNoSecrets(t, env)
 	})
 

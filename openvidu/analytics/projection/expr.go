@@ -140,6 +140,11 @@ func latest(path string, atPath string, at time.Time, value any) bson.D {
 	return cond(gte(at, ifNull(atPath, time.Unix(0, 0).UTC())), value, field(path))
 }
 
+// literal stores value as is: in an update pipeline a string starting with $ would be read as a field path.
+func literal(value any) bson.D {
+	return bson.D{{Key: "$literal", Value: value}}
+}
+
 // stage builds a {$set: fields} pipeline stage.
 func stage(fields bson.D) bson.D {
 	return bson.D{{Key: "$set", Value: fields}}

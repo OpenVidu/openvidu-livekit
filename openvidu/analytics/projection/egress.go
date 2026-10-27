@@ -75,6 +75,9 @@ func (p *projector) egress() {
 		f.set("errorCode", info.GetErrorCode())
 	}
 	f.set("request", egressRequest(info, p.opts.Encode))
+	if raw := egressRawRequest(info, p.opts.Encode); raw != nil {
+		f.set("rawRequest", literal(raw))
+	}
 	if outputs := egressOutputs(info); len(outputs) > 0 {
 		f.set("outputs", latest("outputs", "updatedAt", updatedAt, outputs))
 	}
@@ -254,6 +257,18 @@ func egressRequest(info *livekit.EgressInfo, encode schema.EncodeOptions) bson.D
 		summary.set("outputs", kinds)
 	}
 	return summary.doc()
+}
+
+// egressRawRequest is the request as raw events store egress.request: the set member of the oneof under its name,
+// allow-listed fields only.
+func egressRawRequest(info *livekit.EgressInfo, encode schema.EncodeOptions) bson.D {
+	for _, element := range schema.Encode(info, encode) {
+		if element.Key == "request" {
+			request, _ := element.Value.(bson.D)
+			return request
+		}
+	}
+	return nil
 }
 
 func unifiedSource(summary *fields, template *livekit.TemplateSource, web *livekit.WebSource, media *livekit.MediaSource) {

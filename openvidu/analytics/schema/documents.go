@@ -327,6 +327,7 @@ type EgressDocument struct {
 	Error             string               `bson:"error,omitempty"`
 	ErrorCode         *int32               `bson:"errorCode,omitempty"`
 	Request           EgressRequestSummary `bson:"request"`
+	RawRequest        bson.D               `bson:"rawRequest,omitempty"`
 	Outputs           []EgressOutput       `bson:"outputs"`
 	StatusHistory     []EgressStatusChange `bson:"statusHistory"`
 	RetryCount        int32                `bson:"retryCount"`
