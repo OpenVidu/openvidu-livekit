@@ -294,6 +294,19 @@ func TestUnsupportedEventsAreCounted(t *testing.T) {
 	require.Equal(t, float64(1), counterValue(w.metrics.dropped, "events", "unsupported")-before)
 }
 
+func TestWebhookEventsAreIgnoredSilently(t *testing.T) {
+	w := newWriter(&fakeStore{}, testSettings(t, nil), Node{ID: testNode}, newMetrics())
+	var warnings []string
+	w.logs.emit = func(message string, _ ...any) { warnings = append(warnings, message) }
+	before := counterValue(w.metrics.dropped, "events", "unsupported")
+	var ev events
+	w.enqueueEvents([]*livekit.AnalyticsEvent{ev.next(livekit.AnalyticsEventType_WEBHOOK, at("0s"))})
+
+	require.NoError(t, w.tick(context.Background()))
+	require.Equal(t, before, counterValue(w.metrics.dropped, "events", "unsupported"))
+	require.Empty(t, warnings)
+}
+
 func TestStopFlushesQueuesAndBoundsTheWait(t *testing.T) {
 	store := &fakeStore{}
 	settings := testSettings(t, nil)

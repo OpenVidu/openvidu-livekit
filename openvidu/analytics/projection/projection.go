@@ -131,6 +131,12 @@ func Supported(eventType livekit.AnalyticsEventType) bool {
 	return false
 }
 
+// Ignored reports the event types the server emits that the data model leaves out on purpose: the delivery record of
+// each webhook.
+func Ignored(eventType livekit.AnalyticsEventType) bool {
+	return eventType == livekit.AnalyticsEventType_WEBHOOK
+}
+
 // Event projects one analytics event. Unknown types yield an empty result.
 func Event(event *livekit.AnalyticsEvent, refs Refs, opts Options) EventResult {
 	ts := schema.FromTimestamp(event.GetTimestamp())

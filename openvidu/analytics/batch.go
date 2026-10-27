@@ -81,7 +81,7 @@ type processor struct {
 	// onWriteErrors receives rejected writes (validation in error mode, oversized or unencodable documents); they are
 	// dropped.
 	onWriteErrors func(err *store.WriteError)
-	// onUnsupported receives events of a type the projection does not handle.
+	// onUnsupported receives events of a type the projection does not handle and does not ignore on purpose.
 	onUnsupported func(event *livekit.AnalyticsEvent)
 }
 
@@ -101,7 +101,8 @@ func (p *processor) apply(ctx context.Context, events []*eventEntry, stats []*st
 			refs.Reconciled = reconciled
 			entry.result = projection.Event(entry.event, refs, p.opts)
 			entry.projected = true
-			if !projection.Supported(entry.event.GetType()) && p.onUnsupported != nil {
+			eventType := entry.event.GetType()
+			if !projection.Supported(eventType) && !projection.Ignored(eventType) && p.onUnsupported != nil {
 				p.onUnsupported(entry.event)
 			}
 		}
