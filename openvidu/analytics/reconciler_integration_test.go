@@ -377,14 +377,18 @@ func TestReconcilerClosures(t *testing.T) {
 		require.Equal(t, leftAt.Sub(participant.JoinedAt).Milliseconds(), *participant.DurationMs)
 		require.True(t, leftAt.Add(2160*time.Hour).Equal(*participant.ExpiresAt))
 
+		// Cascaded tracks and subscriptions expire with the tracks retention, not with the entities one.
+		tracksExpireAt := leftAt.Add(env.settings.Retention.Tracks)
 		for _, track := range []string{"TR_cam", "TR_mic"} {
 			document := find[schema.TrackDocument](env.testEnv, schema.CollectionTracks, track)
 			require.Equal(t, "unpublished", document.Status)
 			require.True(t, leftAt.Equal(*document.UnpublishedAt))
 			require.Equal(t, "reconciler", document.ClosedBy)
+			require.True(t, tracksExpireAt.Equal(*document.ExpiresAt))
 		}
 		require.EqualValues(t, 6, count(env.testEnv, schema.CollectionTrackSubscriptions, bson.D{
-			{Key: "status", Value: "unsubscribed"}, {Key: "unsubscribedAt", Value: leftAt}, {Key: "closedBy", Value: "reconciler"}}))
+			{Key: "status", Value: "unsubscribed"}, {Key: "unsubscribedAt", Value: leftAt}, {Key: "closedBy", Value: "reconciler"},
+			{Key: "expiresAt", Value: tracksExpireAt}}))
 
 		room := find[schema.RoomDocument](env.testEnv, schema.CollectionRooms, "RM_c")
 		require.EqualValues(t, 3, room.Participants.Active)

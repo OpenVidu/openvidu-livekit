@@ -554,6 +554,23 @@ func TestLoop(t *testing.T) {
 		require.Zero(t, overlaps.Load(), "two runs overlapped")
 	})
 
+	t.Run("the first run does not wait for the interval", func(t *testing.T) {
+		s := newFakeReconcilerStore()
+		s.stale = append(s.stale, openParticipant("PA_restarted", "daily", "ND_dead"))
+		r, _ := newTestReconciler(s, newFakeLive())
+		r.settings.interval = time.Hour
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			r.loop(ctx, &localLocker{})
+		}()
+		require.Eventually(t, func() bool { return len(s.recorded()) == 1 }, time.Second, 10*time.Millisecond)
+		cancel()
+		<-done
+		require.Equal(t, int32(1), s.recorded()[0].Closed.Participant)
+	})
+
 	t.Run("a partial run continues while holding the lock", func(t *testing.T) {
 		s := newFakeReconcilerStore()
 		for i := range 12 {
