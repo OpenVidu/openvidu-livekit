@@ -74,7 +74,7 @@ func newWriter(s batchStore, settings openviduconfig.AnalyticsSettings, node Nod
 	}
 	w.processor = &processor{
 		store: s,
-		opts:  projectionOptions(settings),
+		opts:  nodeProjectionOptions(settings, node),
 		cache: newRefCache(),
 		onWriteErrors: func(err *store.WriteError) {
 			m.writeErrors.WithLabelValues(err.Collection, "rejected").Add(float64(err.Count))
@@ -162,7 +162,8 @@ func (w *writer) reportOverflow() {
 func (w *writer) applyBatch(ctx context.Context, events []*eventEntry, stats []*statsEntry, started time.Time) error {
 	w.store.ResetRoundTrips()
 	err := w.processor.apply(ctx, events, stats)
-	if heartbeatErr := w.store.Heartbeat(ctx, w.node.ID, openviduversion.Version, w.node.Region, w.interval, time.Now().UTC().Truncate(time.Millisecond)); err == nil {
+	if heartbeatErr := w.store.Heartbeat(ctx, w.node.ID, openviduversion.Version, w.node.Region, w.interval,
+		!w.node.WithoutMediaStats, time.Now().UTC().Truncate(time.Millisecond)); err == nil {
 		err = heartbeatErr
 	}
 	w.metrics.batchDuration.Observe(time.Since(started).Seconds())

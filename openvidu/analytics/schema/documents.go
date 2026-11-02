@@ -99,6 +99,7 @@ type RoomDocument struct {
 	Features      RoomFeatures            `bson:"features"`
 	LastEventAt   time.Time               `bson:"lastEventAt"`
 	LastStatsAt   *time.Time              `bson:"lastStatsAt,omitempty"`
+	MediaStats    *bool                   `bson:"mediaStats,omitempty"`
 	Internal      bson.M                  `bson:"internal,omitempty"`
 	SchemaVersion int32                   `bson:"schemaVersion"`
 	ExpiresAt     *time.Time              `bson:"expiresAt"`
@@ -175,6 +176,7 @@ type ParticipantDocument struct {
 	Quality          ParticipantQuality       `bson:"quality"`
 	LastEventAt      time.Time                `bson:"lastEventAt"`
 	LastStatsAt      *time.Time               `bson:"lastStatsAt,omitempty"`
+	MediaStats       *bool                    `bson:"mediaStats,omitempty"`
 	Internal         bson.M                   `bson:"internal,omitempty"`
 	SchemaVersion    int32                    `bson:"schemaVersion"`
 	ExpiresAt        *time.Time               `bson:"expiresAt"`
@@ -568,6 +570,7 @@ type NodeDocument struct {
 	ServerVersion   string    `bson:"serverVersion"`
 	Region          string    `bson:"region,omitempty"`
 	BatchIntervalMs int32     `bson:"batchIntervalMs,omitempty"`
+	MediaStats      *bool     `bson:"mediaStats,omitempty"`
 }
 
 // Identifiers of the `schema_meta` documents.

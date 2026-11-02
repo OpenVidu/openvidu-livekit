@@ -114,6 +114,8 @@ func newReconcilerTask(r *reconciler, locks locker) *reconcilerRunner {
 type Node struct {
 	ID     string
 	Region string
+	// WithoutMediaStats marks a node whose media engine produces no media statistics.
+	WithoutMediaStats bool
 }
 
 // ErrUnsupportedDatabase is the error of InitializeAnalytics for a database without updates with an aggregation
@@ -282,6 +284,13 @@ func projectionOptions(settings openviduconfig.AnalyticsSettings) projection.Opt
 		Encode:      schema.EncodeOptions{StoreMetadata: settings.StoreMetadata, AnonymizeIP: settings.AnonymizeIP},
 		Stores:      settings.Stores,
 	}
+}
+
+// nodeProjectionOptions are the projection options of the events and stats this node writes.
+func nodeProjectionOptions(settings openviduconfig.AnalyticsSettings, node Node) projection.Options {
+	opts := projectionOptions(settings)
+	opts.WithoutMediaStats = node.WithoutMediaStats
+	return opts
 }
 
 func logInitialization(result *schema.InitResult, settings openviduconfig.AnalyticsSettings) {

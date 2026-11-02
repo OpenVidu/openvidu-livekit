@@ -29,6 +29,7 @@ import (
 	"github.com/OpenVidu/openvidu-golang-utils/monitor"
 	"github.com/livekit/livekit-server/openvidu/analytics"
 	"github.com/livekit/livekit-server/openvidu/livekithelper"
+	"github.com/livekit/livekit-server/openvidu/openviduconfig"
 )
 
 var analyticsEnabled bool
@@ -42,8 +43,8 @@ func Start(conf *config.Config, server *service.LivekitServer) error {
 	if conf.OpenVidu.Analytics.Enabled {
 		livekithelper.Init(server)
 		node := server.Node()
-		err := analytics.InitializeAnalytics(conf, analytics.Node{ID: node.GetId(), Region: node.GetRegion()},
-			livekithelper.GetInstance())
+		err := analytics.InitializeAnalytics(conf, analytics.Node{ID: node.GetId(), Region: node.GetRegion(),
+			WithoutMediaStats: !openviduconfig.MediaStats}, livekithelper.GetInstance())
 		if errors.Is(err, analytics.ErrUnsupportedDatabase) {
 			logger.Errorw("analytics disabled: OpenVidu analytics and the dashboard require MongoDB", err)
 			return nil

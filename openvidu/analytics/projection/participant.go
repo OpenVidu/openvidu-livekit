@@ -67,6 +67,7 @@ func (p *projector) participant() {
 	}
 	f.set("joinedAt", minDate("joinedAt", joinTime(info, p.ts)))
 	f.set("nodeId", keep("nodeId", firstNonEmpty(p.event.GetClientMeta().GetNode(), p.event.GetNodeId())))
+	p.markFirstWriter(f)
 	if region := firstNonEmpty(info.GetRegion(), p.event.GetClientMeta().GetRegion()); region != "" {
 		f.set("region", region)
 	}

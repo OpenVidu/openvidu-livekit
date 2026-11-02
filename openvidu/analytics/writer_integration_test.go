@@ -591,6 +591,72 @@ func TestWriter(t *testing.T) {
 		require.Equal(t, int64(1500), *hourly.Bytes.Up)
 	})
 
+	t.Run("a signal-only flush advances the room's lastStatsAt without bytes or quality", func(t *testing.T) {
+		env := newEnv(t, client)
+		var ev events
+		alice := participantInfo("PA_a", "alice", livekit.ParticipantInfo_STANDARD, at("1s"))
+		env.apply([]*livekit.AnalyticsEvent{ev.roomCreated("RM_1", "r", at("0s")), ev.joined("RM_1", alice, at("1s"))})
+		flush := at("30s")
+		env.apply(nil, []*livekit.AnalyticsStat{
+			stat("RM_1", "PA_a", "TR_SG1", livekit.StreamType_UPSTREAM, flush, 0, 70),
+			stat("RM_1", "PA_a", "TR_SG1", livekit.StreamType_DOWNSTREAM, flush, 0, 90),
+		})
+
+		require.Zero(t, count(env, schema.CollectionTrackStats, bson.D{}))
+		participant := find[schema.ParticipantDocument](env, schema.CollectionParticipants, "PA_a")
+		require.Equal(t, int64(70), participant.Bytes.Up)
+		require.Equal(t, int64(90), participant.Bytes.Down)
+		require.True(t, flush.Equal(*participant.LastStatsAt))
+		room := find[schema.RoomDocument](env, schema.CollectionRooms, "RM_1")
+		require.True(t, flush.Equal(*room.LastStatsAt))
+		require.Zero(t, room.Bytes.Up)
+		require.Zero(t, room.Bytes.Down)
+		require.Zero(t, room.Quality.ScoreCount)
+	})
+
+	t.Run("a node without media statistics marks the rooms and sessions it creates", func(t *testing.T) {
+		env := newEnv(t, client)
+		env.p.opts.WithoutMediaStats = true
+		var ev events
+		alice := participantInfo("PA_a", "alice", livekit.ParticipantInfo_STANDARD, at("1s"))
+		env.apply([]*livekit.AnalyticsEvent{ev.roomCreated("RM_1", "r", at("0s")), ev.joined("RM_1", alice, at("1s"))})
+
+		room := find[schema.RoomDocument](env, schema.CollectionRooms, "RM_1")
+		require.NotNil(t, room.MediaStats)
+		require.False(t, *room.MediaStats)
+		participant := find[schema.ParticipantDocument](env, schema.CollectionParticipants, "PA_a")
+		require.NotNil(t, participant.MediaStats)
+		require.False(t, *participant.MediaStats)
+	})
+
+	t.Run("a node reporting media statistics leaves the mark out", func(t *testing.T) {
+		env := newEnv(t, client)
+		var ev events
+		alice := participantInfo("PA_a", "alice", livekit.ParticipantInfo_STANDARD, at("1s"))
+		env.apply([]*livekit.AnalyticsEvent{ev.roomCreated("RM_1", "r", at("0s")), ev.joined("RM_1", alice, at("1s"))})
+
+		require.Nil(t, find[schema.RoomDocument](env, schema.CollectionRooms, "RM_1").MediaStats)
+		require.Nil(t, find[schema.ParticipantDocument](env, schema.CollectionParticipants, "PA_a").MediaStats)
+	})
+
+	t.Run("ROOM_CREATED sets the mark of the node that hosts the room", func(t *testing.T) {
+		env := newEnv(t, client)
+		var ev events
+		egress := roomCompositeEgress("EG_1", "RM_1", livekit.EgressStatus_EGRESS_STARTING, at("1s"), at("1s"))
+		env.apply([]*livekit.AnalyticsEvent{ev.egress(livekit.AnalyticsEventType_EGRESS_STARTED, egress, at("1s"))})
+		require.Nil(t, find[schema.RoomDocument](env, schema.CollectionRooms, "RM_1").MediaStats)
+
+		env.p.opts.WithoutMediaStats = true
+		env.apply([]*livekit.AnalyticsEvent{ev.roomCreated("RM_1", "r", at("0s"))})
+		room := find[schema.RoomDocument](env, schema.CollectionRooms, "RM_1")
+		require.NotNil(t, room.MediaStats)
+		require.False(t, *room.MediaStats)
+
+		env.p.opts.WithoutMediaStats = false
+		env.apply([]*livekit.AnalyticsEvent{ev.roomCreated("RM_1", "r", at("0s"))})
+		require.Nil(t, find[schema.RoomDocument](env, schema.CollectionRooms, "RM_1").MediaStats)
+	})
+
 	t.Run("stats in track detail, quality bands and connected participants", func(t *testing.T) {
 		env := newEnv(t, client, func(c *openviduconfig.AnalyticsConfig) { c.StatsDetail = "track" })
 		var ev events

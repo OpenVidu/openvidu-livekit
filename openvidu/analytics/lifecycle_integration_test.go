@@ -96,6 +96,18 @@ func TestWriterLifecycle(t *testing.T) {
 		require.Equal(t, "eu-west", second.Region)
 		require.NotEmpty(t, second.ServerVersion)
 		require.Equal(t, int32(env.settings.Interval.Milliseconds()), second.BatchIntervalMs)
+		require.NotNil(t, second.MediaStats)
+		require.True(t, *second.MediaStats)
+	})
+
+	t.Run("heartbeat of a node without media statistics", func(t *testing.T) {
+		env := newEnv(t, client)
+		w := newWriter(store.New(env.db), env.settings, Node{ID: testNode, WithoutMediaStats: true}, newMetrics())
+
+		require.NoError(t, w.tick(ctx))
+		node := find[schema.NodeDocument](env, schema.CollectionNodes, testNode)
+		require.NotNil(t, node.MediaStats)
+		require.False(t, *node.MediaStats)
 	})
 
 	t.Run("stop flushes the shutdown events and the final stats", func(t *testing.T) {

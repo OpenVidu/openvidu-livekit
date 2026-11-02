@@ -36,7 +36,9 @@ import (
 type Options struct {
 	Retention   schema.Retention
 	StatsDetail string
-	Encode      schema.EncodeOptions
+	// WithoutMediaStats stamps mediaStats: false on the rooms and participant sessions this node creates.
+	WithoutMediaStats bool
+	Encode            schema.EncodeOptions
 	// Stores reports whether events of a type are stored raw.
 	Stores func(eventType string) bool
 }

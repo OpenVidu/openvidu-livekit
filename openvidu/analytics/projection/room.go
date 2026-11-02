@@ -43,9 +43,26 @@ func (p *projector) roomTouch(name string) *fields {
 	f.set("status", keep("status", roomActive))
 	f.set("createdAt", minDate("createdAt", p.ts))
 	f.set("nodeId", keep("nodeId", p.event.GetNodeId()))
+	p.markFirstWriter(f)
 	f.set("lastEventAt", maxDate("lastEventAt", p.ts))
 	f.set("schemaVersion", int32(schema.SchemaVersion))
 	return f
+}
+
+// markFirstWriter stamps mediaStats: false on an entity this node writes first, when it reports no media statistics: the
+// mark follows nodeId, which the first writer sets.
+func (p *projector) markFirstWriter(f *fields) {
+	if p.opts.WithoutMediaStats {
+		f.set("mediaStats", cond(exists("nodeId"), field("mediaStats"), false))
+	}
+}
+
+// mediaStatsMark is the mark of an entity this node hosts: false when it reports no media statistics, none otherwise.
+func (p *projector) mediaStatsMark() any {
+	if p.opts.WithoutMediaStats {
+		return false
+	}
+	return remove
 }
 
 func (p *projector) room() {
@@ -64,6 +81,7 @@ func (p *projector) room() {
 	case livekit.AnalyticsEventType_ROOM_CREATED:
 		f.set("status", ranked("status", roomActive, roomRanks))
 		f.set("nodeId", p.event.GetNodeId())
+		f.set("mediaStats", p.mediaStatsMark())
 		f.set("config.maxParticipants", int32(room.GetMaxParticipants()))
 		f.set("config.emptyTimeoutMs", schema.SecondsToMs(room.GetEmptyTimeout()))
 		f.set("config.departureTimeoutMs", schema.SecondsToMs(room.GetDepartureTimeout()))

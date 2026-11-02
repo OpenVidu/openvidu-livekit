@@ -198,6 +198,9 @@ func Stats(stats []*livekit.AnalyticsStat, opts Options) StatsResult {
 			connected[k] = append(connected[k], stat.GetParticipantId())
 		}
 		if isPseudoTrack(stat.GetTrackId()) {
+			// Signal and data stats keep the room's lastStatsAt current, without bytes or quality.
+			room := delta(rooms, &roomOrder, stat.GetRoomId(), stat.GetRoomId(), stat.GetNode())
+			room.statsAt = maxTime(room.statsAt, s.ts)
 			continue
 		}
 		k := key{stat.GetRoomId(), stat.GetParticipantId(), s.kind, s.ts}

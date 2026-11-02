@@ -32,6 +32,11 @@ import (
 // it with "track".
 var DefaultStatsDetail = "participant"
 
+// MediaStats reports whether this server's media engine produces media statistics (bytes, packets, loss, jitter, RTT
+// and quality scores). A server whose engine does not sets it to false before the analytics start, so that the writer
+// marks its node, rooms and participant sessions.
+var MediaStats = true
+
 // AnalyticsConfig is the `openvidu.analytics` section. Durations and the event type list are string kinds so that
 // LiveKit derives their LIVEKIT_OPENVIDU_ANALYTICS_* environment variables and CLI flags like any other string.
 type AnalyticsConfig struct {
