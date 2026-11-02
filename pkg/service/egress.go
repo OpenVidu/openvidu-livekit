@@ -394,6 +394,22 @@ func (s *EgressService) StopEgress(ctx context.Context, req *livekit.StopEgressR
 		// Nothing answered for this egress: its handler died without reporting
 		// its end and the row would stay active forever. Ending it here makes
 		// the stop request the operator's way out.
+		// One unanswered call is not enough to tell: psrpc gives up after about
+		// 3 s (three tries, each waiting a second for a handler to claim it), so
+		// a Redis or host stall of a few seconds swallows it, and the live
+		// handler would then record until the room ends while its row says
+		// lost. So the stop is sent once more, and the row read again, before
+		// the egress is given up.
+		if egressUnreachable(err) && !egressEnded(info) {
+			retried, retryErr := s.launcher.StopEgress(ctx, req)
+			if retryErr == nil {
+				return retried, nil
+			}
+			err = retryErr
+			if reloaded, loadErr := s.io.GetEgress(ctx, &rpc.GetEgressRequest{EgressId: req.EgressId}); loadErr == nil {
+				info = reloaded
+			}
+		}
 		if egressUnreachable(err) && !egressEnded(info) {
 			if updater, ok := s.io.(egressUpdater); ok {
 				update := func(ctx context.Context, info *livekit.EgressInfo) error {

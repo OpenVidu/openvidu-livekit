@@ -34,6 +34,7 @@ OpenVidu. The changes of the upstream project are listed in `CHANGELOG.md`.
 
 - **Idle TURN connections no longer pile up**: a client that reached the TURN server and then went silent — even with just a STUN Binding — held the connection, and any allocation behind it, open indefinitely. A TURN TCP connection idle in both directions is now closed after `turn.tcp_connection_idle_timeout_seconds` (default 60s; `<= 0` disables it); an active relay is never cut.
 - **A stop signal during startup is no longer lost**: a `SIGTERM` or `SIGINT` received while the server was starting was ignored, and the process ran until a second signal or a kill; the server now stops as soon as it has started.
+- **A recording stopped during a brief Redis stall is no longer reported as failed**: when no egress handler answered the stop request within about 3 s, the egress was marked `EGRESS_FAILED` ("egress lost") at once, even when its handler was alive and the request had only been delayed. The server now sends the stop request once more, and reads the egress again, before marking it lost: only a stall longer than about 6 s still does.
 
 ## [3.9.0]
 

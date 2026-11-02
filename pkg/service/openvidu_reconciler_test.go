@@ -625,6 +625,50 @@ func TestStopEgressMarksLostAnEgressNobodyAnswersFor(t *testing.T) {
 	require.Equal(t, livekit.EgressStatus_EGRESS_FAILED, info.Status)
 	require.Equal(t, egressLostError, info.Error)
 	require.Equal(t, livekit.EgressStatus_EGRESS_FAILED, f.egressStatus(t, "EG_lost"))
+	require.Equal(t, []string{"EG_lost", "EG_lost"}, f.launcher.asked, "the stop is sent once more before giving up")
+}
+
+func TestStopEgressSendsTheStopAgainBeforeGivingAnEgressUp(t *testing.T) {
+	f := newReconcileFixture(t)
+	f.egress(t, "EG_stalled", "room", livekit.EgressStatus_EGRESS_ACTIVE, f.now.Add(-time.Hour))
+	// the first request is lost in a Redis stall, the live handler answers the second one
+	f.launcher.answers["EG_stalled"] = psrpc.ErrRequestTimedOut
+	f.launcher.beforeAnswer = func(egressId string) {
+		if len(f.launcher.asked) == 2 {
+			f.launcher.answers[egressId] = nil
+		}
+	}
+	io := &ioStub{store: f.store}
+	svc := &EgressService{launcher: f.launcher, io: io}
+
+	info, err := svc.StopEgress(recordingCtx(), &livekit.StopEgressRequest{EgressId: "EG_stalled"})
+
+	require.NoError(t, err)
+	require.Equal(t, "EG_stalled", info.EgressId)
+	require.Equal(t, 0, io.updates, "an egress whose handler answered is not marked lost")
+	require.Equal(t, livekit.EgressStatus_EGRESS_ACTIVE, f.egressStatus(t, "EG_stalled"))
+}
+
+func TestStopEgressLeavesAnEgressThatEndedDuringTheRetryAlone(t *testing.T) {
+	f := newReconcileFixture(t)
+	f.egress(t, "EG_ending", "room", livekit.EgressStatus_EGRESS_ACTIVE, f.now.Add(-time.Hour))
+	f.launcher.answers["EG_ending"] = psrpc.ErrRequestTimedOut
+	// its handler reports the end while the second request goes unanswered
+	f.launcher.beforeAnswer = func(egressId string) {
+		if len(f.launcher.asked) == 2 {
+			f.egress(t, egressId, "room", livekit.EgressStatus_EGRESS_COMPLETE, f.now)
+		}
+	}
+	io := &ioStub{store: f.store}
+	svc := &EgressService{launcher: f.launcher, io: io}
+
+	_, err := svc.StopEgress(recordingCtx(), &livekit.StopEgressRequest{EgressId: "EG_ending"})
+
+	var terr twirp.Error
+	require.ErrorAs(t, err, &terr)
+	require.Equal(t, twirp.FailedPrecondition, terr.Code())
+	require.Equal(t, 0, io.updates, "the end its handler reported is kept")
+	require.Equal(t, livekit.EgressStatus_EGRESS_COMPLETE, f.egressStatus(t, "EG_ending"))
 }
 
 func TestStopEgressReportsTheHandlerErrorWhenTheEgressIsNotLost(t *testing.T) {
