@@ -3583,6 +3583,10 @@ func (p *ParticipantImpl) addMigratedTrack(cid string, ti *livekit.TrackInfo) *M
 }
 
 func (p *ParticipantImpl) addMediaTrack(signalCid string, ti *livekit.TrackInfo) *MediaTrack {
+	// BEGIN OPENVIDU BLOCK
+	updateTrackInfoByVideoSizeChange := p.params.UseOneShotSignallingMode || ti.Source == livekit.TrackSource_SCREEN_SHARE
+	// END OPENVIDU BLOCK
+
 	mt := NewMediaTrack(MediaTrackParams{
 		ParticipantID:          p.ID,
 		ParticipantIdentity:    p.params.Identity,
@@ -3608,7 +3612,7 @@ func (p *ParticipantImpl) addMediaTrack(signalCid string, ti *livekit.TrackInfo)
 		},
 		PreferVideoSizeFromMedia:         p.params.PreferVideoSizeFromMedia,
 		EnableRTPStreamRestartDetection:  p.params.EnableRTPStreamRestartDetection,
-		UpdateTrackInfoByVideoSizeChange: p.params.UseOneShotSignallingMode || ti.Source == livekit.TrackSource_SCREEN_SHARE,
+		UpdateTrackInfoByVideoSizeChange: updateTrackInfoByVideoSizeChange,
 		ForceBackupCodecPolicySimulcast:  p.params.ForceBackupCodecPolicySimulcast,
 		OnSubscribedMaxQualityChange:     p.onSubscribedMaxQualityChange,
 		OnSubscribedAudioCodecChange:     p.onSubscribedAudioCodecChange,

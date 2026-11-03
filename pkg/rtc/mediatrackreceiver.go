@@ -981,10 +981,12 @@ func (t *MediaTrackReceiver) UpdateVideoSize(mimeType mime.MimeType, sizes []cod
 	var changed bool
 	t.lock.Lock()
 	trackInfo := t.TrackInfo()
+	// BEGIN OPENVIDU BLOCK
 	if announced := buffer.GetVideoLayersForMimeType(mimeType, trackInfo); len(announced) > len(sizes) {
 		t.lock.Unlock()
 		return
 	}
+	// END OPENVIDU BLOCK
 
 	clonedInfo := utils.CloneProto(trackInfo)
 	var maxWidth, maxHeight uint32

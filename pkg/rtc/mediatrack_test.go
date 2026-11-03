@@ -19,12 +19,16 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	// BEGIN OPENVIDU BLOCK
 	"github.com/livekit/mediatransportutil/pkg/codec"
+	// END OPENVIDU BLOCK
 	"github.com/livekit/protocol/codecs/mime"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
 
+	// BEGIN OPENVIDU BLOCK
 	"github.com/livekit/livekit-server/pkg/rtc/types"
+	// END OPENVIDU BLOCK
 )
 
 func TestTrackInfo(t *testing.T) {
@@ -199,6 +203,7 @@ func TestGetQualityForDimension(t *testing.T) {
 
 }
 
+// BEGIN OPENVIDU BLOCK
 func TestUpdateVideoSize(t *testing.T) {
 	newTrack := func() *MediaTrack {
 		return NewMediaTrack(MediaTrackParams{
@@ -248,3 +253,5 @@ func TestUpdateVideoSize(t *testing.T) {
 		require.Equal(t, uint32(540), info.Codecs[0].Layers[0].Height)
 	})
 }
+
+// END OPENVIDU BLOCK
