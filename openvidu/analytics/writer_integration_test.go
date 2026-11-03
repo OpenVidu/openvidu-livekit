@@ -388,6 +388,26 @@ func TestWriter(t *testing.T) {
 		assertNoSecrets(t, env)
 	})
 
+	t.Run("an egress status reported twice keeps its first time", func(t *testing.T) {
+		env := newEnv(t, client)
+		var ev events
+		started := at("10s")
+		first, second := at("12s"), at("12s").Add(13*time.Millisecond)
+		for id, order := range map[string][]time.Time{"EG_1": {first, second}, "EG_2": {second, first}} {
+			batch := []*livekit.AnalyticsEvent{ev.egress(livekit.AnalyticsEventType_EGRESS_STARTED,
+				roomCompositeEgress(id, "RM_1", livekit.EgressStatus_EGRESS_STARTING, started, started), started)}
+			for _, updated := range order {
+				batch = append(batch, ev.egress(livekit.AnalyticsEventType_EGRESS_UPDATED,
+					roomCompositeEgress(id, "RM_1", livekit.EgressStatus_EGRESS_ACTIVE, started, updated), updated))
+			}
+			env.apply(batch)
+			egress := find[schema.EgressDocument](env, schema.CollectionEgresses, id)
+			require.Len(t, egress.StatusHistory, 2, id)
+			require.Equal(t, "active", egress.StatusHistory[1].Status, id)
+			require.True(t, first.Equal(egress.StatusHistory[1].At), id)
+		}
+	})
+
 	t.Run("values starting with $ stored as they are", func(t *testing.T) {
 		env := newEnv(t, client, func(c *openviduconfig.AnalyticsConfig) { c.StoreMetadata = true })
 		var ev events

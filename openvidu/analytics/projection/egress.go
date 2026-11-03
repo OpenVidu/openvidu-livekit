@@ -101,12 +101,20 @@ func (p *projector) egress() {
 	}
 }
 
-// withStatus adds a status change to the egress status history, kept sorted by time and bounded.
+// withStatus records a status in the egress status history, kept sorted by time and bounded: one entry per status, at
+// its first report. Egress statuses only move forward, so a repeated status, such as one update per output that
+// starts, is never a new step.
 func withStatus(status string, at time.Time) bson.D {
-	entry := bson.D{{Key: "status", Value: status}, {Key: "at", Value: at}}
+	history := emptyArray("statusHistory")
+	same := bson.D{{Key: "$filter", Value: bson.D{{Key: "input", Value: history}, {Key: "cond", Value: eq(ref("$$this.status"), status)}}}}
+	others := bson.D{{Key: "$filter", Value: bson.D{{Key: "input", Value: history},
+		{Key: "cond", Value: bson.D{{Key: "$ne", Value: bson.A{ref("$$this.status"), status}}}}}}}
+	sameAt := bson.D{{Key: "$map", Value: bson.D{{Key: "input", Value: same}, {Key: "in", Value: ref("$$this.at")}}}}
+	entry := bson.D{{Key: "status", Value: status},
+		{Key: "at", Value: bson.D{{Key: "$min", Value: bson.A{at, bson.D{{Key: "$min", Value: sameAt}}}}}}}
 	return bson.D{{Key: "$slice", Value: bson.A{
 		bson.D{{Key: "$sortArray", Value: bson.D{
-			{Key: "input", Value: union("statusHistory", entry)},
+			{Key: "input", Value: bson.D{{Key: "$concatArrays", Value: bson.A{others, bson.A{entry}}}}},
 			{Key: "sortBy", Value: bson.D{{Key: "at", Value: 1}}},
 		}}},
 		-statusHistoryLimit,
