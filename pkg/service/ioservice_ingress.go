@@ -74,6 +74,20 @@ func (s *IOInfoService) UpdateIngressState(ctx context.Context, req *rpc.UpdateI
 		return nil, err
 	}
 
+	// BEGIN OPENVIDU BLOCK
+	// The ingress service sends no room_id until the session ends: name the active room of the ingress, so the stored
+	// state, the telemetry and the webhooks link a publishing session to its room.
+	if req.State != nil && req.State.RoomId == "" && info.RoomName != "" {
+		if rooms, ok := s.is.(ServiceStore); ok {
+			if room, _, loadErr := rooms.LoadRoom(ctx, livekit.RoomName(info.RoomName), false); loadErr == nil {
+				req.State.RoomId = room.Sid
+			} else {
+				logger.Debugw("ingress room not loaded", loadErr, "ingressID", req.IngressId, "room", info.RoomName)
+			}
+		}
+	}
+	// END OPENVIDU BLOCK
+
 	if err = s.is.UpdateIngressState(ctx, req.IngressId, req.State); err != nil {
 		logger.Errorw("could not update ingress", err)
 		return nil, err
