@@ -38,10 +38,12 @@ func osFamily(os string) string {
 	}
 }
 
-// browserFamily maps ClientInfo.browser to chrome, firefox, safari, edge or other.
+// browserFamily maps ClientInfo.browser to chrome, firefox, safari, edge, other, or none when the client reports none.
 func browserFamily(browser string) string {
-	value := strings.ToLower(browser)
+	value := strings.ToLower(strings.TrimSpace(browser))
 	switch {
+	case value == "":
+		return "none"
 	case strings.Contains(value, "edg"):
 		return "edge"
 	case strings.Contains(value, "firefox"):

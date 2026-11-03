@@ -408,6 +408,16 @@ func TestWriter(t *testing.T) {
 		}
 	})
 
+	t.Run("a session without a browser counts as none", func(t *testing.T) {
+		env := newEnv(t, client)
+		var ev events
+		joined := ev.joined("RM_1", participantInfo("PA_a", "alice", livekit.ParticipantInfo_STANDARD, at("5s")), at("5s"))
+		joined.ClientInfo = &livekit.ClientInfo{Sdk: livekit.ClientInfo_GO, Version: "2.19.0", Os: "linux"}
+		env.apply([]*livekit.AnalyticsEvent{ev.roomCreated("RM_1", "Daily", at("0s")), joined})
+		hourly := find[schema.HourlyRollupDocument](env, schema.CollectionAnalyticsHourly, "global:2026-10-12T10:00:00Z")
+		require.Equal(t, map[string]int32{"none": 1}, hourly.Participants.ByBrowser)
+	})
+
 	t.Run("values starting with $ stored as they are", func(t *testing.T) {
 		env := newEnv(t, client, func(c *openviduconfig.AnalyticsConfig) { c.StoreMetadata = true })
 		var ev events
