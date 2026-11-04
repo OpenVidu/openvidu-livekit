@@ -190,7 +190,7 @@ func Stats(stats []*livekit.AnalyticsStat, opts Options) StatsResult {
 			participant.down += s.bytes
 		}
 		participant.statsAt = maxTime(participant.statsAt, s.ts)
-		for _, scope := range scopes(stat.GetNode()) {
+		for _, scope := range scopes(opts.MediaNode) {
 			k := bucketKey{scope, s.ts.Truncate(fiveMinutes)}
 			if _, ok := connected[k]; !ok {
 				connectedOrder = append(connectedOrder, k)
@@ -233,7 +233,7 @@ func Stats(stats []*livekit.AnalyticsStat, opts Options) StatsResult {
 			} else {
 				room.down += document.Bytes
 			}
-			result.Increments = append(result.Increments, statsIncrements(document)...)
+			result.Increments = append(result.Increments, statsIncrements(document, opts.MediaNode)...)
 		}
 		result.Documents = append(result.Documents, documents...)
 	}
@@ -292,7 +292,7 @@ func (d *entityDelta) fields() *fields {
 	return f
 }
 
-func statsIncrements(document schema.TrackStatsDocument) []Increment {
+func statsIncrements(document schema.TrackStatsDocument, mediaNode string) []Increment {
 	counters := map[string]any{"bytes." + document.Meta.Kind: document.Bytes}
 	if document.Score > 0 {
 		counters["quality.scoreSum"] = document.Score
@@ -304,8 +304,8 @@ func statsIncrements(document schema.TrackStatsDocument) []Increment {
 			counters["quality.lost"] = one
 		}
 	}
-	increments := periodIncrements(document.Meta.NodeID, document.TS, counters)
-	for _, scope := range scopes(document.Meta.NodeID) {
+	increments := periodIncrements(mediaNode, document.TS, counters)
+	for _, scope := range scopes(mediaNode) {
 		increments = append(increments, Increment{Collection: schema.CollectionAnalytics5Min, Scope: scope,
 			Bucket: document.TS.Truncate(fiveMinutes), Counters: counters})
 	}

@@ -51,6 +51,8 @@ import (
 const (
 	scNodeAlpha     = "ND_alpha8Kq2Lm"
 	scNodeBeta      = "ND_beta3Vx9Pw"
+	scMediaAlpha    = "media-node-10-0-0-1"
+	scMediaBeta     = "media-node-10-0-0-2"
 	scServerVersion = "3.10.0"
 	scRegion        = "eu-west"
 	scClosedRoom    = "RM_aLkq3ZpD9wXy"
@@ -85,6 +87,9 @@ const (
 	scSession2  = "rtmp_9d4e2f6a8c1b"
 )
 
+// scMediaNodes are the media node labels of the scenario's two servers.
+var scMediaNodes = map[string]string{scNodeAlpha: scMediaAlpha, scNodeBeta: scMediaBeta}
+
 // sat returns an instant of the scenario day, "HH:MM:SS[.mmm]" UTC.
 func sat(clock string) time.Time {
 	t, err := time.Parse("2006-01-02T15:04:05.000Z", "2026-10-12T"+clock+strings.Repeat(".000", 1-strings.Count(clock, "."))+"Z")
@@ -107,8 +112,8 @@ func TestContractFixtures(t *testing.T) {
 			id        string
 			firstSeen time.Time
 		}{{scNodeAlpha, time.Date(2026, 10, 1, 8, 0, 0, 0, time.UTC)}, {scNodeBeta, time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)}} {
-			require.NoError(t, s.Heartbeat(ctx, node.id, scServerVersion, scRegion, 10*time.Second, true, node.firstSeen))
-			require.NoError(t, s.Heartbeat(ctx, node.id, scServerVersion, scRegion, 10*time.Second, true, sat("10:35:10")))
+			require.NoError(t, s.Heartbeat(ctx, node.id, scServerVersion, scRegion, 10*time.Second, true, scMediaNodes[node.id], node.firstSeen))
+			require.NoError(t, s.Heartbeat(ctx, node.id, scServerVersion, scRegion, 10*time.Second, true, scMediaNodes[node.id], sat("10:35:10")))
 		}
 		reconcileScenario(t, db, p.opts)
 
@@ -217,8 +222,29 @@ func replayScenario(t *testing.T, p *processor, events []*livekit.AnalyticsEvent
 				stats = append(stats, &statsEntry{stats: flush.stats})
 			}
 		}
+		p.opts.MediaNode = scenarioMediaNode(t, entries, stats)
 		require.NoError(t, p.apply(context.Background(), entries, stats), "batch at %s", w)
 	}
+	p.opts.MediaNode = ""
+}
+
+// scenarioMediaNode is the label of the server that writes a scenario batch: every batch comes from one node.
+func scenarioMediaNode(t *testing.T, entries []*eventEntry, stats []*statsEntry) string {
+	t.Helper()
+	nodes := map[string]bool{}
+	for _, entry := range entries {
+		nodes[entry.event.GetNodeId()] = true
+	}
+	for _, entry := range stats {
+		for _, stat := range entry.stats {
+			nodes[stat.GetNode()] = true
+		}
+	}
+	require.LessOrEqual(t, len(nodes), 1, "a scenario batch mixes nodes: %v", nodes)
+	for node := range nodes {
+		return scMediaNodes[node]
+	}
+	return ""
 }
 
 // --- Events -------------------------------------------------------------------------------------------------------

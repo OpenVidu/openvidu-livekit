@@ -25,27 +25,27 @@ import (
 
 const fiveMinutes = 5 * time.Minute
 
-// Scopes of a rollup increment: the whole deployment and the node that emitted the event.
-func scopes(nodeID string) []string {
-	if nodeID == "" {
+// Scopes of a rollup increment: the whole deployment and, for a labelled server, its media node.
+func scopes(mediaNode string) []string {
+	if mediaNode == "" {
 		return []string{"global"}
 	}
-	return []string{"global", "node:" + nodeID}
+	return []string{"global", "node:" + mediaNode}
 }
 
-// counters adds the same counters to the hourly and daily documents of both scopes.
+// counters adds the same counters to the hourly and daily documents of the node's scopes.
 func (p *projector) counters(counters map[string]any) {
-	p.result.Increments = append(p.result.Increments, periodIncrements(p.event.GetNodeId(), p.ts, counters)...)
+	p.result.Increments = append(p.result.Increments, periodIncrements(p.opts.MediaNode, p.ts, counters)...)
 }
 
-// fiveMinute adds counters to the 5-minute documents of both scopes.
+// fiveMinute adds counters to the 5-minute documents of the node's scopes.
 func (p *projector) fiveMinute(counters map[string]any) {
-	p.result.Increments = append(p.result.Increments, fiveMinuteIncrements(p.event.GetNodeId(), p.ts, counters)...)
+	p.result.Increments = append(p.result.Increments, fiveMinuteIncrements(p.opts.MediaNode, p.ts, counters)...)
 }
 
-func fiveMinuteIncrements(nodeID string, at time.Time, counters map[string]any) []Increment {
+func fiveMinuteIncrements(mediaNode string, at time.Time, counters map[string]any) []Increment {
 	var increments []Increment
-	for _, scope := range scopes(nodeID) {
+	for _, scope := range scopes(mediaNode) {
 		increments = append(increments, Increment{
 			Collection: schema.CollectionAnalytics5Min, Scope: scope, Bucket: at.Truncate(fiveMinutes), Counters: counters,
 		})
@@ -53,9 +53,9 @@ func fiveMinuteIncrements(nodeID string, at time.Time, counters map[string]any) 
 	return increments
 }
 
-func periodIncrements(nodeID string, at time.Time, counters map[string]any) []Increment {
+func periodIncrements(mediaNode string, at time.Time, counters map[string]any) []Increment {
 	var increments []Increment
-	for _, scope := range scopes(nodeID) {
+	for _, scope := range scopes(mediaNode) {
 		increments = append(increments,
 			Increment{Collection: schema.CollectionAnalyticsHourly, Scope: scope, Bucket: at.Truncate(time.Hour), Counters: counters},
 			Increment{Collection: schema.CollectionAnalyticsDaily, Scope: scope, Bucket: at.Truncate(24 * time.Hour), Counters: counters},
@@ -64,10 +64,10 @@ func periodIncrements(nodeID string, at time.Time, counters map[string]any) []In
 	return increments
 }
 
-// RoomEndedIncrements returns the participantsSum increments of a room closed at endedAt on nodeID, once the batch
-// knows its STANDARD participant sessions.
-func RoomEndedIncrements(nodeID string, endedAt time.Time, participants int32) []Increment {
-	return periodIncrements(nodeID, endedAt, map[string]any{"rooms.participantsSum": participants})
+// RoomEndedIncrements returns the participantsSum increments of a room of mediaNode (empty without a label) closed at
+// endedAt, once the batch knows its STANDARD participant sessions.
+func RoomEndedIncrements(mediaNode string, endedAt time.Time, participants int32) []Increment {
+	return periodIncrements(mediaNode, endedAt, map[string]any{"rooms.participantsSum": participants})
 }
 
 var one = int32(1)

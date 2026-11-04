@@ -39,6 +39,7 @@ type OpenParticipant struct {
 	Identity    string     `bson:"identity"`
 	Kind        string     `bson:"kind"`
 	NodeID      string     `bson:"nodeId"`
+	MediaNode   string     `bson:"mediaNode"`
 	Status      string     `bson:"status"`
 	JoinedAt    time.Time  `bson:"joinedAt"`
 	ActiveAt    *time.Time `bson:"activeAt"`
@@ -48,8 +49,8 @@ type OpenParticipant struct {
 
 var openParticipantFields = bson.D{
 	{Key: "roomSid", Value: 1}, {Key: "roomName", Value: 1}, {Key: "identity", Value: 1}, {Key: "kind", Value: 1},
-	{Key: "nodeId", Value: 1}, {Key: "status", Value: 1}, {Key: "joinedAt", Value: 1}, {Key: "activeAt", Value: 1},
-	{Key: "lastStatsAt", Value: 1}, {Key: "lastEventAt", Value: 1},
+	{Key: "nodeId", Value: 1}, {Key: "mediaNode", Value: 1}, {Key: "status", Value: 1}, {Key: "joinedAt", Value: 1},
+	{Key: "activeAt", Value: 1}, {Key: "lastStatsAt", Value: 1}, {Key: "lastEventAt", Value: 1},
 }
 
 // OpenRoom is an active room as the reconciler reads it.
@@ -57,6 +58,7 @@ type OpenRoom struct {
 	SID         string     `bson:"_id"`
 	Name        string     `bson:"name"`
 	NodeID      string     `bson:"nodeId"`
+	MediaNode   string     `bson:"mediaNode"`
 	CreatedAt   time.Time  `bson:"createdAt"`
 	LastEventAt time.Time  `bson:"lastEventAt"`
 	LastStatsAt *time.Time `bson:"lastStatsAt"`
@@ -64,11 +66,12 @@ type OpenRoom struct {
 
 // RoomRef is what the reconciler needs from the room of an egress or an ingress session.
 type RoomRef struct {
-	SID     string     `bson:"_id"`
-	Name    string     `bson:"name"`
-	NodeID  string     `bson:"nodeId"`
-	Status  string     `bson:"status"`
-	EndedAt *time.Time `bson:"endedAt"`
+	SID       string     `bson:"_id"`
+	Name      string     `bson:"name"`
+	NodeID    string     `bson:"nodeId"`
+	MediaNode string     `bson:"mediaNode"`
+	Status    string     `bson:"status"`
+	EndedAt   *time.Time `bson:"endedAt"`
 }
 
 // OpenEgress is an egress that has not ended.
@@ -226,8 +229,8 @@ func StaleRoomQuery(now time.Time, grace time.Duration, statsFrom time.Time, lim
 }
 
 var openRoomFields = bson.D{
-	{Key: "name", Value: 1}, {Key: "nodeId", Value: 1}, {Key: "createdAt", Value: 1}, {Key: "lastEventAt", Value: 1},
-	{Key: "lastStatsAt", Value: 1},
+	{Key: "name", Value: 1}, {Key: "nodeId", Value: 1}, {Key: "mediaNode", Value: 1}, {Key: "createdAt", Value: 1},
+	{Key: "lastEventAt", Value: 1}, {Key: "lastStatsAt", Value: 1},
 }
 
 // StaleRooms returns, at most limit and the stalest first, the active rooms whose last event is older than their empty
@@ -269,8 +272,8 @@ func (s *Store) Rooms(ctx context.Context, sids []string) (map[string]RoomRef, e
 	s.roundTrips++
 	cursor, err := s.db.Collection(schema.CollectionRooms).Find(ctx,
 		bson.D{{Key: "_id", Value: bson.D{{Key: "$in", Value: sids}}}},
-		options.Find().SetProjection(bson.D{{Key: "name", Value: 1}, {Key: "nodeId", Value: 1}, {Key: "status", Value: 1},
-			{Key: "endedAt", Value: 1}}))
+		options.Find().SetProjection(bson.D{{Key: "name", Value: 1}, {Key: "nodeId", Value: 1},
+			{Key: "mediaNode", Value: 1}, {Key: "status", Value: 1}, {Key: "endedAt", Value: 1}}))
 	if err != nil {
 		return nil, err
 	}
@@ -495,7 +498,7 @@ func (s *Store) DaysWithoutUniqueIdentities(ctx context.Context, from time.Time,
 }
 
 // UniqueIdentitiesPipeline counts the distinct identities of the STANDARD participant sessions that joined in
-// [from, to), overall and per node.
+// [from, to), overall and per media node label.
 func UniqueIdentitiesPipeline(from time.Time, to time.Time) mongo.Pipeline {
 	return mongo.Pipeline{
 		{{Key: "$match", Value: bson.D{
@@ -508,7 +511,7 @@ func UniqueIdentitiesPipeline(from time.Time, to time.Time) mongo.Pipeline {
 				bson.D{{Key: "$count", Value: "n"}},
 			}},
 			{Key: "nodes", Value: bson.A{
-				bson.D{{Key: "$group", Value: bson.D{{Key: "_id", Value: bson.D{{Key: "node", Value: "$nodeId"},
+				bson.D{{Key: "$group", Value: bson.D{{Key: "_id", Value: bson.D{{Key: "node", Value: "$mediaNode"},
 					{Key: "identity", Value: "$identity"}}}}}},
 				bson.D{{Key: "$group", Value: bson.D{{Key: "_id", Value: "$_id.node"}, {Key: "n", Value: bson.D{{Key: "$sum", Value: 1}}}}}},
 			}},
@@ -517,7 +520,7 @@ func UniqueIdentitiesPipeline(from time.Time, to time.Time) mongo.Pipeline {
 }
 
 // UniqueIdentities counts the distinct identities of the participant sessions that joined in [from, to), overall and
-// per node.
+// per media node label; sessions without a label count only overall.
 func (s *Store) UniqueIdentities(ctx context.Context, from time.Time, to time.Time) (int32, map[string]int32, error) {
 	s.roundTrips++
 	cursor, err := s.db.Collection(schema.CollectionParticipants).Aggregate(ctx, UniqueIdentitiesPipeline(from, to))

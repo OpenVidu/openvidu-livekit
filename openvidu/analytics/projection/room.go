@@ -49,12 +49,23 @@ func (p *projector) roomTouch(name string) *fields {
 	return f
 }
 
-// markFirstWriter stamps mediaStats: false on an entity this node writes first, when it reports no media statistics: the
-// mark follows nodeId, which the first writer sets.
+// markFirstWriter stamps mediaStats: false, when this node reports no media statistics, and its media node label on an
+// entity this node writes first: both marks follow nodeId, which the first writer sets.
 func (p *projector) markFirstWriter(f *fields) {
 	if p.opts.WithoutMediaStats {
 		f.set("mediaStats", cond(exists("nodeId"), field("mediaStats"), false))
 	}
+	if p.opts.MediaNode != "" {
+		f.set("mediaNode", cond(exists("nodeId"), field("mediaNode"), p.opts.MediaNode))
+	}
+}
+
+// mediaNodeMark is the media node label of an entity this node hosts, none when the node has no label.
+func (p *projector) mediaNodeMark() any {
+	if p.opts.MediaNode != "" {
+		return p.opts.MediaNode
+	}
+	return remove
 }
 
 // mediaStatsMark is the mark of an entity this node hosts: false when it reports no media statistics, none otherwise.
@@ -82,6 +93,7 @@ func (p *projector) room() {
 		f.set("status", ranked("status", roomActive, roomRanks))
 		f.set("nodeId", p.event.GetNodeId())
 		f.set("mediaStats", p.mediaStatsMark())
+		f.set("mediaNode", p.mediaNodeMark())
 		f.set("config.maxParticipants", int32(room.GetMaxParticipants()))
 		f.set("config.emptyTimeoutMs", schema.SecondsToMs(room.GetEmptyTimeout()))
 		f.set("config.departureTimeoutMs", schema.SecondsToMs(room.GetDepartureTimeout()))

@@ -124,6 +124,7 @@ func TestWriter(t *testing.T) {
 
 	t.Run("room lifecycle", func(t *testing.T) {
 		env := newEnv(t, client)
+		env.p.opts.MediaNode = testMediaNode
 		var ev events
 		created := at("0s")
 		a := participantInfo("PA_a", "alice", livekit.ParticipantInfo_STANDARD, at("5s"))
@@ -159,7 +160,7 @@ func TestWriter(t *testing.T) {
 		require.EqualValues(t, 3, hourly.Participants.BySDK["JS"])
 		require.EqualValues(t, 3, hourly.Participants.ByOS["windows"])
 		require.EqualValues(t, 3, hourly.Participants.ByBrowser["chrome"])
-		require.NotNil(t, find[schema.HourlyRollupDocument](env, schema.CollectionAnalyticsHourly, "node:ND_test:2026-10-12T10:00:00Z").Rooms)
+		require.NotNil(t, find[schema.HourlyRollupDocument](env, schema.CollectionAnalyticsHourly, "node:"+testMediaNode+":2026-10-12T10:00:00Z").Rooms)
 	})
 
 	t.Run("only standard participants count as participants", func(t *testing.T) {
@@ -590,6 +591,7 @@ func TestWriter(t *testing.T) {
 
 	t.Run("stats in participant detail", func(t *testing.T) {
 		env := newEnv(t, client)
+		env.p.opts.MediaNode = testMediaNode
 		var ev events
 		alice := participantInfo("PA_a", "alice", livekit.ParticipantInfo_STANDARD, at("1s"))
 		env.apply([]*livekit.AnalyticsEvent{ev.roomCreated("RM_1", "r", at("0s")), ev.joined("RM_1", alice, at("1s"))})
@@ -616,7 +618,7 @@ func TestWriter(t *testing.T) {
 		fiveMinutes := find[schema.FiveMinuteRollupDocument](env, schema.CollectionAnalytics5Min, "global:2026-10-12T10:00:00Z")
 		require.Equal(t, int64(1500), *fiveMinutes.Bytes.Up)
 		require.EqualValues(t, 1, *fiveMinutes.Participants.Connected)
-		require.NotNil(t, find[schema.FiveMinuteRollupDocument](env, schema.CollectionAnalytics5Min, "node:ND_test:2026-10-12T10:00:00Z").Bytes)
+		require.NotNil(t, find[schema.FiveMinuteRollupDocument](env, schema.CollectionAnalytics5Min, "node:"+testMediaNode+":2026-10-12T10:00:00Z").Bytes)
 		hourly := find[schema.HourlyRollupDocument](env, schema.CollectionAnalyticsHourly, "global:2026-10-12T10:00:00Z")
 		require.Equal(t, int64(1500), *hourly.Bytes.Up)
 	})
@@ -687,6 +689,52 @@ func TestWriter(t *testing.T) {
 		require.Nil(t, find[schema.RoomDocument](env, schema.CollectionRooms, "RM_1").MediaStats)
 	})
 
+	t.Run("a labelled node stamps its rooms and sessions and keys the node scope by the label", func(t *testing.T) {
+		env := newEnv(t, client)
+		env.p.opts.MediaNode = "mn-a"
+		var ev events
+		alice := participantInfo("PA_a", "alice", livekit.ParticipantInfo_STANDARD, at("1s"))
+		env.apply([]*livekit.AnalyticsEvent{ev.roomCreated("RM_1", "r", at("0s")), ev.joined("RM_1", alice, at("1s"))})
+		env.apply(nil, []*livekit.AnalyticsStat{stat("RM_1", "PA_a", "TR_cam", livekit.StreamType_UPSTREAM, at("30s"), 4.5, 1000)})
+
+		room := find[schema.RoomDocument](env, schema.CollectionRooms, "RM_1")
+		require.Equal(t, testNode, room.NodeID)
+		require.Equal(t, "mn-a", room.MediaNode)
+		require.Equal(t, "mn-a", find[schema.ParticipantDocument](env, schema.CollectionParticipants, "PA_a").MediaNode)
+		hour := at("0s").Truncate(time.Hour).Format(time.RFC3339)
+		hourly := find[schema.HourlyRollupDocument](env, schema.CollectionAnalyticsHourly, "node:mn-a:"+hour)
+		require.EqualValues(t, 1, *hourly.Rooms.Created)
+		require.EqualValues(t, 1000, *hourly.Bytes.Up)
+		require.Zero(t, count(env, schema.CollectionAnalyticsHourly, bson.D{{Key: "scope", Value: "node:" + testNode}}))
+	})
+
+	t.Run("a server without a label writes no mediaNode and only the global scope", func(t *testing.T) {
+		env := newEnv(t, client)
+		var ev events
+		alice := participantInfo("PA_a", "alice", livekit.ParticipantInfo_STANDARD, at("1s"))
+		env.apply([]*livekit.AnalyticsEvent{ev.roomCreated("RM_1", "r", at("0s")), ev.joined("RM_1", alice, at("1s"))})
+		env.apply(nil, []*livekit.AnalyticsStat{stat("RM_1", "PA_a", "TR_cam", livekit.StreamType_UPSTREAM, at("30s"), 4.5, 1000)})
+
+		require.Empty(t, find[schema.RoomDocument](env, schema.CollectionRooms, "RM_1").MediaNode)
+		require.Empty(t, find[schema.ParticipantDocument](env, schema.CollectionParticipants, "PA_a").MediaNode)
+		for _, collection := range []string{schema.CollectionAnalytics5Min, schema.CollectionAnalyticsHourly, schema.CollectionAnalyticsDaily} {
+			require.Zero(t, count(env, collection, bson.D{{Key: "scope", Value: bson.D{{Key: "$ne", Value: "global"}}}}), collection)
+		}
+	})
+
+	t.Run("ROOM_CREATED sets the label of the node that hosts the room", func(t *testing.T) {
+		env := newEnv(t, client)
+		var ev events
+		env.p.opts.MediaNode = "mn-b"
+		egress := roomCompositeEgress("EG_1", "RM_1", livekit.EgressStatus_EGRESS_STARTING, at("1s"), at("1s"))
+		env.apply([]*livekit.AnalyticsEvent{ev.egress(livekit.AnalyticsEventType_EGRESS_STARTED, egress, at("1s"))})
+		require.Equal(t, "mn-b", find[schema.RoomDocument](env, schema.CollectionRooms, "RM_1").MediaNode)
+
+		env.p.opts.MediaNode = "mn-a"
+		env.apply([]*livekit.AnalyticsEvent{ev.roomCreated("RM_1", "r", at("0s"))})
+		require.Equal(t, "mn-a", find[schema.RoomDocument](env, schema.CollectionRooms, "RM_1").MediaNode)
+	})
+
 	t.Run("stats in track detail, quality bands and connected participants", func(t *testing.T) {
 		env := newEnv(t, client, func(c *openviduconfig.AnalyticsConfig) { c.StatsDetail = "track" })
 		var ev events
@@ -716,6 +764,7 @@ func TestWriter(t *testing.T) {
 
 	t.Run("hourly counters do not double count a replayed batch", func(t *testing.T) {
 		env := newEnv(t, client)
+		env.p.opts.MediaNode = testMediaNode
 		var ev events
 		var batch []*livekit.AnalyticsEvent
 		for i, sid := range []string{"RM_1", "RM_2", "RM_3", "RM_4", "RM_5"} {
@@ -728,7 +777,7 @@ func TestWriter(t *testing.T) {
 		env.apply(batch)
 		env.p.cache = newRefCache()
 		env.apply(batch)
-		for _, id := range []string{"global:2026-10-12T10:00:00Z", "node:ND_test:2026-10-12T10:00:00Z"} {
+		for _, id := range []string{"global:2026-10-12T10:00:00Z", "node:" + testMediaNode + ":2026-10-12T10:00:00Z"} {
 			hourly := find[schema.HourlyRollupDocument](env, schema.CollectionAnalyticsHourly, id)
 			require.EqualValues(t, 5, *hourly.Rooms.Created, id)
 			require.EqualValues(t, 2, *hourly.Rooms.Ended, id)

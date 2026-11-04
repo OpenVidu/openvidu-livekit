@@ -163,7 +163,7 @@ func (w *writer) applyBatch(ctx context.Context, events []*eventEntry, stats []*
 	w.store.ResetRoundTrips()
 	err := w.processor.apply(ctx, events, stats)
 	if heartbeatErr := w.store.Heartbeat(ctx, w.node.ID, openviduversion.Version, w.node.Region, w.interval,
-		!w.node.WithoutMediaStats, time.Now().UTC().Truncate(time.Millisecond)); err == nil {
+		!w.node.WithoutMediaStats, w.node.MediaNode, time.Now().UTC().Truncate(time.Millisecond)); err == nil {
 		err = heartbeatErr
 	}
 	w.metrics.batchDuration.Observe(time.Since(started).Seconds())
@@ -260,6 +260,17 @@ func (w *writer) drain(ctx context.Context) {
 		return
 	}
 	logger.Infow("analytics queues flushed")
+	w.recordStop(ctx)
+}
+
+// recordStop marks the node document as stopped once the queues are written, within the shutdown deadline.
+func (w *writer) recordStop(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
+	if err := w.store.Stopped(ctx, w.node.ID, time.Now().UTC().Truncate(time.Millisecond)); err != nil {
+		logger.Warnw("analytics: node stop not recorded", err)
+	}
 }
 
 // isTransient reports errors a later retry can overcome: network errors, timeouts, elections, write concern and the

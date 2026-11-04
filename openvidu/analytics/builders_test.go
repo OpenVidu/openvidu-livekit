@@ -27,6 +27,9 @@ import (
 
 const testNode = "ND_test"
 
+// testMediaNode is the media node label of the tests that write as a labelled server.
+const testMediaNode = "mn-test"
+
 var baseTime = time.Date(2026, 10, 12, 10, 0, 0, 0, time.UTC)
 
 // at returns baseTime plus an offset such as "1m30s".

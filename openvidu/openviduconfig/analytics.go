@@ -37,6 +37,11 @@ var DefaultStatsDetail = "participant"
 // marks its node, rooms and participant sessions.
 var MediaStats = true
 
+// MediaNode is the media node label of this server: a name of the machine that stays the same across restarts. A
+// server edition that runs several media nodes sets it before the analytics start; the writer then stamps it on the
+// node, its rooms and participant sessions, and keys the node scope of the rollups by it. Empty means no label.
+var MediaNode = ""
+
 // AnalyticsConfig is the `openvidu.analytics` section. Durations and the event type list are string kinds so that
 // LiveKit derives their LIVEKIT_OPENVIDU_ANALYTICS_* environment variables and CLI flags like any other string.
 type AnalyticsConfig struct {

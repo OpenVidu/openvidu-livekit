@@ -38,7 +38,10 @@ type Options struct {
 	StatsDetail string
 	// WithoutMediaStats stamps mediaStats: false on the rooms and participant sessions this node creates.
 	WithoutMediaStats bool
-	Encode            schema.EncodeOptions
+	// MediaNode is the media node label stamped on the rooms and participant sessions this node hosts and the node
+	// scope of its rollup increments; empty writes neither.
+	MediaNode string
+	Encode    schema.EncodeOptions
 	// Stores reports whether events of a type are stored raw.
 	Stores func(eventType string) bool
 }

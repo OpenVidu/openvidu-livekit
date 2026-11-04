@@ -47,6 +47,7 @@ type fakeStore struct {
 	stats       int
 	increments  int
 	heartbeats  int
+	stops       int
 }
 
 func (f *fakeStore) enter() func() {
@@ -120,10 +121,17 @@ func (f *fakeStore) Tracks(context.Context, []string, []string) (map[string]proj
 	return map[string]projection.TrackRef{}, map[string][]string{}, nil
 }
 
-func (f *fakeStore) Heartbeat(context.Context, string, string, string, time.Duration, bool, time.Time) error {
+func (f *fakeStore) Heartbeat(context.Context, string, string, string, time.Duration, bool, string, time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.heartbeats++
+	return nil
+}
+
+func (f *fakeStore) Stopped(context.Context, string, time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stops++
 	return nil
 }
 

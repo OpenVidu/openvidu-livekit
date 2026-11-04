@@ -116,6 +116,8 @@ type Node struct {
 	Region string
 	// WithoutMediaStats marks a node whose media engine produces no media statistics.
 	WithoutMediaStats bool
+	// MediaNode is the media node label of the server, empty when it has none.
+	MediaNode string
 }
 
 // ErrUnsupportedDatabase is the error of InitializeAnalytics for a database without updates with an aggregation
@@ -290,6 +292,7 @@ func projectionOptions(settings openviduconfig.AnalyticsSettings) projection.Opt
 func nodeProjectionOptions(settings openviduconfig.AnalyticsSettings, node Node) projection.Options {
 	opts := projectionOptions(settings)
 	opts.WithoutMediaStats = node.WithoutMediaStats
+	opts.MediaNode = node.MediaNode
 	return opts
 }
 

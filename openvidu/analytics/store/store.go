@@ -404,10 +404,10 @@ func (s *Store) Tracks(ctx context.Context, trackSids []string, publisherSids []
 	return refs, byPublisher, nil
 }
 
-// Heartbeat upserts the node document: firstSeenAt on insert, lastSeenAt advanced, version, region and whether the node
-// reports media statistics refreshed.
+// Heartbeat upserts the node document: firstSeenAt on insert, lastSeenAt advanced, version, region, whether the node
+// reports media statistics and its media node label refreshed.
 func (s *Store) Heartbeat(ctx context.Context, nodeID string, serverVersion string, region string,
-	batchInterval time.Duration, mediaStats bool, at time.Time) error {
+	batchInterval time.Duration, mediaStats bool, mediaNode string, at time.Time) error {
 	set := bson.D{
 		{Key: "serverVersion", Value: serverVersion},
 		{Key: "batchIntervalMs", Value: int32(batchInterval.Milliseconds())},
@@ -416,12 +416,25 @@ func (s *Store) Heartbeat(ctx context.Context, nodeID string, serverVersion stri
 	if region != "" {
 		set = append(set, bson.E{Key: "region", Value: region})
 	}
+	if mediaNode != "" {
+		set = append(set, bson.E{Key: "mediaNode", Value: mediaNode})
+	}
 	s.roundTrips++
 	_, err := s.db.Collection(schema.CollectionNodes).UpdateOne(ctx, bson.D{{Key: "_id", Value: nodeID}}, bson.D{
 		{Key: "$setOnInsert", Value: bson.D{{Key: "firstSeenAt", Value: at}}},
 		{Key: "$max", Value: bson.D{{Key: "lastSeenAt", Value: at}}},
 		{Key: "$set", Value: set},
 	}, options.UpdateOne().SetUpsert(true))
+	return err
+}
+
+// Stopped records the graceful stop of a node on its document: stoppedAt and lastSeenAt advanced to at.
+func (s *Store) Stopped(ctx context.Context, nodeID string, at time.Time) error {
+	s.roundTrips++
+	_, err := s.db.Collection(schema.CollectionNodes).UpdateOne(ctx, bson.D{{Key: "_id", Value: nodeID}}, bson.D{
+		{Key: "$max", Value: bson.D{{Key: "lastSeenAt", Value: at}}},
+		{Key: "$set", Value: bson.D{{Key: "stoppedAt", Value: at}}},
+	})
 	return err
 }
 

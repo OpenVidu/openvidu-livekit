@@ -100,6 +100,7 @@ type RoomDocument struct {
 	LastEventAt   time.Time               `bson:"lastEventAt"`
 	LastStatsAt   *time.Time              `bson:"lastStatsAt,omitempty"`
 	MediaStats    *bool                   `bson:"mediaStats,omitempty"`
+	MediaNode     string                  `bson:"mediaNode,omitempty"`
 	Internal      bson.M                  `bson:"internal,omitempty"`
 	SchemaVersion int32                   `bson:"schemaVersion"`
 	ExpiresAt     *time.Time              `bson:"expiresAt"`
@@ -177,6 +178,7 @@ type ParticipantDocument struct {
 	LastEventAt      time.Time                `bson:"lastEventAt"`
 	LastStatsAt      *time.Time               `bson:"lastStatsAt,omitempty"`
 	MediaStats       *bool                    `bson:"mediaStats,omitempty"`
+	MediaNode        string                   `bson:"mediaNode,omitempty"`
 	Internal         bson.M                   `bson:"internal,omitempty"`
 	SchemaVersion    int32                    `bson:"schemaVersion"`
 	ExpiresAt        *time.Time               `bson:"expiresAt"`
@@ -564,13 +566,15 @@ type FiveMinuteRollupDocument struct {
 
 // NodeDocument is a `nodes` document, refreshed on every writer batch.
 type NodeDocument struct {
-	ID              string    `bson:"_id"`
-	FirstSeenAt     time.Time `bson:"firstSeenAt"`
-	LastSeenAt      time.Time `bson:"lastSeenAt"`
-	ServerVersion   string    `bson:"serverVersion"`
-	Region          string    `bson:"region,omitempty"`
-	BatchIntervalMs int32     `bson:"batchIntervalMs,omitempty"`
-	MediaStats      *bool     `bson:"mediaStats,omitempty"`
+	ID              string     `bson:"_id"`
+	FirstSeenAt     time.Time  `bson:"firstSeenAt"`
+	LastSeenAt      time.Time  `bson:"lastSeenAt"`
+	ServerVersion   string     `bson:"serverVersion"`
+	Region          string     `bson:"region,omitempty"`
+	BatchIntervalMs int32      `bson:"batchIntervalMs,omitempty"`
+	MediaStats      *bool      `bson:"mediaStats,omitempty"`
+	MediaNode       string     `bson:"mediaNode,omitempty"`
+	StoppedAt       *time.Time `bson:"stoppedAt,omitempty"`
 }
 
 // Identifiers of the `schema_meta` documents.

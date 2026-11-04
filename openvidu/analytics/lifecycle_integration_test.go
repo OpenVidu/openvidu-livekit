@@ -110,6 +110,30 @@ func TestWriterLifecycle(t *testing.T) {
 		require.False(t, *node.MediaStats)
 	})
 
+	t.Run("heartbeat of a labelled node", func(t *testing.T) {
+		env := newEnv(t, client)
+		w := newWriter(store.New(env.db), env.settings, Node{ID: testNode, MediaNode: "mn-a"}, newMetrics())
+
+		require.NoError(t, w.tick(ctx))
+		require.Equal(t, "mn-a", find[schema.NodeDocument](env, schema.CollectionNodes, testNode).MediaNode)
+		require.Nil(t, find[schema.NodeDocument](env, schema.CollectionNodes, testNode).StoppedAt)
+	})
+
+	t.Run("a graceful stop records stoppedAt after the final batch", func(t *testing.T) {
+		env := newEnv(t, client)
+		w := newWriter(store.New(env.db), env.settings, Node{ID: testNode}, newMetrics())
+		require.NoError(t, w.tick(ctx))
+		w.enqueueEvents(roomEvents(2))
+
+		drainCtx, cancel := context.WithTimeout(ctx, ShutdownTimeout)
+		defer cancel()
+		w.drain(drainCtx)
+		node := find[schema.NodeDocument](env, schema.CollectionNodes, testNode)
+		require.NotNil(t, node.StoppedAt)
+		require.False(t, node.StoppedAt.Before(node.LastSeenAt))
+		require.Equal(t, int64(2), count(env, schema.CollectionRooms, bson.D{}))
+	})
+
 	t.Run("stop flushes the shutdown events and the final stats", func(t *testing.T) {
 		name := "lifecycle_stop"
 		db := client.Database(name)
@@ -167,6 +191,9 @@ func TestWriterLifecycle(t *testing.T) {
 		eventsCount, err := db.Collection(schema.CollectionEvents).CountDocuments(ctx, bson.D{})
 		require.NoError(t, err)
 		require.Equal(t, int64(6), eventsCount)
+		var node schema.NodeDocument
+		require.NoError(t, db.Collection(schema.CollectionNodes).FindOne(ctx, bson.D{{Key: "_id", Value: testNode}}).Decode(&node))
+		require.NotNil(t, node.StoppedAt, "the stop is recorded after the final batch")
 	})
 
 	t.Run("legacy events collection is renamed once", func(t *testing.T) {

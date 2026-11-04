@@ -19,6 +19,7 @@ package analytics
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -67,7 +68,7 @@ func newReconcilerEnv(t *testing.T, client *mongo.Client, configure ...func(*ope
 
 func (e *reconcilerEnv) heartbeat(node string, at time.Time) {
 	e.t.Helper()
-	require.NoError(e.t, store.New(e.db).Heartbeat(context.Background(), node, "test", "", 10*time.Second, true, at))
+	require.NoError(e.t, store.New(e.db).Heartbeat(context.Background(), node, "test", "", 10*time.Second, true, "", at))
 }
 
 func (e *reconcilerEnv) reconcile() runReport {
@@ -79,6 +80,28 @@ func (e *reconcilerEnv) reconcile() runReport {
 
 func before(d time.Duration) time.Time {
 	return reconcileNow.Add(-d)
+}
+
+// mediaNodeOf is the media node label the tests give each simulated node: "mn-dead" for "ND_dead".
+func mediaNodeOf(node string) string {
+	return "mn-" + strings.ToLower(strings.TrimPrefix(node, "ND_"))
+}
+
+// apply writes a batch as the labelled node of its first event (or stat) would, through the shared processor.
+func (e *reconcilerEnv) apply(batch []*livekit.AnalyticsEvent, stats ...[]*livekit.AnalyticsStat) {
+	e.t.Helper()
+	node := ""
+	if len(batch) > 0 {
+		node = batch[0].GetNodeId()
+	} else if len(stats) > 0 && len(stats[0]) > 0 {
+		node = stats[0][0].GetNode()
+	}
+	e.p.opts.MediaNode = ""
+	if node != "" {
+		e.p.opts.MediaNode = mediaNodeOf(node)
+	}
+	defer func() { e.p.opts.MediaNode = "" }()
+	e.testEnv.apply(batch, stats...)
 }
 
 // on moves an event to a node, as the node hosting the room emits it.
@@ -399,7 +422,7 @@ func TestReconcilerClosures(t *testing.T) {
 		require.EqualValues(t, 1, *hourly.Participants.Left)
 		require.EqualValues(t, 1, hourly.Participants.DisconnectReasons["RECONCILED"])
 		find[schema.HourlyRollupDocument](env.testEnv, schema.CollectionAnalyticsHourly,
-			"node:"+nodeDead+":"+leftAt.Truncate(time.Hour).Format(time.RFC3339))
+			"node:"+mediaNodeOf(nodeDead)+":"+leftAt.Truncate(time.Hour).Format(time.RFC3339))
 
 		event := find[syntheticEvent](env.testEnv, schema.CollectionEvents, "AE_SYN_PA_pub")
 		require.Equal(t, "PARTICIPANT_LEFT", event.Type)
@@ -823,14 +846,30 @@ func TestReconcilerUniqueIdentities(t *testing.T) {
 		document := find[bson.M](env.testEnv, schema.CollectionAnalyticsDaily, scope+":"+day.Truncate(24*time.Hour).Format(time.RFC3339))
 		return document["uniqueIdentities"]
 	}
-	require.Equal(t, []any{int32(3), int32(2), int32(2)}, []any{value("global", day1), value("node:ND_a", day1), value("node:ND_b", day1)})
-	require.Equal(t, []any{int32(1), int32(1), int32(0)}, []any{value("global", day2), value("node:ND_a", day2), value("node:ND_b", day2)})
+	require.Equal(t, []any{int32(3), int32(2), int32(2)}, []any{value("global", day1), value("node:mn-a", day1), value("node:mn-b", day1)})
+	require.Equal(t, []any{int32(1), int32(1), int32(0)}, []any{value("global", day2), value("node:mn-a", day2), value("node:mn-b", day2)})
 	require.Nil(t, value("global", reconcileNow), "the current day has no value until it closes")
 
 	first := snapshot(env.testEnv, schema.CollectionAnalyticsDaily)
 	env.reconcile()
 	require.Equal(t, first, snapshot(env.testEnv, schema.CollectionAnalyticsDaily))
 	require.NotEmpty(t, env.logs.matching("debug", "unique identities"))
+}
+
+func TestReconcilerUniqueIdentitiesWithoutLabels(t *testing.T) {
+	client := mongotest.StartMongo(t)
+	env := newReconcilerEnv(t, client)
+	day := time.Date(2026, 10, 10, 9, 0, 0, 0, time.UTC)
+	for i, identity := range []string{"alice", "bob"} {
+		info := participantInfo(fmt.Sprintf("PA_%d", i), identity, livekit.ParticipantInfo_STANDARD, day)
+		env.testEnv.apply([]*livekit.AnalyticsEvent{env.ev.roomCreated("RM_x", "room-x", day), env.ev.joined("RM_x", info, day),
+			env.ev.left("RM_x", info, day.Add(time.Minute), livekit.DisconnectReason_CLIENT_INITIATED)})
+	}
+
+	env.reconcile()
+	global := find[bson.M](env.testEnv, schema.CollectionAnalyticsDaily, "global:"+day.Truncate(24*time.Hour).Format(time.RFC3339))
+	require.Equal(t, int32(2), global["uniqueIdentities"])
+	require.Zero(t, count(env.testEnv, schema.CollectionAnalyticsDaily, bson.D{{Key: "scope", Value: bson.D{{Key: "$ne", Value: "global"}}}}))
 }
 
 func valueOf(n *int32) int32 {

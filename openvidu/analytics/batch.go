@@ -68,7 +68,8 @@ type batchStore interface {
 	ExistingEvents(ctx context.Context, ids []string) (map[string]bool, error)
 	Tracks(ctx context.Context, trackSids []string, publisherSids []string) (map[string]projection.TrackRef, map[string][]string, error)
 	Heartbeat(ctx context.Context, nodeID string, serverVersion string, region string, batchInterval time.Duration,
-		mediaStats bool, at time.Time) error
+		mediaStats bool, mediaNode string, at time.Time) error
+	Stopped(ctx context.Context, nodeID string, at time.Time) error
 	RoundTrips() int
 	ResetRoundTrips()
 }
@@ -335,7 +336,7 @@ func (p *processor) applyRollups(ctx context.Context, events []*eventEntry) erro
 			}
 			ts := schema.FromTimestamp(entry.event.GetTimestamp())
 			increments = append(increments,
-				projection.RoomEndedIncrements(entry.event.GetNodeId(), ts, sessions[entry.result.EndedRoom])...)
+				projection.RoomEndedIncrements(p.opts.MediaNode, ts, sessions[entry.result.EndedRoom])...)
 		}
 	}
 	if err := p.rejected(p.store.ApplyIncrements(ctx, projection.MergeIncrements(increments))); err != nil {
