@@ -63,6 +63,10 @@ type RedisRouter struct {
 	// localLag is how late the last stats timer fired, measured before touching Redis. A stalled Redis
 	// cannot inflate it, so it tells a starved node apart from a slow Redis when a keepalive arrives late.
 	localLag atomic.Int64
+	// registeredAt is when this node last wrote its own entry in Redis, and steadySince when its current
+	// run of on-time writes started (unix nanoseconds). See registrationSteady.
+	registeredAt atomic.Int64
+	steadySince  atomic.Int64
 	// END OPENVIDU BLOCK
 }
 
@@ -85,6 +89,7 @@ func (r *RedisRouter) RegisterNode() error {
 		return errors.Wrap(err, "could not register node")
 	}
 	// BEGIN OPENVIDU BLOCK
+	r.recordRegistration(time.Now())
 	if err := customrouting.RegisterNodeCustom(r.ctx, r.rc, string(r.currentNode.NodeID())); err != nil {
 		return errors.Wrap(err, "could not register openvidu node")
 	}
@@ -114,8 +119,14 @@ func (r *RedisRouter) RemoveDeadNodes(customCleanup CustomCleanup) error {
 
 	logger.Debugw("redis cleanup: listed nodes", "nodes", nodes)
 
+	steady := r.registrationSteady(time.Now())
 	for _, n := range nodes {
 		if !selector.IsAvailable(n) {
+
+			if !steady {
+				logger.Infow("redis cleanup: stale node left for a later run, this node's own registration is not steady", "node", n.Id)
+				continue
+			}
 
 			logger.Infow("redis cleanup: dead node detected", "node", n.Id)
 
@@ -413,6 +424,27 @@ func classifyKeepalivePing(age, localLag, interval time.Duration) keepaliveVerdi
 		return keepaliveLateNode
 	}
 	return keepaliveLateRedis
+}
+
+// recordRegistration records that this node has just written its own entry in Redis. A write later than
+// twice the stats interval after the previous one starts a new run of on-time writes.
+func (r *RedisRouter) recordRegistration(now time.Time) {
+	previous := r.registeredAt.Swap(now.UnixNano())
+	if previous == 0 || now.Sub(time.Unix(0, previous)) > 2*r.nodeStatsConfig.StatsUpdateInterval {
+		r.steadySince.Store(now.UnixNano())
+	}
+}
+
+// registrationSteady tells whether this node has kept its own entry in Redis fresh for the last few stats
+// intervals. When Redis is down or slow, or has just come back, every node looks stale for the same
+// reason, and the other nodes need a few intervals to refresh their entries: until then a stale node
+// cannot be told apart from a dead one.
+func (r *RedisRouter) registrationSteady(now time.Time) bool {
+	interval := r.nodeStatsConfig.StatsUpdateInterval
+	registeredAt := r.registeredAt.Load()
+	return registeredAt != 0 &&
+		now.Sub(time.Unix(0, registeredAt)) <= 2*interval &&
+		now.Sub(time.Unix(0, r.steadySince.Load())) >= 3*interval
 }
 
 // END OPENVIDU BLOCK
