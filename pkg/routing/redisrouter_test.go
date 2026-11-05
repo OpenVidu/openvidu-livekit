@@ -25,6 +25,9 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/livekit/protocol/livekit"
+	"github.com/livekit/protocol/logger"
+	"github.com/livekit/protocol/rpc"
+	"github.com/livekit/psrpc"
 
 	"github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/livekit-server/pkg/routing/selector"
@@ -169,4 +172,47 @@ func TestRemoveDeadNodesWaitsForSteadyRegistration(t *testing.T) {
 	markSteady(steady)
 	require.NoError(t, steady.RemoveDeadNodes(noopCleanup{}))
 	require.False(t, rc.HExists(ctx, NodesKey, "stale").Val(), "a stale node must be removed once this node's registration is steady")
+}
+
+// freshStatsNode is a node whose stats refresh always succeeds.
+type freshStatsNode struct {
+	*LocalNodeImpl
+}
+
+func (n freshStatsNode) UpdateNodeStats() bool {
+	n.SetStats(&livekit.NodeStats{UpdatedAt: time.Now().Unix()})
+	return true
+}
+
+// The keepalive of a running router survives a Redis restart, which drops its connections and subscriptions:
+// the router writes its own entry again once Redis is back, and its registration is steady three intervals
+// after that, so its cleanups resume.
+func TestRegistrationSteadyThroughRedisRestart(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rc := redis.NewClient(&redis.Options{Addr: mr.Addr(), DialTimeout: 200 * time.Millisecond,
+		ReadTimeout: 200 * time.Millisecond, WriteTimeout: 200 * time.Millisecond})
+	t.Cleanup(func() { _ = rc.Close() })
+	kps, err := rpc.NewKeepalivePubSub(rpc.NewClientParams(rpc.PSRPCConfig{}, psrpc.NewRedisMessageBus(rc), logger.GetLogger(), nil))
+	require.NoError(t, err)
+	node, err := NewLocalNodeFromNodeProto(&livekit.Node{Id: "self", Stats: &livekit.NodeStats{UpdatedAt: time.Now().Unix()}})
+	require.NoError(t, err)
+	statsConfig := config.DefaultNodeStatsConfig
+	statsConfig.StatsUpdateInterval = 200 * time.Millisecond
+	router := NewRedisRouter(NewLocalRouter(freshStatsNode{node}, nil, nil, statsConfig), rc, kps)
+	require.NoError(t, router.RegisterNode())
+	require.NoError(t, router.Start())
+	t.Cleanup(router.Stop)
+
+	steady := func() bool { return router.registrationSteady(time.Now()) }
+	require.Eventually(t, steady, 5*time.Second, 10*time.Millisecond)
+
+	mr.Close()
+	require.Eventually(t, func() bool { return !steady() }, 5*time.Second, 10*time.Millisecond)
+	time.Sleep(2 * time.Second)
+	require.Never(t, steady, time.Second, 10*time.Millisecond, "no registration while Redis is down")
+
+	require.NoError(t, mr.Restart())
+	back := time.Now()
+	require.Eventually(t, steady, 10*time.Second, 10*time.Millisecond)
+	require.GreaterOrEqual(t, time.Since(back), 3*statsConfig.StatsUpdateInterval)
 }
