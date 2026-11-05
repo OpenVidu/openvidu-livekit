@@ -27,9 +27,12 @@ import (
 	"github.com/livekit/livekit-server/pkg/utils"
 )
 
+// BEGIN OPENVIDU BLOCK
 // OPENVIDU: raised from the upstream 5s so a brief stall does not tear a live node down (see
 // RemoveDeadNodes, which removes a node once it is no longer available).
 const AvailableSeconds = 30
+
+// END OPENVIDU BLOCK
 
 // checks if a node has been updated recently to be considered for selection
 func IsAvailable(node *livekit.Node) bool {

@@ -17,13 +17,11 @@ package service
 import (
 	"context"
 	"fmt"
-	"math/rand/v2"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/bsm/redislock"
 	goversion "github.com/hashicorp/go-version"
 	"github.com/pkg/errors"
 	"github.com/redis/go-redis/v9"
@@ -37,6 +35,12 @@ import (
 	"github.com/livekit/psrpc"
 
 	"github.com/livekit/livekit-server/version"
+
+	// BEGIN OPENVIDU BLOCK
+	"math/rand/v2"
+
+	"github.com/bsm/redislock"
+	// END OPENVIDU BLOCK
 )
 
 const (

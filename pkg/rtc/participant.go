@@ -3610,12 +3610,14 @@ func (p *ParticipantImpl) addMediaTrack(signalCid string, ti *livekit.TrackInfo)
 		ShouldRegressCodec: func() bool {
 			return p.helper().ShouldRegressCodec()
 		},
-		PreferVideoSizeFromMedia:         p.params.PreferVideoSizeFromMedia,
-		EnableRTPStreamRestartDetection:  p.params.EnableRTPStreamRestartDetection,
+		PreferVideoSizeFromMedia:        p.params.PreferVideoSizeFromMedia,
+		EnableRTPStreamRestartDetection: p.params.EnableRTPStreamRestartDetection,
+		// BEGIN OPENVIDU BLOCK
 		UpdateTrackInfoByVideoSizeChange: updateTrackInfoByVideoSizeChange,
-		ForceBackupCodecPolicySimulcast:  p.params.ForceBackupCodecPolicySimulcast,
-		OnSubscribedMaxQualityChange:     p.onSubscribedMaxQualityChange,
-		OnSubscribedAudioCodecChange:     p.onSubscribedAudioCodecChange,
+		// END OPENVIDU BLOCK
+		ForceBackupCodecPolicySimulcast: p.params.ForceBackupCodecPolicySimulcast,
+		OnSubscribedMaxQualityChange:    p.onSubscribedMaxQualityChange,
+		OnSubscribedAudioCodecChange:    p.onSubscribedAudioCodecChange,
 	}, ti)
 
 	// add to published and clean up pending

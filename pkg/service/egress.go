@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"time"
 
 	"github.com/twitchtv/twirp"
 
@@ -33,6 +32,10 @@ import (
 	"github.com/livekit/psrpc"
 
 	"github.com/livekit/livekit-server/pkg/rtc"
+
+	// BEGIN OPENVIDU BLOCK
+	"time"
+	// END OPENVIDU BLOCK
 )
 
 type EgressService struct {

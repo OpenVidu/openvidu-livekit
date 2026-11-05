@@ -166,10 +166,10 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 				effectiveRelayIP = conf.RTC.NodeIP.V6
 			}
 		}
-		// END OPENVIDU BLOCK
 		if effectiveRelayIP == "" {
 			return nil, errors.New("no matching node IP for relay")
 		}
+		// END OPENVIDU BLOCK
 
 		var relayAddrGen turn.RelayAddressGenerator = &turn.RelayAddressGeneratorPortRange{
 			// BEGIN OPENVIDU BLOCK

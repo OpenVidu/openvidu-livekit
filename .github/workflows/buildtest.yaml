@@ -20,9 +20,13 @@ permissions:
 on:
   workflow_dispatch:
   push:
+    # BEGIN OPENVIDU BLOCK
     branches: [openvidu/main]
+    # END OPENVIDU BLOCK
   pull_request:
+    # BEGIN OPENVIDU BLOCK
     branches: [openvidu/main]
+    # END OPENVIDU BLOCK
 
 jobs:
   test:

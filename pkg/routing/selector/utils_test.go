@@ -26,9 +26,11 @@ import (
 )
 
 func TestIsAvailable(t *testing.T) {
+	// BEGIN OPENVIDU BLOCK
 	t.Run("no stats yet", func(t *testing.T) {
 		require.True(t, selector.IsAvailable(&livekit.Node{}))
 	})
+	// END OPENVIDU BLOCK
 
 	t.Run("still available", func(t *testing.T) {
 		n := &livekit.Node{
@@ -42,7 +44,9 @@ func TestIsAvailable(t *testing.T) {
 	t.Run("expired", func(t *testing.T) {
 		n := &livekit.Node{
 			Stats: &livekit.NodeStats{
+				// BEGIN OPENVIDU BLOCK
 				UpdatedAt: time.Now().Unix() - selector.AvailableSeconds - 1,
+				// END OPENVIDU BLOCK
 			},
 		}
 		require.False(t, selector.IsAvailable(n))

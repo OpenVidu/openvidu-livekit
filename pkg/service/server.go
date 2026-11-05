@@ -402,6 +402,9 @@ func (s *LivekitServer) Start() error {
 	s.signalServer.Stop()
 	s.ioService.Stop()
 
+	// BEGIN OPENVIDU BLOCK
+	// close(s.closedChan) is deferred at the top of Start, so that a failed start closes it too
+	// END OPENVIDU BLOCK
 	return nil
 }
 

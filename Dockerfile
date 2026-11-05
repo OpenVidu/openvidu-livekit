@@ -39,7 +39,9 @@ RUN go mod download
 # Copy the go source
 COPY cmd/ cmd/
 COPY pkg/ pkg/
+# BEGIN OPENVIDU BLOCK
 COPY openvidu/ openvidu/
+# END OPENVIDU BLOCK
 COPY test/ test/
 COPY version/ version/
 

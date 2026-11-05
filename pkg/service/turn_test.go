@@ -366,7 +366,9 @@ func TestNewTurnServer_InvalidPeerCIDRFailsStartup(t *testing.T) {
 			conf.TURN.UDPPort = 3478
 			tc.mutID(conf)
 
+			// BEGIN OPENVIDU BLOCK
 			_, err := NewTurnServer(conf, nil, false, nil)
+			// END OPENVIDU BLOCK
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tc.field)
 		})

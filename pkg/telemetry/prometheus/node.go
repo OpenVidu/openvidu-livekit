@@ -22,10 +22,13 @@ import (
 	"go.uber.org/atomic"
 
 	"github.com/livekit/protocol/livekit"
-	"github.com/livekit/protocol/logger"
 	"github.com/livekit/protocol/rpc"
 	"github.com/livekit/protocol/utils/hwstats"
 	"github.com/livekit/protocol/webhook"
+
+	// BEGIN OPENVIDU BLOCK
+	"github.com/livekit/protocol/logger"
+	// END OPENVIDU BLOCK
 )
 
 const (

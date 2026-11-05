@@ -184,13 +184,11 @@ func (r *RedisRouter) RemoveDeadNodes(customCleanup CustomCleanup) error {
 			}
 
 			// 7. Unregister the node from OpenVidu map
-			// BEGIN OPENVIDU BLOCK
 			if err := customrouting.UnregisterNodeCustom(context.Background(), r.rc, n.Id); err != nil {
 				logger.Errorw("redis cleanup: failed to unregister openvidu node", err, "node", n.Id)
 			} else {
 				logger.Infow("redis cleanup: openvidu node unregistered", "node", n.Id)
 			}
-			// END OPENVIDU BLOCK
 
 			// 8. Finally clean the node from the livekit original collection
 			if err := r.rc.HDel(context.Background(), NodesKey, n.Id).Err(); err != nil {
