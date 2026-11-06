@@ -46,9 +46,15 @@ type closer struct {
 }
 
 type endedRoom struct {
-	sid       string
-	mediaNode string
-	at        time.Time
+	sid        string
+	mediaNode  string
+	mediaStats bool
+	at         time.Time
+}
+
+// withoutMediaStats reports an entity whose mediaStats is false; an absent field means it reports them.
+func withoutMediaStats(mediaStats *bool) bool {
+	return mediaStats != nil && !*mediaStats
 }
 
 // close closes the confirmed candidates within the closure limit and the time budget, and reports whether it stopped
@@ -128,7 +134,8 @@ func (c *closer) closeParticipants(ctx context.Context, participants []confirmed
 		state := projection.ParticipantState{
 			SID: participant.SID, RoomSID: participant.RoomSID, RoomName: participant.RoomName,
 			Identity: participant.Identity, Kind: participant.Kind, NodeID: participant.NodeID,
-			MediaNode: participant.MediaNode, Status: participant.Status, JoinedAt: participant.JoinedAt,
+			MediaNode: participant.MediaNode, WithoutMediaStats: withoutMediaStats(participant.MediaStats),
+			Status: participant.Status, JoinedAt: participant.JoinedAt,
 			TrackSIDs: published[participant.SID],
 		}
 		closure := projection.CloseParticipant(state, participant.at, c.vetoFrom(), participant.reason, c.r.opts)
@@ -180,7 +187,7 @@ func (c *closer) closeRoom(ctx context.Context, room confirmedRoom) error {
 		at = lastSignal(room.OpenRoom)
 	}
 	state := projection.RoomState{SID: room.SID, Name: room.Name, NodeID: room.NodeID, MediaNode: room.MediaNode,
-		CreatedAt: room.CreatedAt, LastEventAt: room.LastEventAt}
+		WithoutMediaStats: withoutMediaStats(room.MediaStats), CreatedAt: room.CreatedAt, LastEventAt: room.LastEventAt}
 	closure := projection.CloseRoom(state, at, c.vetoFrom(), room.reason, c.r.opts)
 	closed, err := c.r.store.CloseEntity(ctx, closure.Entity)
 	if err != nil {
@@ -191,7 +198,8 @@ func (c *closer) closeRoom(ctx context.Context, room confirmedRoom) error {
 		return nil
 	}
 	c.add(closure)
-	c.endedRooms = append(c.endedRooms, endedRoom{sid: room.SID, mediaNode: room.MediaNode, at: at})
+	c.endedRooms = append(c.endedRooms, endedRoom{sid: room.SID, mediaNode: room.MediaNode,
+		mediaStats: !withoutMediaStats(room.MediaStats), at: at})
 	c.report.closed.Room++
 	c.r.logClosure(entityRoom, room.SID, room.SID, room.NodeID, room.reason, room.LastStatsAt, &room.LastEventAt,
 		"endedAt", at)
@@ -220,7 +228,8 @@ func (c *closer) closeEgress(ctx context.Context, candidate egressCandidate) err
 		}
 	}
 	state := projection.EgressState{ID: egress.ID, RoomSID: egress.RoomSID, RoomName: firstNonEmpty(egress.RoomName, room.Name),
-		NodeID: room.NodeID, MediaNode: room.MediaNode, Status: egress.Status, StartedAt: egress.StartedAt}
+		NodeID: room.NodeID, MediaNode: room.MediaNode, WithoutMediaStats: withoutMediaStats(room.MediaStats),
+		Status: egress.Status, StartedAt: egress.StartedAt}
 	closure := projection.CloseEgress(state, at, reason, c.r.opts)
 	closed, err := c.r.store.CloseEntity(ctx, closure.Entity)
 	if err != nil {
@@ -247,7 +256,7 @@ func (c *closer) closeIngressSession(ctx context.Context, candidate ingressSessi
 	}
 	state := projection.IngressSessionState{ID: session.ID, IngressID: session.IngressID, RoomSID: session.RoomSID,
 		RoomName: firstNonEmpty(session.RoomName, room.Name), NodeID: room.NodeID, MediaNode: room.MediaNode,
-		Status: session.Status, StartedAt: session.StartedAt}
+		WithoutMediaStats: withoutMediaStats(room.MediaStats), Status: session.Status, StartedAt: session.StartedAt}
 	closure := projection.CloseIngressSession(state, at, reason, c.r.opts)
 	closed, err := c.r.store.CloseEntity(ctx, closure.Entity)
 	if err != nil {
@@ -290,7 +299,8 @@ func (c *closer) apply(ctx context.Context) error {
 		})
 		errs = append(errs, err)
 		for _, room := range c.endedRooms {
-			c.increments = append(c.increments, projection.RoomEndedIncrements(room.mediaNode, room.at, sessions[room.sid])...)
+			c.increments = append(c.increments,
+				projection.RoomEndedIncrements(room.mediaNode, room.mediaStats, room.at, sessions[room.sid])...)
 		}
 	}
 	if len(c.cascades) > 0 {

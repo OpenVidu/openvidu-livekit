@@ -80,7 +80,8 @@ type Update struct {
 }
 
 // Increment adds counters to a rollup document and members to its sets. Counters hold int32, int64 or float64 values;
-// Sizes maps a counter path to the set whose size it reports.
+// Sizes maps a counter path to the set whose size it reports. Reported and Missing mark the document with the media
+// statistics of the server or entity the counters come from.
 type Increment struct {
 	Collection string
 	Scope      string
@@ -88,6 +89,17 @@ type Increment struct {
 	Counters   map[string]any
 	Members    map[string][]string
 	Sizes      map[string]string
+	Reported   bool
+	Missing    bool
+}
+
+// marked sets the media statistics mark of increments: reported when mediaStats is true, missing otherwise.
+func marked(increments []Increment, mediaStats bool) []Increment {
+	for i := range increments {
+		increments[i].Reported = mediaStats
+		increments[i].Missing = !mediaStats
+	}
+	return increments
 }
 
 // ID returns the rollup document identifier: scope and bucket start in RFC 3339 UTC.
@@ -290,6 +302,8 @@ func MergeIncrements(increments []Increment) []Increment {
 		for path, source := range increment.Sizes {
 			existing.Sizes[path] = source
 		}
+		existing.Reported = existing.Reported || increment.Reported
+		existing.Missing = existing.Missing || increment.Missing
 	}
 
 	result := make([]Increment, 0, len(order))
@@ -339,10 +353,14 @@ func RenderIncrement(increment Increment) any {
 		for _, path := range sortedKeys(increment.Counters) {
 			inc = append(inc, bson.E{Key: path, Value: increment.Counters[path]})
 		}
-		return bson.D{
+		update := bson.D{
 			{Key: "$setOnInsert", Value: bson.D{{Key: "scope", Value: increment.Scope}, {Key: "bucket", Value: increment.Bucket}}},
 			{Key: "$inc", Value: inc},
 		}
+		if marks := mediaStatsMarks(increment); len(marks) > 0 {
+			update = append(update, bson.E{Key: "$max", Value: marks})
+		}
+		return update
 	}
 
 	fields := bson.D{
@@ -353,6 +371,7 @@ func RenderIncrement(increment Increment) any {
 		value := increment.Counters[path]
 		fields = append(fields, bson.E{Key: path, Value: add(ifNull(path, zeroOf(value)), value)})
 	}
+	fields = append(fields, mediaStatsMarks(increment)...)
 	for _, path := range sortedKeys(increment.Members) {
 		members := make(bson.A, len(increment.Members[path]))
 		for i, member := range increment.Members[path] {
@@ -369,6 +388,19 @@ func RenderIncrement(increment Increment) any {
 		pipeline = append(pipeline, stage(sizes))
 	}
 	return pipeline
+}
+
+// mediaStatsMarks returns the media statistics marks an increment sets, as `true` values: `$max` keeps a mark once set,
+// and a pipeline stage sets the same value.
+func mediaStatsMarks(increment Increment) bson.D {
+	marks := bson.D{}
+	if increment.Reported {
+		marks = append(marks, bson.E{Key: "mediaStats.reported", Value: true})
+	}
+	if increment.Missing {
+		marks = append(marks, bson.E{Key: "mediaStats.missing", Value: true})
+	}
+	return marks
 }
 
 func zeroOf(value any) any {

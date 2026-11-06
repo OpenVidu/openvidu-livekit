@@ -40,6 +40,7 @@ type OpenParticipant struct {
 	Kind        string     `bson:"kind"`
 	NodeID      string     `bson:"nodeId"`
 	MediaNode   string     `bson:"mediaNode"`
+	MediaStats  *bool      `bson:"mediaStats"`
 	Status      string     `bson:"status"`
 	JoinedAt    time.Time  `bson:"joinedAt"`
 	ActiveAt    *time.Time `bson:"activeAt"`
@@ -49,7 +50,8 @@ type OpenParticipant struct {
 
 var openParticipantFields = bson.D{
 	{Key: "roomSid", Value: 1}, {Key: "roomName", Value: 1}, {Key: "identity", Value: 1}, {Key: "kind", Value: 1},
-	{Key: "nodeId", Value: 1}, {Key: "mediaNode", Value: 1}, {Key: "status", Value: 1}, {Key: "joinedAt", Value: 1},
+	{Key: "nodeId", Value: 1}, {Key: "mediaNode", Value: 1}, {Key: "mediaStats", Value: 1}, {Key: "status", Value: 1},
+	{Key: "joinedAt", Value: 1},
 	{Key: "activeAt", Value: 1}, {Key: "lastStatsAt", Value: 1}, {Key: "lastEventAt", Value: 1},
 }
 
@@ -59,6 +61,7 @@ type OpenRoom struct {
 	Name        string     `bson:"name"`
 	NodeID      string     `bson:"nodeId"`
 	MediaNode   string     `bson:"mediaNode"`
+	MediaStats  *bool      `bson:"mediaStats"`
 	CreatedAt   time.Time  `bson:"createdAt"`
 	LastEventAt time.Time  `bson:"lastEventAt"`
 	LastStatsAt *time.Time `bson:"lastStatsAt"`
@@ -69,9 +72,10 @@ type RoomRef struct {
 	SID       string     `bson:"_id"`
 	Name      string     `bson:"name"`
 	NodeID    string     `bson:"nodeId"`
-	MediaNode string     `bson:"mediaNode"`
-	Status    string     `bson:"status"`
-	EndedAt   *time.Time `bson:"endedAt"`
+	MediaNode  string     `bson:"mediaNode"`
+	MediaStats *bool      `bson:"mediaStats"`
+	Status     string     `bson:"status"`
+	EndedAt    *time.Time `bson:"endedAt"`
 }
 
 // OpenEgress is an egress that has not ended.
@@ -229,8 +233,8 @@ func StaleRoomQuery(now time.Time, grace time.Duration, statsFrom time.Time, lim
 }
 
 var openRoomFields = bson.D{
-	{Key: "name", Value: 1}, {Key: "nodeId", Value: 1}, {Key: "mediaNode", Value: 1}, {Key: "createdAt", Value: 1},
-	{Key: "lastEventAt", Value: 1}, {Key: "lastStatsAt", Value: 1},
+	{Key: "name", Value: 1}, {Key: "nodeId", Value: 1}, {Key: "mediaNode", Value: 1}, {Key: "mediaStats", Value: 1},
+	{Key: "createdAt", Value: 1}, {Key: "lastEventAt", Value: 1}, {Key: "lastStatsAt", Value: 1},
 }
 
 // StaleRooms returns, at most limit and the stalest first, the active rooms whose last event is older than their empty
@@ -273,7 +277,8 @@ func (s *Store) Rooms(ctx context.Context, sids []string) (map[string]RoomRef, e
 	cursor, err := s.db.Collection(schema.CollectionRooms).Find(ctx,
 		bson.D{{Key: "_id", Value: bson.D{{Key: "$in", Value: sids}}}},
 		options.Find().SetProjection(bson.D{{Key: "name", Value: 1}, {Key: "nodeId", Value: 1},
-			{Key: "mediaNode", Value: 1}, {Key: "status", Value: 1}, {Key: "endedAt", Value: 1}}))
+			{Key: "mediaNode", Value: 1}, {Key: "mediaStats", Value: 1}, {Key: "status", Value: 1},
+			{Key: "endedAt", Value: 1}}))
 	if err != nil {
 		return nil, err
 	}

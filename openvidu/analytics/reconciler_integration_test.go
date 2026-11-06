@@ -640,6 +640,25 @@ func TestReconcilerClosures(t *testing.T) {
 		require.EqualValues(t, 1, *hourly.Rooms.Ended)
 	})
 
+	t.Run("a room without media statistics closes with its own media statistics mark", func(t *testing.T) {
+		env := newReconcilerEnv(t, client)
+		created := before(2 * time.Minute)
+		env.p.opts.WithoutMediaStats = true
+		env.room("RM_m", nodeDead, created)
+		env.session("RM_m", nodeDead, "PA_a", livekit.ParticipantInfo_STANDARD, created, false)
+		env.p.opts.WithoutMediaStats = false
+
+		report := env.reconcile()
+		require.Equal(t, schema.ReconcilerClosures{Room: 1, Participant: 1}, report.closed)
+		closed := find[schema.RoomDocument](env.testEnv, schema.CollectionRooms, "RM_m")
+		hour := closed.EndedAt.Truncate(time.Hour).Format(time.RFC3339)
+		for _, scope := range []string{"global", "node:" + mediaNodeOf(nodeDead)} {
+			hourly := find[schema.HourlyRollupDocument](env.testEnv, schema.CollectionAnalyticsHourly, scope+":"+hour)
+			require.EqualValues(t, 1, *hourly.Rooms.Ended, scope)
+			require.Equal(t, &schema.RollupMediaStats{Missing: true}, hourly.MediaStats, scope)
+		}
+	})
+
 	t.Run("a room still listed waits for the dead node cleanup", func(t *testing.T) {
 		env := newReconcilerEnv(t, client)
 		env.room("RM_w", nodeDead, before(2*time.Minute))

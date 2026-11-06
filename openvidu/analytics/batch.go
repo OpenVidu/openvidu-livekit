@@ -336,7 +336,8 @@ func (p *processor) applyRollups(ctx context.Context, events []*eventEntry) erro
 			}
 			ts := schema.FromTimestamp(entry.event.GetTimestamp())
 			increments = append(increments,
-				projection.RoomEndedIncrements(p.opts.MediaNode, ts, sessions[entry.result.EndedRoom])...)
+				projection.RoomEndedIncrements(p.opts.MediaNode, !p.opts.WithoutMediaStats, ts,
+					sessions[entry.result.EndedRoom])...)
 		}
 	}
 	if err := p.rejected(p.store.ApplyIncrements(ctx, projection.MergeIncrements(increments))); err != nil {

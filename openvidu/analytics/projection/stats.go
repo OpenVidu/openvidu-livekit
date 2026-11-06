@@ -233,7 +233,8 @@ func Stats(stats []*livekit.AnalyticsStat, opts Options) StatsResult {
 			} else {
 				room.down += document.Bytes
 			}
-			result.Increments = append(result.Increments, statsIncrements(document, opts.MediaNode)...)
+			result.Increments = append(result.Increments,
+				marked(statsIncrements(document, opts.MediaNode), !opts.WithoutMediaStats)...)
 		}
 		result.Documents = append(result.Documents, documents...)
 	}
@@ -241,8 +242,9 @@ func Stats(stats []*livekit.AnalyticsStat, opts Options) StatsResult {
 	for _, k := range connectedOrder {
 		result.Increments = append(result.Increments, Increment{
 			Collection: schema.CollectionAnalytics5Min, Scope: k.scope, Bucket: k.bucket,
-			Members: map[string][]string{"internal.connectedSids": connected[k]},
-			Sizes:   map[string]string{"participants.connected": "internal.connectedSids"},
+			Members:  map[string][]string{"internal.connectedSids": connected[k]},
+			Sizes:    map[string]string{"participants.connected": "internal.connectedSids"},
+			Reported: !opts.WithoutMediaStats, Missing: opts.WithoutMediaStats,
 		})
 	}
 

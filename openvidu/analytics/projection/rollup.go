@@ -35,12 +35,14 @@ func scopes(mediaNode string) []string {
 
 // counters adds the same counters to the hourly and daily documents of the node's scopes.
 func (p *projector) counters(counters map[string]any) {
-	p.result.Increments = append(p.result.Increments, periodIncrements(p.opts.MediaNode, p.ts, counters)...)
+	p.result.Increments = append(p.result.Increments,
+		marked(periodIncrements(p.opts.MediaNode, p.ts, counters), !p.opts.WithoutMediaStats)...)
 }
 
 // fiveMinute adds counters to the 5-minute documents of the node's scopes.
 func (p *projector) fiveMinute(counters map[string]any) {
-	p.result.Increments = append(p.result.Increments, fiveMinuteIncrements(p.opts.MediaNode, p.ts, counters)...)
+	p.result.Increments = append(p.result.Increments,
+		marked(fiveMinuteIncrements(p.opts.MediaNode, p.ts, counters), !p.opts.WithoutMediaStats)...)
 }
 
 func fiveMinuteIncrements(mediaNode string, at time.Time, counters map[string]any) []Increment {
@@ -65,9 +67,9 @@ func periodIncrements(mediaNode string, at time.Time, counters map[string]any) [
 }
 
 // RoomEndedIncrements returns the participantsSum increments of a room of mediaNode (empty without a label) closed at
-// endedAt, once the batch knows its STANDARD participant sessions.
-func RoomEndedIncrements(mediaNode string, endedAt time.Time, participants int32) []Increment {
-	return periodIncrements(mediaNode, endedAt, map[string]any{"rooms.participantsSum": participants})
+// endedAt, once the batch knows its STANDARD participant sessions; mediaStats is the room's mark.
+func RoomEndedIncrements(mediaNode string, mediaStats bool, endedAt time.Time, participants int32) []Increment {
+	return marked(periodIncrements(mediaNode, endedAt, map[string]any{"rooms.participantsSum": participants}), mediaStats)
 }
 
 var one = int32(1)

@@ -525,6 +525,14 @@ type HourlyRollupDocument struct {
 	Quality      *RollupQuality      `bson:"quality,omitempty"`
 	APICalls     *RollupAPICalls     `bson:"apiCalls,omitempty"`
 	APIErrors    *RollupAPICalls     `bson:"apiErrors,omitempty"`
+	MediaStats   *RollupMediaStats   `bson:"mediaStats,omitempty"`
+}
+
+// RollupMediaStats marks a rollup document with the media statistics of the servers that wrote it; marks are only
+// ever true.
+type RollupMediaStats struct {
+	Reported bool `bson:"reported,omitempty"`
+	Missing  bool `bson:"missing,omitempty"`
 }
 
 // DailyRollupDocument is an `analytics_daily` document.
@@ -561,6 +569,7 @@ type FiveMinuteRollupDocument struct {
 	Egress       *FiveMinuteEgress       `bson:"egress,omitempty"`
 	Bytes        *RollupBytes            `bson:"bytes,omitempty"`
 	Quality      *RollupQuality          `bson:"quality,omitempty"`
+	MediaStats   *RollupMediaStats       `bson:"mediaStats,omitempty"`
 	Internal     bson.M                  `bson:"internal,omitempty"`
 }
 

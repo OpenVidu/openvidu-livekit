@@ -91,6 +91,8 @@ type ParticipantState struct {
 	NodeID string
 	// MediaNode is the media node label of the entity, empty without one: the node scope of its closure.
 	MediaNode string
+	// WithoutMediaStats is the mark of an entity whose mediaStats is false: the media statistics mark of its closure.
+	WithoutMediaStats bool
 	Status    string
 	JoinedAt  time.Time
 	// TrackSIDs are the tracks the participant published, whose open subscriptions close with it.
@@ -103,9 +105,11 @@ type RoomState struct {
 	Name   string
 	NodeID string
 	// MediaNode is the media node label of the entity, empty without one: the node scope of its closure.
-	MediaNode   string
-	CreatedAt   time.Time
-	LastEventAt time.Time
+	MediaNode string
+	// WithoutMediaStats is the mark of a room whose mediaStats is false: the media statistics mark of its closure.
+	WithoutMediaStats bool
+	CreatedAt         time.Time
+	LastEventAt       time.Time
 }
 
 // EgressState is what closing an egress needs from its document and its room.
@@ -116,8 +120,10 @@ type EgressState struct {
 	NodeID   string
 	// MediaNode is the media node label of its room, empty without one: the node scope of its closure.
 	MediaNode string
-	Status    string
-	StartedAt time.Time
+	// WithoutMediaStats is the mark of a room whose mediaStats is false: the media statistics mark of its closure.
+	WithoutMediaStats bool
+	Status            string
+	StartedAt         time.Time
 }
 
 // IngressSessionState is what closing an ingress session needs from its document and its room.
@@ -129,8 +135,10 @@ type IngressSessionState struct {
 	NodeID    string
 	// MediaNode is the media node label of its room, empty without one: the node scope of its closure.
 	MediaNode string
-	Status    string
-	StartedAt time.Time
+	// WithoutMediaStats is the mark of a room whose mediaStats is false: the media statistics mark of its closure.
+	WithoutMediaStats bool
+	Status            string
+	StartedAt         time.Time
 }
 
 // noStatsSince matches documents without a stats flush at or after t.
@@ -183,8 +191,8 @@ func CloseParticipant(state ParticipantState, at time.Time, vetoFrom time.Time, 
 		if status == participantLeft && !state.JoinedAt.IsZero() {
 			counters["participants.minutes"] = float64(schema.DurationMs(state.JoinedAt, at)) / 60000
 		}
-		increments = append(periodIncrements(state.MediaNode, at, counters),
-			fiveMinuteIncrements(state.MediaNode, at, map[string]any{counter: one})...)
+		increments = marked(append(periodIncrements(state.MediaNode, at, counters),
+			fiveMinuteIncrements(state.MediaNode, at, map[string]any{counter: one})...), !state.WithoutMediaStats)
 	}
 
 	return Closure{
@@ -250,8 +258,8 @@ func CloseRoom(state RoomState, at time.Time, vetoFrom time.Time, reason string,
 				reconcilerPayload(reason),
 			},
 		},
-		Increments: append(periodIncrements(state.MediaNode, at, counters),
-			fiveMinuteIncrements(state.MediaNode, at, map[string]any{"rooms.ended": one})...),
+		Increments: marked(append(periodIncrements(state.MediaNode, at, counters),
+			fiveMinuteIncrements(state.MediaNode, at, map[string]any{"rooms.ended": one})...), !state.WithoutMediaStats),
 	}
 }
 
@@ -304,8 +312,8 @@ func CloseEgress(state EgressState, at time.Time, reason string, opts Options) C
 			Synthetic: true,
 			Payload:   bson.D{{Key: "egress", Value: egress}, reconcilerPayload(reason)},
 		},
-		Increments: append(periodIncrements(state.MediaNode, at, counters),
-			fiveMinuteIncrements(state.MediaNode, at, map[string]any{"egress.ended": one})...),
+		Increments: marked(append(periodIncrements(state.MediaNode, at, counters),
+			fiveMinuteIncrements(state.MediaNode, at, map[string]any{"egress.ended": one})...), !state.WithoutMediaStats),
 	}
 }
 
@@ -373,7 +381,7 @@ func CloseIngressSession(state IngressSessionState, at time.Time, reason string,
 			Synthetic:        true,
 			Payload:          bson.D{{Key: "ingress", Value: ingressPayload}, reconcilerPayload(reason)},
 		},
-		Increments: periodIncrements(state.MediaNode, at, counters),
+		Increments: marked(periodIncrements(state.MediaNode, at, counters), !state.WithoutMediaStats),
 	}
 }
 

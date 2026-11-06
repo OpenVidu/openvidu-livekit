@@ -735,6 +735,69 @@ func TestWriter(t *testing.T) {
 		require.Equal(t, "mn-a", find[schema.RoomDocument](env, schema.CollectionRooms, "RM_1").MediaNode)
 	})
 
+	t.Run("a server without media statistics marks its rollup buckets as missing", func(t *testing.T) {
+		env := newEnv(t, client)
+		env.p.opts.WithoutMediaStats = true
+		var ev events
+		env.apply([]*livekit.AnalyticsEvent{ev.roomCreated("RM_1", "r", at("0s"))})
+
+		for _, document := range []struct{ collection, id string }{
+			{schema.CollectionAnalytics5Min, "global:2026-10-12T10:00:00Z"},
+			{schema.CollectionAnalyticsHourly, "global:2026-10-12T10:00:00Z"},
+			{schema.CollectionAnalyticsDaily, "global:2026-10-12T00:00:00Z"},
+		} {
+			marks := find[schema.HourlyRollupDocument](env, document.collection, document.id).MediaStats
+			require.NotNil(t, marks, document.collection)
+			require.True(t, marks.Missing, document.collection)
+			require.False(t, marks.Reported, document.collection)
+		}
+	})
+
+	t.Run("servers of both kinds mark the global bucket with both and their node scopes with their own", func(t *testing.T) {
+		env := newEnv(t, client)
+		var ev events
+		env.p.opts.MediaNode = "mn-a"
+		env.apply([]*livekit.AnalyticsEvent{ev.roomCreated("RM_1", "r1", at("0s"))})
+		env.p.opts.MediaNode = "mn-b"
+		env.p.opts.WithoutMediaStats = true
+		env.apply([]*livekit.AnalyticsEvent{ev.roomCreated("RM_2", "r2", at("1s"))})
+
+		marks := func(scope string) schema.RollupMediaStats {
+			document := find[schema.HourlyRollupDocument](env, schema.CollectionAnalyticsHourly, scope+":2026-10-12T10:00:00Z")
+			require.NotNil(t, document.MediaStats, scope)
+			return *document.MediaStats
+		}
+		require.Equal(t, schema.RollupMediaStats{Reported: true, Missing: true}, marks("global"))
+		require.Equal(t, schema.RollupMediaStats{Reported: true}, marks("node:mn-a"))
+		require.Equal(t, schema.RollupMediaStats{Missing: true}, marks("node:mn-b"))
+	})
+
+	t.Run("stats of a server reporting them mark their buckets as reported", func(t *testing.T) {
+		env := newEnv(t, client)
+		var ev events
+		alice := participantInfo("PA_a", "alice", livekit.ParticipantInfo_STANDARD, at("1s"))
+		env.apply([]*livekit.AnalyticsEvent{ev.joined("RM_1", alice, at("1s"))})
+		env.apply(nil, []*livekit.AnalyticsStat{stat("RM_1", "PA_a", "TR_cam", livekit.StreamType_UPSTREAM, at("30s"), 4.5, 1000)})
+
+		five := find[schema.FiveMinuteRollupDocument](env, schema.CollectionAnalytics5Min, "global:2026-10-12T10:00:00Z")
+		require.Equal(t, &schema.RollupMediaStats{Reported: true}, five.MediaStats)
+		daily := find[schema.HourlyRollupDocument](env, schema.CollectionAnalyticsDaily, "global:2026-10-12T00:00:00Z")
+		require.Equal(t, &schema.RollupMediaStats{Reported: true}, daily.MediaStats)
+	})
+
+	t.Run("a replayed batch keeps the media statistics marks", func(t *testing.T) {
+		env := newEnv(t, client)
+		env.p.opts.WithoutMediaStats = true
+		var ev events
+		batch := []*livekit.AnalyticsEvent{ev.roomCreated("RM_1", "r", at("0s"))}
+		env.apply(batch)
+		env.apply(batch)
+
+		hourly := find[schema.HourlyRollupDocument](env, schema.CollectionAnalyticsHourly, "global:2026-10-12T10:00:00Z")
+		require.Equal(t, &schema.RollupMediaStats{Missing: true}, hourly.MediaStats)
+		require.EqualValues(t, 1, *hourly.Rooms.Created)
+	})
+
 	t.Run("stats in track detail, quality bands and connected participants", func(t *testing.T) {
 		env := newEnv(t, client, func(c *openviduconfig.AnalyticsConfig) { c.StatsDetail = "track" })
 		var ev events
