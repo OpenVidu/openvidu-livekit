@@ -229,6 +229,7 @@ func (s *RTCService) validateInternal(
 		Identity:                livekit.ParticipantIdentity(res.grants.Identity),
 		Name:                    livekit.ParticipantName(res.grants.Name),
 		Grants:                  res.grants,
+		APIKey:                  GetAPIKey(r.Context()),
 		TokenExpiresAt:          res.tokenExpiresAt,
 		Region:                  res.region,
 		CreateRoom:              res.createRoomRequest,
@@ -280,8 +281,10 @@ func (s *RTCService) validateInternal(
 		pi.AdaptiveStream = joinRequest.GetConnectionSettings().GetAdaptiveStream()
 		pi.DisableICELite = joinRequest.GetConnectionSettings().GetDisableIceLite()
 
-		subscriberAllowPause := joinRequest.GetConnectionSettings().GetSubscriberAllowPause()
-		pi.SubscriberAllowPause = &subscriberAllowPause
+		if cs := joinRequest.GetConnectionSettings(); cs != nil && cs.SubscriberAllowPause != nil {
+			v := cs.GetSubscriberAllowPause()
+			pi.SubscriberAllowPause = &v
+		}
 
 		pi.AddTrackRequests = joinRequest.AddTrackRequests
 		pi.PublisherOffer = joinRequest.PublisherOffer

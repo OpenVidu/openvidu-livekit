@@ -815,7 +815,7 @@ func TestTURNSecurity_PermissionHandlerReturnsNonNil(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// OpenVidu relay PacketConn (port restriction + telemetry)
+// OpenVidu relay port policy (media ports for every peer)
 // ---------------------------------------------------------------------------
 
 // mockPacketConn is a minimal net.PacketConn for testing.
@@ -836,275 +836,119 @@ func (m *mockPacketConn) Close() error                             { m.closed = 
 func (m *mockPacketConn) LocalAddr() net.Addr                      { return &net.UDPAddr{IP: net.IPv4zero, Port: 0} }
 func (m *mockPacketConn) ReadFrom(p []byte) (int, net.Addr, error) { return 0, nil, nil }
 
-func TestTURNSecurity_PortRestriction_WithinRange(t *testing.T) {
-	inner := &mockPacketConn{}
-	conn := &openviduRelayPacketConn{PacketConn: inner, minPort: 5000, maxPort: 6000}
+var testMediaPorts = []portRange{{start: 5000, end: 6000}}
 
-	n, err := conn.WriteTo([]byte("hello"), &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 5500})
+// requireRelayed writes to a peer that is not this host (10.0.0.1, standing for
+// another cluster node) and checks whether the packet reached the relay socket.
+// A dropped packet is reported to the caller as written, like upstream's
+// turnRelayPacketConn does.
+func requireRelayed(t *testing.T, mediaPorts []portRange, addr net.Addr, relayed bool) {
+	t.Helper()
+	inner := &mockPacketConn{}
+	conn := &openviduRelayPacketConn{PacketConn: inner, mediaPorts: mediaPorts}
+
+	n, err := conn.WriteTo([]byte("hello"), addr)
 	require.NoError(t, err)
 	require.Equal(t, 5, n)
-	require.Equal(t, 5, inner.writtenBytes)
+	if relayed {
+		require.Equal(t, 5, inner.writtenBytes)
+		require.Equal(t, addr, inner.writtenAddr)
+	} else {
+		require.Zero(t, inner.writtenBytes, "packet to %s must be dropped", addr)
+	}
 }
 
-func TestTURNSecurity_PortRestriction_BelowRange(t *testing.T) {
-	inner := &mockPacketConn{}
-	conn := &openviduRelayPacketConn{PacketConn: inner, minPort: 5000, maxPort: 6000}
-
-	_, err := conn.WriteTo([]byte("hello"), &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 22})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "outside allowed range")
-	require.Equal(t, 0, inner.writtenBytes)
+func udpPeer(port int) net.Addr {
+	return &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: port}
 }
 
-func TestTURNSecurity_PortRestriction_AboveRange(t *testing.T) {
-	inner := &mockPacketConn{}
-	conn := &openviduRelayPacketConn{PacketConn: inner, minPort: 5000, maxPort: 6000}
-
-	_, err := conn.WriteTo([]byte("hello"), &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 6379})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "outside allowed range")
-	require.Equal(t, 0, inner.writtenBytes)
+func TestTURNSecurity_PortPolicy_WithinRange(t *testing.T) {
+	requireRelayed(t, testMediaPorts, udpPeer(5500), true)
 }
 
-func TestTURNSecurity_PortRestriction_BoundaryMin(t *testing.T) {
-	inner := &mockPacketConn{}
-	conn := &openviduRelayPacketConn{PacketConn: inner, minPort: 5000, maxPort: 6000}
-
-	n, err := conn.WriteTo([]byte("ok"), &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 5000})
-	require.NoError(t, err)
-	require.Equal(t, 2, n)
+func TestTURNSecurity_PortPolicy_BelowRange(t *testing.T) {
+	requireRelayed(t, testMediaPorts, udpPeer(22), false)
 }
 
-func TestTURNSecurity_PortRestriction_BoundaryMax(t *testing.T) {
-	inner := &mockPacketConn{}
-	conn := &openviduRelayPacketConn{PacketConn: inner, minPort: 5000, maxPort: 6000}
-
-	n, err := conn.WriteTo([]byte("ok"), &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 6000})
-	require.NoError(t, err)
-	require.Equal(t, 2, n)
+func TestTURNSecurity_PortPolicy_AboveRange(t *testing.T) {
+	requireRelayed(t, testMediaPorts, udpPeer(6379), false)
 }
 
-func TestTURNSecurity_PortRestriction_BoundaryMinMinusOne(t *testing.T) {
-	inner := &mockPacketConn{}
-	conn := &openviduRelayPacketConn{PacketConn: inner, minPort: 5000, maxPort: 6000}
-
-	_, err := conn.WriteTo([]byte("no"), &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 4999})
-	require.Error(t, err)
+func TestTURNSecurity_PortPolicy_Boundaries(t *testing.T) {
+	requireRelayed(t, testMediaPorts, udpPeer(5000), true)
+	requireRelayed(t, testMediaPorts, udpPeer(6000), true)
+	requireRelayed(t, testMediaPorts, udpPeer(4999), false)
+	requireRelayed(t, testMediaPorts, udpPeer(6001), false)
 }
 
-func TestTURNSecurity_PortRestriction_BoundaryMaxPlusOne(t *testing.T) {
-	inner := &mockPacketConn{}
-	conn := &openviduRelayPacketConn{PacketConn: inner, minPort: 5000, maxPort: 6000}
-
-	_, err := conn.WriteTo([]byte("no"), &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 6001})
-	require.Error(t, err)
+func TestTURNSecurity_PortPolicy_MultipleRanges(t *testing.T) {
+	// rtc.udp_port with rtc.use_stun_port_as_ice: getTURNMediaPorts returns the
+	// UDP mux port and 3478.
+	ranges := []portRange{{start: 7882, end: 7882}, {start: 3478, end: 3478}}
+	requireRelayed(t, ranges, udpPeer(7882), true)
+	requireRelayed(t, ranges, udpPeer(3478), true)
+	requireRelayed(t, ranges, udpPeer(7881), false)
 }
 
-func TestTURNSecurity_PortRestriction_Passthrough(t *testing.T) {
-	inner := &mockPacketConn{}
-	conn := &openviduRelayPacketConn{PacketConn: inner, minPort: 5000, maxPort: 6000}
+func TestTURNSecurity_PortPolicy_IPv4MappedIPv6Peer(t *testing.T) {
+	requireRelayed(t, testMediaPorts, &net.UDPAddr{IP: net.ParseIP("::ffff:10.0.0.1"), Port: 5500}, true)
+}
 
-	// LocalAddr should delegate without port filtering.
+func TestTURNSecurity_PortPolicy_NonUDPPeerDropped(t *testing.T) {
+	// Relay sockets only carry UDP; any other address type is dropped, as upstream does.
+	requireRelayed(t, testMediaPorts, &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 5500}, false)
+}
+
+func TestTURNSecurity_PortPolicy_AllDroppedWithoutMediaPorts(t *testing.T) {
+	// getTURNMediaPorts returns none with rtc.force_tcp, or with no UDP port configured.
+	requireRelayed(t, nil, udpPeer(5500), false)
+	requireRelayed(t, nil, udpPeer(65535), false)
+}
+
+func TestTURNSecurity_PortPolicy_Passthrough(t *testing.T) {
+	inner := &mockPacketConn{}
+	conn := &openviduRelayPacketConn{PacketConn: inner, mediaPorts: testMediaPorts}
+
+	// Everything but WriteTo delegates without port filtering.
 	require.NotNil(t, conn.LocalAddr())
-	require.NoError(t, conn.Close())
-
 	_, _, err := conn.ReadFrom(make([]byte, 10))
 	require.NoError(t, err)
-}
-
-func TestTURNSecurity_PortRestriction_TCPAddr(t *testing.T) {
-	inner := &mockPacketConn{}
-	conn := &openviduRelayPacketConn{PacketConn: inner, minPort: 5000, maxPort: 6000}
-
-	// TCP addr within range should be allowed.
-	n, err := conn.WriteTo([]byte("tcp"), &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 5500})
-	require.NoError(t, err)
-	require.Equal(t, 3, n)
-
-	// TCP addr outside range should be denied.
-	_, err = conn.WriteTo([]byte("tcp"), &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 80})
-	require.Error(t, err)
-}
-
-func TestTURNSecurity_PortRestriction_AllDeniedWhenZero(t *testing.T) {
-	// When both minPort and maxPort are 0 (no ICE port range configured),
-	// all peer relay ports are denied.
-	inner := &mockPacketConn{}
-	conn := &openviduRelayPacketConn{PacketConn: inner, minPort: 0, maxPort: 0}
-
-	_, err := conn.WriteTo([]byte("any"), &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 22})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "outside allowed range")
-
-	_, err = conn.WriteTo([]byte("any"), &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 65535})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "outside allowed range")
-}
-
-func TestTURNSecurity_OpenViduRelayAddrGen_Wraps(t *testing.T) {
-	gen := newOpenViduRelayAddrGen(nil, 5000, 6000, false, true)
-	require.NotNil(t, gen)
-	require.Equal(t, uint16(5000), gen.minPort)
-	require.Equal(t, uint16(6000), gen.maxPort)
-	require.False(t, gen.standalone)
-	require.True(t, gen.enableRFC6062)
-}
-
-func TestTURNSecurity_OpenViduRelayAddrGen_Standalone(t *testing.T) {
-	gen := newOpenViduRelayAddrGen(nil, 0, 0, true, false)
-	require.NotNil(t, gen)
-	require.True(t, gen.standalone)
-	require.False(t, gen.enableRFC6062)
-}
-
-func TestTURNSecurity_Standalone_CloseDelegate(t *testing.T) {
-	// Verify Close delegates to inner even in standalone mode.
-	inner := &mockPacketConn{}
-	conn := &openviduRelayPacketConn{PacketConn: inner, standalone: true}
 	require.NoError(t, conn.Close())
 	require.True(t, inner.closed)
 }
 
-func TestTURNSecurity_NonStandalone_CloseDelegate(t *testing.T) {
-	inner := &mockPacketConn{}
-	conn := &openviduRelayPacketConn{PacketConn: inner, standalone: false}
-	require.NoError(t, conn.Close())
-	require.True(t, inner.closed)
-}
-
-func TestTURNSecurity_AllocateConn_PortOutOfRange(t *testing.T) {
-	inner := &mockRelayAddrGen{}
-	// RFC 6062 enabled so the port restriction is the only thing under test.
-	gen := newOpenViduRelayAddrGen(inner, 5000, 6000, false, true)
-
-	conn, err := gen.AllocateConn(turn.AllocateConnConfig{
-		Network:    "tcp4",
-		RemoteAddr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 80},
-	})
-	require.Nil(t, conn)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "outside allowed range")
-}
-
-func TestTURNSecurity_AllocateConn_PortInRange(t *testing.T) {
-	inner := &mockRelayAddrGen{}
-	// RFC 6062 enabled so an in-range Connect is allowed through.
-	gen := newOpenViduRelayAddrGen(inner, 5000, 6000, false, true)
-
-	conn, err := gen.AllocateConn(turn.AllocateConnConfig{
-		Network:    "tcp4",
-		RemoteAddr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 5500},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, conn)
-	_ = conn.Close()
-}
-
-func TestTURNSecurity_AllocateConn_ZeroPortRange_AllDenied(t *testing.T) {
-	inner := &mockRelayAddrGen{}
-	// RFC 6062 enabled so the zero-range port denial is the only thing under test.
-	gen := newOpenViduRelayAddrGen(inner, 0, 0, false, true)
-
-	conn, err := gen.AllocateConn(turn.AllocateConnConfig{
-		Network:    "tcp4",
-		RemoteAddr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 5500},
-	})
-	require.Nil(t, conn)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "outside allowed range")
-}
-
-// ---------------------------------------------------------------------------
-// RFC 6062 (TURN TCP allocations) — disabled by default, opt-in to enable
-// ---------------------------------------------------------------------------
-
-func TestTURNSecurity_RFC6062_DisabledRejectsConnect(t *testing.T) {
-	// With RFC 6062 disabled, an otherwise-valid in-range Connect is rejected
-	// and the inner generator is never invoked.
-	inner := &mockRelayAddrGen{}
-	gen := newOpenViduRelayAddrGen(inner, 5000, 6000, false, false)
-
-	conn, err := gen.AllocateConn(turn.AllocateConnConfig{
-		Network:    "tcp4",
-		RemoteAddr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 5500},
-	})
-	require.Nil(t, conn)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "RFC 6062")
-	require.Contains(t, err.Error(), "disabled")
-}
-
-func TestTURNSecurity_RFC6062_EnabledAllowsConnect(t *testing.T) {
-	// With RFC 6062 enabled, an in-range Connect is allocated through the
-	// inner generator.
-	inner := &mockRelayAddrGen{}
-	gen := newOpenViduRelayAddrGen(inner, 5000, 6000, false, true)
-
-	conn, err := gen.AllocateConn(turn.AllocateConnConfig{
-		Network:    "tcp4",
-		RemoteAddr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 5500},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, conn)
-	_ = conn.Close()
-}
-
-func TestTURNSecurity_RFC6062_DisabledTakesPrecedenceOverPort(t *testing.T) {
-	// When disabled, the RFC 6062 rejection happens before the port check, so
-	// even an in-range port is denied with the RFC 6062 reason — never the
-	// port-range reason.
-	inner := &mockRelayAddrGen{}
-	gen := newOpenViduRelayAddrGen(inner, 5000, 6000, false, false)
-
-	conn, err := gen.AllocateConn(turn.AllocateConnConfig{
-		Network:    "tcp4",
-		RemoteAddr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 5500},
-	})
-	require.Nil(t, conn)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "RFC 6062")
-	require.NotContains(t, err.Error(), "outside allowed range")
-}
-
-func TestTURNSecurity_RFC6062_DisabledRejectsTCPAllocate(t *testing.T) {
-	// The inbound RFC 6062 path: a TCP Allocate (REQUESTED-TRANSPORT=TCP) goes
-	// through AllocateListener. When disabled, it must be rejected so clients
-	// cannot create a TCP relay listener at all.
-	inner := &mockRelayAddrGen{}
-	gen := newOpenViduRelayAddrGen(inner, 5000, 6000, false, false)
-
-	ln, addr, err := gen.AllocateListener(turn.AllocateListenerConfig{Network: "tcp4"})
-	require.Nil(t, ln)
-	require.Nil(t, addr)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "RFC 6062")
-	require.Contains(t, err.Error(), "disabled")
-}
-
-func TestTURNSecurity_RFC6062_EnabledAllowsTCPAllocate(t *testing.T) {
-	// When enabled, the TCP Allocate is delegated to the inner generator and a
-	// relay listener is returned.
-	inner := &mockRelayAddrGen{}
-	gen := newOpenViduRelayAddrGen(inner, 5000, 6000, false, true)
-
-	ln, addr, err := gen.AllocateListener(turn.AllocateListenerConfig{Network: "tcp4"})
-	require.NoError(t, err)
-	require.NotNil(t, ln)
-	require.NotNil(t, addr)
-	_ = ln.Close()
-}
-
-func TestTURNSecurity_RFC6062_DisabledLeavesUDPUnaffected(t *testing.T) {
-	// Disabling RFC 6062 must not touch UDP relays: AllocatePacketConn (the UDP
-	// allocation path) still delegates to the inner generator.
-	inner := &mockRelayAddrGen{}
-	gen := newOpenViduRelayAddrGen(inner, 5000, 6000, false, false)
+func TestTURNSecurity_PortPolicy_WrapsUDPRelays(t *testing.T) {
+	gen := newOpenViduRelayPortPolicy(&mockRelayAddrGen{}, testMediaPorts)
+	require.NoError(t, gen.Validate())
 
 	conn, addr, err := gen.AllocatePacketConn(turn.AllocateListenerConfig{Network: "udp4"})
 	require.NoError(t, err)
-	require.NotNil(t, conn)
 	require.NotNil(t, addr)
-	_ = conn.Close()
+	t.Cleanup(func() { _ = conn.Close() })
+
+	wrapped, ok := conn.(*openviduRelayPacketConn)
+	require.True(t, ok, "UDP relays must be wrapped with the port policy")
+	require.Equal(t, testMediaPorts, wrapped.mediaPorts)
+}
+
+func TestTURNSecurity_PortPolicy_KeepsUpstreamTCPRelayRefusal(t *testing.T) {
+	// NewTurnServer wraps the policy around upstream's rejectTCPRelayAddressGenerator:
+	// RFC 6062 TCP relays must still be refused through it.
+	gen := newOpenViduRelayPortPolicy(newRejectTCPRelayAddressGenerator(&mockRelayAddrGen{}), testMediaPorts)
+
+	_, _, err := gen.AllocateListener(turn.AllocateListenerConfig{Network: "tcp4"})
+	require.ErrorIs(t, err, ErrTURNTCPRelayDisabled)
+	_, err = gen.AllocateConn(turn.AllocateConnConfig{
+		Network:    "tcp4",
+		RemoteAddr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 5500},
+	})
+	require.ErrorIs(t, err, ErrTURNTCPRelayDisabled)
+}
+
+func TestTURNSecurity_FormatPortRanges(t *testing.T) {
+	require.Equal(t, []string{"50000-60000", "3478-3478"},
+		formatPortRanges([]portRange{{start: 50000, end: 60000}, {start: 3478, end: 3478}}))
+	require.Empty(t, formatPortRanges(nil))
 }
 
 // mockRelayAddrGen is a minimal turn.RelayAddressGenerator for testing.

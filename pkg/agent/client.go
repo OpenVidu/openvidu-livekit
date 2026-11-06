@@ -62,9 +62,9 @@ type JobRequest struct {
 	// only set for participant jobs
 	Participant *livekit.ParticipantInfo
 	Metadata    string
-	AgentName  string
-	Deployment string
-	Attributes map[string]string
+	AgentName   string
+	Deployment  string
+	Attributes  map[string]string
 }
 
 type agentClient struct {
@@ -240,7 +240,7 @@ func (c *agentClient) getDispatcher(agName string, jobType livekit.JobType) *ser
 	}
 
 	done := make(chan *serverutils.IncrementalDispatcher[string], 1)
-	c.workers.Submit(func() {
+	go func() {
 		agentNames.ForEach(func(ag string) {
 			if ag == agName {
 				select {
@@ -253,7 +253,7 @@ func (c *agentClient) getDispatcher(agName string, jobType livekit.JobType) *ser
 		case done <- nil:
 		default:
 		}
-	})
+	}()
 
 	return <-done
 }

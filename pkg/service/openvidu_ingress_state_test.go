@@ -20,7 +20,7 @@ import (
 
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/rpc"
-	"github.com/livekit/psrpc"
+	"github.com/livekit/psrpc/pkg/bus/redisbus"
 	"github.com/stretchr/testify/require"
 
 	"github.com/livekit/livekit-server/pkg/service"
@@ -32,7 +32,7 @@ func TestIngressStateNamesItsRoom(t *testing.T) {
 	r := redisClientDocker(t)
 	rs := service.NewRedisStore(r)
 	telemetry := &telemetryfakes.FakeTelemetryService{}
-	io, err := service.NewIOInfoService(psrpc.NewRedisMessageBus(r), rs, rs, rs, telemetry)
+	io, err := service.NewIOInfoService(redisbus.New(r), rs, rs, rs, telemetry)
 	require.NoError(t, err)
 	require.NoError(t, rs.StoreRoom(ctx, &livekit.Room{Sid: "RM_x", Name: "qa-ingress"}, &livekit.RoomInternal{}))
 

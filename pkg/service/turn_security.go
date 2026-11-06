@@ -31,7 +31,6 @@ import (
 
 	"github.com/livekit/livekit-server/openvidu/customrouting"
 	"github.com/livekit/livekit-server/pkg/config"
-	"github.com/livekit/livekit-server/pkg/telemetry/prometheus"
 )
 
 // defaultTURNCacheTTL is how long allowed IPs from Redis are cached before
@@ -155,13 +154,9 @@ func (s *TURNSecurity) handlePermissionWithCIDRs(clientAddr net.Addr, peerIP net
 		// With an allow list configured, restricted peer IPs that are NOT listed
 		// are denied — the allow list narrows which restricted ranges may be used.
 		// Non-restricted (public) IPs that are not listed fall through to the
-		// cluster/local allowlist below.
-		if peerIP.IsLoopback() ||
-			peerIP.IsLinkLocalUnicast() ||
-			peerIP.IsLinkLocalMulticast() ||
-			peerIP.IsMulticast() ||
-			peerIP.IsPrivate() ||
-			peerIP.IsUnspecified() {
+		// cluster/local allowlist below. Restricted is upstream's definition
+		// (isRestrictedPeerIP, turnrelay.go).
+		if isRestrictedPeerIP(peerIP) {
 			logger.Infow("TURN permission denied: restricted IP not in allow CIDRs", "peerIP", peerStr)
 			return false
 		}
@@ -312,234 +307,79 @@ func (s *TURNSecurity) fetchAllowedIPs() (map[string]struct{}, error) {
 }
 
 // ---------------------------------------------------------------------------
-// OpenVidu relay address generator (port restriction + optional telemetry)
+// OpenVidu relay port policy
 // ---------------------------------------------------------------------------
 
-// openviduRelayPacketConn wraps a net.PacketConn with:
-//   - Port restriction: rejects WriteTo to destination ports outside [minPort, maxPort].
-//     When both are 0 (no ICE port range configured), all peer ports are denied.
-//   - Prometheus telemetry: when standalone is true, counts bytes/packets on
-//     WriteTo/ReadFrom and tracks connection count on Close.
+// openviduRelayPortPolicy extends upstream's turnRelayPolicy (turnrelay.go) to
+// every relay peer. Upstream limits relays to this host's own addresses to the
+// RTC media ports, because those packets bypass any firewall in front of the
+// host. TURNSecurity also lets the relay reach the other cluster nodes, whose
+// private addresses sit behind the same firewall, so relays to any peer may only
+// reach the media ports. Like upstream, packets to other ports are dropped.
+// Upstream's rejectTCPRelayAddressGenerator, wrapped inside, still refuses
+// RFC 6062 TCP relays.
+type openviduRelayPortPolicy struct {
+	turn.RelayAddressGenerator
+	mediaPorts []portRange
+}
+
+func newOpenViduRelayPortPolicy(g turn.RelayAddressGenerator, mediaPorts []portRange) *openviduRelayPortPolicy {
+	return &openviduRelayPortPolicy{RelayAddressGenerator: g, mediaPorts: mediaPorts}
+}
+
+func (g *openviduRelayPortPolicy) AllocatePacketConn(c turn.AllocateListenerConfig) (net.PacketConn, net.Addr, error) {
+	conn, addr, err := g.RelayAddressGenerator.AllocatePacketConn(c)
+	if err != nil {
+		return conn, addr, err
+	}
+	return &openviduRelayPacketConn{PacketConn: conn, mediaPorts: g.mediaPorts}, addr, nil
+}
+
 type openviduRelayPacketConn struct {
 	net.PacketConn
-	minPort    uint16
-	maxPort    uint16
-	standalone bool
+	mediaPorts []portRange
 }
 
 func (c *openviduRelayPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
-	port, err := extractPort(addr)
-	if err != nil {
-		return 0, err
-	}
-	if port < c.minPort || port > c.maxPort {
+	if !isMediaPort(addr, c.mediaPorts) {
 		// Expected and high-volume: ICE probes reflexive/relay candidates on
 		// ephemeral ports outside the media range — mostly the cluster nodes' own
-		// srflx candidates (public IP : NAT-mapped port) for intra-cluster links —
-		// which the relay declines. Logged at debug to avoid flooding warnings; the
-		// relay still refuses the write and returns the error to the caller.
-		logger.Debugw("relay destination port outside allowed range, dropping packet",
-			"destAddr", addr.String(), "port", port, "minPort", c.minPort, "maxPort", c.maxPort)
-		return 0, fmt.Errorf("destination port %d outside allowed range [%d, %d]", port, c.minPort, c.maxPort)
+		// srflx candidates (public IP : NAT-mapped port) for intra-cluster links.
+		logger.Debugw("TURN relay destination port outside the media ports, dropping packet",
+			"destAddr", addr.String(), "mediaPorts", formatPortRanges(c.mediaPorts))
+		return len(p), nil
 	}
-
-	n, err := c.PacketConn.WriteTo(p, addr)
-
-	if c.standalone && n > 0 {
-		prometheus.IncrementBytes("", prometheus.Outgoing, uint64(n), false)
-		prometheus.IncrementPackets("", prometheus.Outgoing, 1, false)
-	}
-	return n, err
+	return c.PacketConn.WriteTo(p, addr)
 }
 
-func (c *openviduRelayPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
-	n, addr, err := c.PacketConn.ReadFrom(p)
-	if c.standalone && n > 0 {
-		prometheus.IncrementBytes("", prometheus.Incoming, uint64(n), false)
-		prometheus.IncrementPackets("", prometheus.Incoming, 1, false)
+func isMediaPort(addr net.Addr, mediaPorts []portRange) bool {
+	udpAddr, ok := addr.(*net.UDPAddr)
+	if !ok {
+		return false
 	}
-	return n, addr, err
-}
-
-func (c *openviduRelayPacketConn) Close() error {
-	if c.standalone {
-		prometheus.SubConnection(prometheus.Outgoing)
-	}
-	return c.PacketConn.Close()
-}
-
-func extractPort(addr net.Addr) (uint16, error) {
-	switch a := addr.(type) {
-	case *net.UDPAddr:
-		return uint16(a.Port), nil
-	case *net.TCPAddr:
-		return uint16(a.Port), nil
-	default:
-		_, portStr, err := net.SplitHostPort(addr.String())
-		if err != nil {
-			return 0, fmt.Errorf("cannot extract port from address %v: %w", addr, err)
+	port := udpAddr.AddrPort().Port()
+	for _, r := range mediaPorts {
+		if port >= r.start && port <= r.end {
+			return true
 		}
-		var port int
-		_, err = fmt.Sscanf(portStr, "%d", &port)
-		if err != nil {
-			return 0, fmt.Errorf("cannot parse port %q: %w", portStr, err)
-		}
-		return uint16(port), nil
 	}
+	return false
 }
 
-// openviduRelayAddrGen wraps a turn.RelayAddressGenerator with port restriction
-// and optional prometheus telemetry for standalone mode.
-type openviduRelayAddrGen struct {
-	inner      turn.RelayAddressGenerator
-	minPort    uint16
-	maxPort    uint16
-	standalone bool
-	// enableRFC6062 controls whether RFC 6062 (TURN Extensions for TCP
-	// Allocations) is permitted. RFC 6062 has two entry points on the relay
-	// address generator:
-	//   - AllocateListener: a TCP Allocate (REQUESTED-TRANSPORT=TCP) creating a
-	//     relay listener for inbound peer connections (used with ConnectionBind).
-	//   - AllocateConn: a Connect request creating an outbound TCP connection.
-	// When false, both are rejected so clients cannot establish TCP relays at
-	// all; UDP relays (AllocatePacketConn) are unaffected.
-	enableRFC6062 bool
+func formatPortRanges(ranges []portRange) []string {
+	formatted := make([]string, 0, len(ranges))
+	for _, r := range ranges {
+		formatted = append(formatted, fmt.Sprintf("%d-%d", r.start, r.end))
+	}
+	return formatted
 }
 
-func newOpenViduRelayAddrGen(inner turn.RelayAddressGenerator, minPort, maxPort uint16, standalone, enableRFC6062 bool) *openviduRelayAddrGen {
-	return &openviduRelayAddrGen{
-		inner:         inner,
-		minPort:       minPort,
-		maxPort:       maxPort,
-		standalone:    standalone,
-		enableRFC6062: enableRFC6062,
+func logOpenViduRelayPortPolicy(mediaPorts []portRange) {
+	if len(mediaPorts) == 0 {
+		logger.Warnw("TURN relay peer port restriction: no RTC media UDP ports configured, every relayed packet will be dropped", nil)
+		return
 	}
-}
-
-func (g *openviduRelayAddrGen) Validate() error {
-	return g.inner.Validate()
-}
-
-func (g *openviduRelayAddrGen) AllocatePacketConn(conf turn.AllocateListenerConfig) (net.PacketConn, net.Addr, error) {
-	conn, addr, err := g.inner.AllocatePacketConn(conf)
-	if err != nil {
-		logger.Warnw("TURN AllocatePacketConn failed", err,
-			"network", conf.Network,
-			"requestedPort", conf.RequestedPort,
-		)
-		return nil, nil, err
-	}
-
-	if g.standalone {
-		prometheus.AddConnection(prometheus.Outgoing)
-	}
-	return &openviduRelayPacketConn{
-		PacketConn: conn,
-		minPort:    g.minPort,
-		maxPort:    g.maxPort,
-		standalone: g.standalone,
-	}, addr, nil
-}
-
-// AllocateConn handles outbound TCP relay connections (RFC 6062 Connect).
-// pion/turn v5 fully implements RFC 6062 server-side and calls AllocateConn
-// when a client sends a Connect request. When RFC 6062 is disabled (the
-// default), every Connect is rejected here, which makes pion/turn return a
-// 447 (Connection Timeout or Failure) error to the client. When enabled, the
-// connection is subject to the same port restriction as UDP relay
-// (minPort/maxPort on the remote peer), and wrapped with Prometheus telemetry
-// in standalone mode.
-func (g *openviduRelayAddrGen) AllocateConn(c turn.AllocateConnConfig) (net.Conn, error) {
-	// RFC 6062 (TURN TCP allocations) is opt-in. When disabled, reject the
-	// Connect request before doing any work — this takes precedence over the
-	// port restriction below.
-	if !g.enableRFC6062 {
-		rfcErr := fmt.Errorf("RFC 6062 (TURN TCP allocations) is disabled")
-		logger.Warnw("TURN AllocateConn denied: RFC 6062 (TURN TCP allocations) is disabled", rfcErr,
-			"network", c.Network, "remoteAddr", c.RemoteAddr.String())
-		return nil, rfcErr
-	}
-
-	port, err := extractPort(c.RemoteAddr)
-	if err != nil {
-		return nil, err
-	}
-	if port < g.minPort || port > g.maxPort {
-		portErr := fmt.Errorf("destination port %d outside allowed range [%d, %d]", port, g.minPort, g.maxPort)
-		logger.Warnw("TURN AllocateConn denied: destination port outside allowed range", portErr,
-			"remoteAddr", c.RemoteAddr.String(), "port", port, "minPort", g.minPort, "maxPort", g.maxPort)
-		return nil, portErr
-	}
-
-	conn, err := g.inner.AllocateConn(c)
-	if err != nil {
-		logger.Warnw("TURN AllocateConn failed", err,
-			"network", c.Network,
-			"remoteAddr", c.RemoteAddr.String(),
-		)
-		return nil, err
-	}
-
-	if g.standalone {
-		prometheus.AddConnection(prometheus.Outgoing)
-	}
-	return &openviduRelayConn{
-		Conn:       conn,
-		standalone: g.standalone,
-	}, nil
-}
-
-// AllocateListener handles TCP relay allocations (RFC 6062 Allocate with
-// REQUESTED-TRANSPORT=TCP). pion/turn calls this to create the relay listener
-// that accepts inbound peer TCP connections (later bound by the client via
-// ConnectionBind). When RFC 6062 is disabled (the default), the TCP Allocate is
-// rejected here, which makes pion/turn return a 508 (Insufficient Capacity)
-// error to the client. UDP allocations go through AllocatePacketConn and are
-// unaffected.
-func (g *openviduRelayAddrGen) AllocateListener(conf turn.AllocateListenerConfig) (net.Listener, net.Addr, error) {
-	if !g.enableRFC6062 {
-		rfcErr := fmt.Errorf("RFC 6062 (TURN TCP allocations) is disabled")
-		logger.Warnw("TURN AllocateListener denied: RFC 6062 (TURN TCP allocations) is disabled", rfcErr,
-			"network", conf.Network)
-		return nil, nil, rfcErr
-	}
-	return g.inner.AllocateListener(conf)
-}
-
-// openviduRelayConn wraps a net.Conn (RFC 6062 outbound TCP) with:
-//   - Prometheus telemetry: when standalone is true, counts bytes on
-//     Read/Write and tracks connection count on Close.
-//
-// Port restriction is enforced at allocation time in AllocateConn since
-// net.Conn has a fixed remote address.
-type openviduRelayConn struct {
-	net.Conn
-	standalone bool
-}
-
-func (c *openviduRelayConn) Read(p []byte) (int, error) {
-	n, err := c.Conn.Read(p)
-	if c.standalone && n > 0 {
-		prometheus.IncrementBytes("", prometheus.Incoming, uint64(n), false)
-		prometheus.IncrementPackets("", prometheus.Incoming, 1, false)
-	}
-	return n, err
-}
-
-func (c *openviduRelayConn) Write(p []byte) (int, error) {
-	n, err := c.Conn.Write(p)
-	if c.standalone && n > 0 {
-		prometheus.IncrementBytes("", prometheus.Outgoing, uint64(n), false)
-		prometheus.IncrementPackets("", prometheus.Outgoing, 1, false)
-	}
-	return n, err
-}
-
-func (c *openviduRelayConn) Close() error {
-	if c.standalone {
-		prometheus.SubConnection(prometheus.Outgoing)
-	}
-	return c.Conn.Close()
+	logger.Infow("TURN relay peer port restriction enabled", "mediaPorts", formatPortRanges(mediaPorts))
 }
 
 // END OPENVIDU BLOCK

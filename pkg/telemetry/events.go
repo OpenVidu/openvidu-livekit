@@ -94,7 +94,7 @@ func (t *telemetryService) ParticipantJoined(
 			guard,
 		)
 		if !found {
-			prometheus.IncrementParticipantRtcConnected(1)
+			prometheus.IncrementParticipantRtcConnected(1, clientInfo.GetSdk())
 			prometheus.AddParticipant()
 		}
 
@@ -184,18 +184,6 @@ func (t *telemetryService) ParticipantResumed(
 	})
 }
 
-// RoomIDChanged re-keys the room's stats workers.
-//
-// NOTE: this shares the queue with the stats and participant events it races with, so
-// ops raised before the id changed (carrying `prevRoomID`) are applied before the
-// re-key and ops raised after it (carrying the new id) are applied after. Callers
-// should raise this as soon as the room starts reporting the new id.
-func (t *telemetryService) RoomIDChanged(ctx context.Context, prevRoomID livekit.RoomID, room *livekit.Room) {
-	t.enqueue(func() {
-		t.reKeyRoom(prevRoomID, livekit.RoomID(room.Sid), livekit.RoomName(room.Name))
-	})
-}
-
 func (t *telemetryService) ParticipantLeft(ctx context.Context,
 	room *livekit.Room,
 	participant *livekit.ParticipantInfo,
@@ -271,6 +259,7 @@ func (t *telemetryService) TrackPublished(
 ) {
 	t.enqueue(func() {
 		prometheus.AddPublishedTrack(track.Type.String())
+		prometheus.AddPacketTrailerTrack(track)
 		prometheus.RecordTrackPublishSuccess(track.Type.String())
 		if !shouldSendEvent {
 			return
@@ -402,6 +391,7 @@ func (t *telemetryService) TrackUnpublished(
 	t.enqueue(func() {
 		if wasPublishedLocally {
 			prometheus.SubPublishedTrack(track.Type.String())
+			prometheus.SubPacketTrailerTrack(track)
 		}
 		if !shouldSendEvent {
 			return

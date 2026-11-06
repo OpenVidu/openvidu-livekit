@@ -72,6 +72,10 @@ func setGlobalConfig(conf *Config) {
 // END OPENVIDU BLOCK
 
 const (
+	turnCredentialsFileReadError  = "reading turn credentials file %q: %w"
+	turnCredentialsFileParseError = "invalid YAML in turn credentials file %q"
+	turnCredentialsInlineWarning  = "both static credentials and credentials_file are set for TURN server, the inline values will be used"
+
 	generatedCLIFlagUsage = "generated"
 
 	// TURNMaxTTLSeconds is the operational maximum for TURN credential TTLs (24 hours).
@@ -111,11 +115,12 @@ const (
 )
 
 var (
-	ErrKeyFileIncorrectPermission        = errors.New("key file others permissions must be set to 0")
-	ErrTURNSecretFileIncorrectPermission = errors.New("turn secret file others permissions must be set to 0")
-	ErrKeysNotSet                        = errors.New("one of key-file or keys must be provided")
-	ErrTURNSecretEmpty                   = errors.New("turn secret is empty")
-	ErrTURNServerNoCredentials           = errors.New("turn server has no usable credentials: set a non-empty secret/secret_file for dynamic auth, or username and credential for static auth")
+	ErrKeyFileIncorrectPermission            = errors.New("key file others permissions must be set to 0")
+	ErrTURNCredentialFileIncorrectPermission = errors.New("turn credentials file others permissions must be set to 0")
+	ErrTURNSecretFileIncorrectPermission     = errors.New("turn secret file others permissions must be set to 0")
+	ErrKeysNotSet                            = errors.New("one of key-file or keys must be provided")
+	ErrTURNSecretEmpty                       = errors.New("turn secret is empty")
+	ErrTURNServerNoCredentials               = errors.New("turn server has no usable credentials: set a non-empty secret/secret_file for dynamic auth, or username and credential for static auth")
 )
 
 type Config struct {
@@ -131,6 +136,7 @@ type Config struct {
 	PrometheusPort uint32                   `yaml:"prometheus_port,omitempty"`
 	Prometheus     PrometheusConfig         `yaml:"prometheus,omitempty"`
 	DebugHandler   DebugHandlerConfig       `yaml:"debug_handler,omitempty"`
+	WebTransport   WebTransportConfig       `yaml:"webtransport,omitempty"`
 	RTC            RTCConfig                `yaml:"rtc,omitempty"`
 	Redis          redisLiveKit.RedisConfig `yaml:"redis,omitempty"`
 	Audio          sfu.AudioConfig          `yaml:"audio,omitempty"`
@@ -166,6 +172,15 @@ type Config struct {
 	API APIConfig `yaml:"api,omitempty"`
 }
 
+// WebTransportConfig is the node's HTTP/3 listener. QUIC has no plaintext mode,
+// so a certificate is required; development mode generates a self-signed one.
+type WebTransportConfig struct {
+	// Port is the UDP port to listen on. 0 starts no listener.
+	Port        uint32 `yaml:"port,omitempty"`
+	TLSCertFile string `yaml:"tls_cert_file,omitempty"`
+	TLSKeyFile  string `yaml:"tls_key_file,omitempty"`
+}
+
 type RTCConfig struct {
 	rtcconfig.RTCConfig `yaml:",inline"`
 
@@ -189,7 +204,11 @@ type RTCConfig struct {
 	// Throttle periods for pli/fir rtcp packets
 	PLIThrottle sfu.PLIThrottleConfig `yaml:"pli_throttle,omitempty"`
 
+	RTXBudget sfu.RTXBudgetConfig `yaml:"rtx_budget,omitempty"`
+
 	CongestionControl CongestionControlConfig `yaml:"congestion_control,omitempty"`
+
+	FlexFEC FlexFECConfig `yaml:"flexfec,omitempty"`
 
 	// allow TCP and TURN/TLS fallback
 	AllowTCPFallback *bool `yaml:"allow_tcp_fallback,omitempty"`
@@ -243,6 +262,8 @@ type TURNServer struct {
 	Protocol   string `yaml:"protocol,omitempty"`
 	Username   string `yaml:"username,omitempty"`
 	Credential string `yaml:"credential,omitempty"`
+	// YAML file containing username and credential. Inline static credentials take precedence.
+	CredentialsFile string `yaml:"credentials_file,omitempty"`
 	// Secret is used for TURN static auth secrets mechanism. When provided,
 	// dynamic credentials are generated using HMAC-SHA1 instead of static Username/Credential
 	Secret string `yaml:"secret,omitempty"`
@@ -267,6 +288,28 @@ type CongestionControlConfig struct {
 	UseSendSideBWE   bool                          `yaml:"use_send_side_bwe,omitempty"`
 	SendSideBWEPacer string                        `yaml:"send_side_bwe_pacer,omitempty"`
 	SendSideBWE      sendsidebwe.SendSideBWEConfig `yaml:"send_side_bwe,omitempty"`
+}
+
+// Validate reports configuration that would otherwise be ignored at runtime.
+func (c CongestionControlConfig) Validate() error {
+	switch pacer.PacerBehavior(c.SendSideBWEPacer) {
+	case "", pacer.PacerBehaviorPassThrough, pacer.PacerBehaviorNoQueue, pacer.PacerBehaviorLeakybucket:
+		return nil
+	default:
+		return fmt.Errorf(
+			"invalid send_side_bwe_pacer %q, must be one of %q, %q, %q",
+			c.SendSideBWEPacer,
+			pacer.PacerBehaviorPassThrough,
+			pacer.PacerBehaviorNoQueue,
+			pacer.PacerBehaviorLeakybucket,
+		)
+	}
+}
+
+// FlexFECConfig controls FlexFEC-03 recovery on the publisher -> SFU leg.
+type FlexFECConfig struct {
+	// negotiate flexfec-03 with publishers and use it to recover lost upstream packets
+	UpstreamEnabled bool `yaml:"upstream_enabled,omitempty"`
 }
 
 type PlayoutDelayConfig struct {
@@ -368,10 +411,9 @@ type TURNConfig struct {
 	// when auto-discovering on nodes that are not publicly reachable.
 	// Ignored when RelayAddress is explicitly set or the node is publicly reachable.
 	RelayPreferredInterface string `yaml:"relay_preferred_interface,omitempty"`
-	// EnableRFC6062 enables RFC 6062 (TURN Extensions for TCP Allocations), i.e.
-	// the Connect / ConnectionBind requests that let a client relay traffic to a
-	// peer over an outbound TCP connection. Disabled by default: clients can only
-	// allocate UDP relays unless this is explicitly turned on.
+	// Deprecated: EnableRFC6062 is ignored. TURN TCP relay allocations (RFC 6062)
+	// are always refused since LiveKit v1.13.10 (livekit#4992). Still parsed so
+	// that configs which set it keep loading in strict mode.
 	EnableRFC6062 bool `yaml:"enable_rfc6062,omitempty"`
 	// TCPConnectionIdleTimeoutSeconds closes a TURN TCP (TLS) connection that
 	// neither sends nor receives for this many seconds, so a client cannot hold a
@@ -427,6 +469,10 @@ type LimitConfig struct {
 
 	MaxDataTrackCustomEncodingLength int `yaml:"max_data_track_custom_encoding_length,omitempty"`
 
+	// video subscribes per second on this node at which to measure, in shadow, how long
+	// pacing would delay subscribes; empty turns the measurement off
+	SubscribePaceShadowRates []float64 `yaml:"subscribe_pace_shadow_rates,omitempty"`
+
 	// maximum size (in bytes) of a single message read off a client-facing
 	// signalling WebSocket connection. Frames larger than this are rejected by the
 	// transport before being buffered, guarding against single-frame memory
@@ -470,8 +516,20 @@ func (l LimitConfig) CheckAttributesSize(attributes map[string]string) bool {
 	return uint32(total) <= l.MaxAttributesSize
 }
 
-func (l LimitConfig) CheckDataBlobKeyLength(key string) bool {
-	return l.MaxDataBlobKeyLength == 0 || len(key) <= l.MaxDataBlobKeyLength
+// DataBlobKeyLength returns the length of the identifying content of a data blob key.
+// The text form of the key message is not used, as it adds field names and quotes.
+func DataBlobKeyLength(key *livekit.DataBlobKey) int {
+	switch k := key.GetKey().(type) {
+	case *livekit.DataBlobKey_Generic:
+		return len(k.Generic)
+	case *livekit.DataBlobKey_SchemaId:
+		return len(k.SchemaId.GetName()) + len(k.SchemaId.GetEncoding().GetCustom())
+	}
+	return 0
+}
+
+func (l LimitConfig) CheckDataBlobKeyLength(key *livekit.DataBlobKey) bool {
+	return l.MaxDataBlobKeyLength == 0 || DataBlobKeyLength(key) <= l.MaxDataBlobKeyLength
 }
 
 func (l LimitConfig) CheckDataTrackCustomEncodingLength(identifier string) bool {
@@ -501,7 +559,7 @@ func (l LimitConfig) CheckDataBlobsSize(dataBlobs []*livekit.DataBlob) bool {
 
 	total := 0
 	for _, dataBlob := range dataBlobs {
-		total += len(dataBlob.GetKey().String()) + len(dataBlob.Contents)
+		total += DataBlobKeyLength(dataBlob.GetKey()) + len(dataBlob.Contents)
 	}
 	return uint32(total) <= l.MaxDataBlobSize
 }
@@ -513,9 +571,9 @@ func (l LimitConfig) CanAddDataBlob(dataBlobs []*livekit.DataBlob, toAdd *liveki
 
 	total := 0
 	for _, dataBlob := range dataBlobs {
-		total += len(dataBlob.Key.String()) + len(dataBlob.Contents)
+		total += DataBlobKeyLength(dataBlob.GetKey()) + len(dataBlob.Contents)
 	}
-	return uint32(total+len(toAdd.GetKey().String())+len(toAdd.Contents)) <= l.MaxDataBlobSize
+	return uint32(total+DataBlobKeyLength(toAdd.GetKey())+len(toAdd.Contents)) <= l.MaxDataBlobSize
 }
 
 // ---------------------------------
@@ -611,6 +669,7 @@ var DefaultConfig = Config{
 		PacketBufferSizeVideo:             500,
 		PacketBufferSizeAudio:             200,
 		PLIThrottle:                       sfu.DefaultPLIThrottleConfig,
+		RTXBudget:                         sfu.DefaultRTXBudgetConfig,
 		DatachannelDataTrackTargetLatency: 100 * time.Millisecond,
 		CongestionControl: CongestionControlConfig{
 			Enabled:                   true,
@@ -668,8 +727,6 @@ var DefaultConfig = Config{
 	},
 	TURN: TURNConfig{
 		// BEGIN OPENVIDU BLOCK
-		// RFC 6062 (TURN TCP allocations) is disabled by default.
-		EnableRFC6062: false,
 		// Close TURN TCP/TLS connections idle in both directions after 60s.
 		TCPConnectionIdleTimeoutSeconds: DefaultTURNTCPConnectionIdleTimeoutSeconds,
 		// END OPENVIDU BLOCK
@@ -738,6 +795,10 @@ func NewConfig(confString string, strictMode bool, c *cli.Command, baseFlags []c
 
 	if err := conf.RTC.Validate(conf.Development); err != nil {
 		return nil, fmt.Errorf("could not validate RTC config: %v", err)
+	}
+
+	if err := conf.RTC.CongestionControl.Validate(); err != nil {
+		return nil, fmt.Errorf("could not validate congestion control config: %v", err)
 	}
 
 	conf.NormalizeTURNTTLs()
@@ -960,6 +1021,37 @@ func (conf *Config) LoadTURNSecrets() error {
 			conf.RTC.TURNServers[i].Secret = inlineSecret
 		}
 
+		// Keep the static pair together; never combine one inline value with a
+		// credential from a different source.
+		if s.CredentialsFile != "" {
+			if s.Username != "" || s.Credential != "" {
+				logger.Warnw(turnCredentialsInlineWarning, nil,
+					"host", s.Host, "port", s.Port)
+			} else {
+				st, err := os.Stat(s.CredentialsFile)
+				if err != nil {
+					return err
+				}
+				if st.Mode().Perm()&otherFilter != 0o000 {
+					return ErrTURNCredentialFileIncorrectPermission
+				}
+				data, err := os.ReadFile(s.CredentialsFile)
+				if err != nil {
+					return fmt.Errorf(turnCredentialsFileReadError, s.CredentialsFile, err)
+				}
+				var credentials struct {
+					Username   string `yaml:"username"`
+					Credential string `yaml:"credential"`
+				}
+				if err := yaml.Unmarshal(data, &credentials); err != nil {
+					// YAML type errors may contain scalar values from the secret file.
+					return fmt.Errorf(turnCredentialsFileParseError, s.CredentialsFile)
+				}
+				conf.RTC.TURNServers[i].Username = credentials.Username
+				conf.RTC.TURNServers[i].Credential = credentials.Credential
+			}
+		}
+
 		// validate credential mode as an explicit union rather than inferring it from a
 		// post-load empty secret (which would silently fall back to static credentials)
 		s := conf.RTC.TURNServers[i]
@@ -1019,10 +1111,11 @@ func GenerateCLIFlags(existingFlags []cli.Flag, hidden bool) ([]cli.Flag, error)
 	defaultConfig := &DefaultConfig
 	flags := make([]cli.Flag, 0)
 	for name, value := range (defaultConfig).ToCLIFlagNames(existingFlags) {
-		kind := value.Kind()
-		if kind == reflect.Ptr {
-			kind = value.Type().Elem().Kind()
+		valueType := value.Type()
+		if valueType.Kind() == reflect.Ptr {
+			valueType = valueType.Elem()
 		}
+		kind := valueType.Kind()
 
 		var flag cli.Flag
 		envVar := fmt.Sprintf("LIVEKIT_%s", strings.ToUpper(strings.ReplaceAll(name, ".", "_")))
@@ -1054,12 +1147,23 @@ func GenerateCLIFlags(existingFlags []cli.Flag, hidden bool) ([]cli.Flag, error)
 				Hidden:      hidden,
 			}
 		case reflect.Int64:
-			flag = &cli.Int64Flag{
-				Name:        name,
-				Sources:     cli.EnvVars(envVar),
-				Usage:       generatedCLIFlagUsage,
-				DefaultText: defaultText,
-				Hidden:      hidden,
+			if valueType == reflect.TypeOf(time.Duration(0)) {
+				// parse values like "30s", as the YAML config does
+				flag = &cli.DurationFlag{
+					Name:        name,
+					Sources:     cli.EnvVars(envVar),
+					Usage:       generatedCLIFlagUsage,
+					DefaultText: defaultText,
+					Hidden:      hidden,
+				}
+			} else {
+				flag = &cli.Int64Flag{
+					Name:        name,
+					Sources:     cli.EnvVars(envVar),
+					Usage:       generatedCLIFlagUsage,
+					DefaultText: defaultText,
+					Hidden:      hidden,
+				}
 			}
 		case reflect.Uint8, reflect.Uint16, reflect.Uint32:
 			flag = &cli.UintFlag{

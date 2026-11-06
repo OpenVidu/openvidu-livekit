@@ -19,6 +19,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -98,19 +99,8 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 	}
 
 	// BEGIN OPENVIDU BLOCK
-	if conf.RTC.ICEPortRangeStart != 0 && conf.RTC.ICEPortRangeEnd != 0 {
-		logger.Infow("TURN relay peer port restriction enabled",
-			"minPort", conf.RTC.ICEPortRangeStart,
-			"maxPort", conf.RTC.ICEPortRangeEnd,
-		)
-	} else {
-		logger.Warnw("TURN relay peer port restriction: no ICE port range configured, all peer relay ports will be denied", nil)
-	}
-
 	if turnConf.EnableRFC6062 {
-		logger.Infow("TURN RFC 6062 (TCP allocations) enabled")
-	} else {
-		logger.Infow("TURN RFC 6062 (TCP allocations) disabled — clients can only allocate UDP relays")
+		logger.Warnw("turn.enable_rfc6062 is deprecated and ignored: TURN TCP relay allocations (RFC 6062) are always refused", nil)
 	}
 	// END OPENVIDU BLOCK
 
@@ -144,6 +134,17 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 	logValues = append(logValues, "turn.relay_range_end", turnConf.RelayPortRangeEnd)
 	logValues = append(logValues, "turn.per_user_relay_allocation_limit", turnConf.PerUserRelayAllocationLimit)
 
+	// embedded TURN shares the host with the SFU, limit relays to this host to its media ports
+	var localIPs map[netip.Addr]struct{}
+	var mediaPorts []portRange
+	if !standalone {
+		localIPs, err = getTURNLocalIPs(&conf.RTC)
+		if err != nil {
+			return nil, errors.Wrap(err, "could not get local IPs for TURN relay policy")
+		}
+		mediaPorts = getTURNMediaPorts(&conf.RTC)
+	}
+
 	// BEGIN OPENVIDU BLOCK
 	// Restrict TURN relay peers to this machine's local IPs and the registered
 	// cluster-node IPs (Redis nodes_openvidu). Without this the embedded relay
@@ -152,6 +153,9 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 	// DenyPeerCIDRs rules parsed above, superseding the inline permission
 	// handler. Built once and shared across bind addresses.
 	turnSecurity := NewTURNSecurity(conf, rc, allowRestrictedPeerCIDRs, denyPeerCIDRs)
+	if !standalone {
+		logOpenViduRelayPortPolicy(mediaPorts)
+	}
 	// END OPENVIDU BLOCK
 
 	for _, addr := range turnConf.BindAddresses {
@@ -180,22 +184,24 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 			MaxPort:    turnConf.RelayPortRangeEnd,
 			MaxRetries: allocateRetries,
 		}
-		// BEGIN OPENVIDU BLOCK
-		relayAddrGen = newOpenViduRelayAddrGen(
-			relayAddrGen,
-			uint16(conf.RTC.ICEPortRangeStart),
-			uint16(conf.RTC.ICEPortRangeEnd),
-			standalone,
-			turnConf.EnableRFC6062,
-		)
-		// END OPENVIDU BLOCK
 
 		// BEGIN OPENVIDU BLOCK
 		// Enforce the cluster-node peer-IP allowlist (plus the configured
 		// AllowRestrictedPeerCIDRs / DenyPeerCIDRs rules). This replaces the
-		// previous inline handler, which allowed relaying to any public IP.
+		// inline handler, which allows relaying to any public IP.
 		permissionHandler := turnSecurity.PermissionHandler()
 		// END OPENVIDU BLOCK
+
+		relayAddrGen = newRejectTCPRelayAddressGenerator(relayAddrGen)
+		if standalone {
+			relayAddrGen = telemetry.NewRelayAddressGenerator(relayAddrGen)
+		} else {
+			relayAddrGen = newTURNRelayPolicy(relayAddrGen, localIPs, mediaPorts)
+			// BEGIN OPENVIDU BLOCK
+			// The media-port limit also for the other cluster nodes TURNSecurity lets the relay reach.
+			relayAddrGen = newOpenViduRelayPortPolicy(relayAddrGen, mediaPorts)
+			// END OPENVIDU BLOCK
+		}
 
 		if turnConf.TLSPort > 0 {
 			listener, err := newTURNTCPListener(turnConf, net.JoinHostPort(addr, strconv.Itoa(turnConf.TLSPort)))

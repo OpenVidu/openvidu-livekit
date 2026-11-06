@@ -15,14 +15,18 @@
 package config
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/urfave/cli/v3"
 
 	"github.com/livekit/livekit-server/pkg/config/configtest"
+	"github.com/livekit/livekit-server/pkg/sfu/pacer"
 )
 
 func TestConfig_UnmarshalKeys(t *testing.T) {
@@ -122,44 +126,62 @@ func TestGeneratedFlags(t *testing.T) {
 	require.False(t, *conf.RTC.ReconnectOnSubscriptionError)
 }
 
+func TestGeneratedDurationFlags(t *testing.T) {
+	// run a command with the generated flags, as cmd/server does, so that flag and env var values are parsed
+	run := func(t *testing.T, args ...string) (*Config, error) {
+		generatedFlags, err := GenerateCLIFlags(nil, true)
+		require.NoError(t, err)
+
+		var conf *Config
+		c := &cli.Command{
+			Name:  "test",
+			Flags: generatedFlags,
+			Action: func(_ context.Context, c *cli.Command) error {
+				var err error
+				conf, err = NewConfig("", true, c, nil)
+				return err
+			},
+		}
+		err = c.Run(context.Background(), append([]string{"test"}, args...))
+		return conf, err
+	}
+
+	t.Run("flag", func(t *testing.T) {
+		conf, err := run(t, "--api.execution_timeout=5s")
+		require.NoError(t, err)
+		require.Equal(t, 5*time.Second, conf.API.ExecutionTimeout)
+	})
+
+	t.Run("env var", func(t *testing.T) {
+		t.Setenv("LIVEKIT_ROOM_CREATE_ROOM_TIMEOUT", "30s")
+		conf, err := run(t)
+		require.NoError(t, err)
+		require.Equal(t, 30*time.Second, conf.Room.CreateRoomTimeout)
+	})
+
+	t.Run("value without a unit", func(t *testing.T) {
+		// rejected, as in the YAML config, instead of being read as nanoseconds
+		t.Setenv("LIVEKIT_ROOM_CREATE_ROOM_TIMEOUT", "30")
+		_, err := run(t)
+		require.ErrorContains(t, err, "LIVEKIT_ROOM_CREATE_ROOM_TIMEOUT")
+	})
+}
+
 func TestYAMLTag(t *testing.T) {
 	require.NoError(t, configtest.CheckYAMLTags(Config{}))
 }
 
 // BEGIN OPENVIDU BLOCK
 
-func TestConfig_TURN_RFC6062DisabledByDefault(t *testing.T) {
-	conf, err := NewConfig("", true, nil, nil)
-	require.NoError(t, err)
-	require.False(t, conf.TURN.EnableRFC6062, "RFC 6062 (TURN TCP allocations) must be disabled by default")
-}
-
-func TestConfig_TURN_RFC6062DisabledWhenOmittedFromTurnBlock(t *testing.T) {
-	// A turn block that is present but does not mention enable_rfc6062 must
-	// still leave it disabled — omitting the key keeps the default (false).
-	const content = `turn:
-  enabled: true
-  udp_port: 3478`
-	conf, err := NewConfig(content, true, nil, nil)
-	require.NoError(t, err)
-	require.True(t, conf.TURN.Enabled, "sanity: the turn block was applied")
-	require.False(t, conf.TURN.EnableRFC6062, "RFC 6062 must stay disabled when not defined in the config")
-}
-
-func TestConfig_TURN_RFC6062EnabledViaYAML(t *testing.T) {
-	const content = `turn:
-  enable_rfc6062: true`
-	conf, err := NewConfig(content, true, nil, nil)
-	require.NoError(t, err)
-	require.True(t, conf.TURN.EnableRFC6062)
-}
-
-func TestConfig_TURN_RFC6062DisabledViaYAML(t *testing.T) {
-	const content = `turn:
-  enable_rfc6062: false`
-	conf, err := NewConfig(content, true, nil, nil)
-	require.NoError(t, err)
-	require.False(t, conf.TURN.EnableRFC6062)
+func TestConfig_TURN_DeprecatedRFC6062KeyStillParses(t *testing.T) {
+	// turn.enable_rfc6062 shipped in OpenVidu 3.8.0 and is ignored since TCP
+	// relays are always refused (livekit#4992). Configs that still set it must
+	// keep loading in strict mode.
+	for _, value := range []string{"true", "false"} {
+		conf, err := NewConfig("turn:\n  enable_rfc6062: "+value, true, nil, nil)
+		require.NoError(t, err, "enable_rfc6062: %s", value)
+		require.Equal(t, value == "true", conf.TURN.EnableRFC6062)
+	}
 }
 
 func TestConfig_AdvertiseInternalIP_DefaultFalse(t *testing.T) {
@@ -242,6 +264,40 @@ func TestNewConfigNormalizesTURNTTL(t *testing.T) {
 	require.Equal(t, DefaultTURNTTLSeconds, conf.TURN.TTLSeconds)
 }
 
+func TestNewConfigValidatesSendSideBWEPacer(t *testing.T) {
+	cases := []struct {
+		name    string
+		pacer   string
+		wantErr bool
+	}{
+		{name: "unset keeps the default", pacer: "", wantErr: false},
+		{name: "pass-through", pacer: string(pacer.PacerBehaviorPassThrough), wantErr: false},
+		{name: "no-queue", pacer: string(pacer.PacerBehaviorNoQueue), wantErr: false},
+		{name: "leaky-bucket", pacer: string(pacer.PacerBehaviorLeakybucket), wantErr: false},
+		{name: "typo is rejected", pacer: "leakybucket", wantErr: true},
+		{name: "unknown value is rejected", pacer: "not-a-pacer", wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			content := "rtc:\n  congestion_control:\n    send_side_bwe_pacer: " + tc.pacer
+			conf, err := NewConfig(content, true, nil, nil)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tc.pacer)
+				return
+			}
+
+			require.NoError(t, err)
+			if tc.pacer == "" {
+				require.Equal(t, string(pacer.PacerBehaviorNoQueue), conf.RTC.CongestionControl.SendSideBWEPacer)
+				return
+			}
+			require.Equal(t, tc.pacer, conf.RTC.CongestionControl.SendSideBWEPacer)
+		})
+	}
+}
+
 func writeSecretFile(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "secret")
@@ -306,4 +362,68 @@ func TestLoadTURNSecrets(t *testing.T) {
 		require.NoError(t, conf.LoadTURNSecrets())
 		require.Equal(t, "fromfile", conf.RTC.TURNServers[0].Secret)
 	})
+}
+
+// Exercise the operator-facing YAML path so this test also runs on the upstream
+// branch, where credentials_file is not recognized yet.
+func TestTURNCredentialsFile(t *testing.T) {
+	const (
+		fileName          = "turn-credentials.yaml"
+		username          = "turn-user"
+		credential        = " turn-password "
+		validCredentials  = "username: turn-user\ncredential: ' turn-password '\n"
+		privateValue      = "do-not-log-my-password"
+		redactedPrefix    = "do-not-"
+		configFormat      = "rtc:\n  turn_servers:\n    - host: turn.example.com\n      credentials_file: %q\n%s"
+		inlineCredentials = "      username: inline-user\n      credential: inline-password\n"
+	)
+	cases := []struct {
+		name           string
+		data           string
+		mode           os.FileMode
+		inline         string
+		missing        bool
+		directory      bool
+		wantError      bool
+		wantUser       string
+		wantCredential string
+	}{
+		{name: "pair loaded from one file", data: validCredentials, mode: 0o600, wantUser: username, wantCredential: credential},
+		{name: "group-readable file accepted", data: validCredentials, mode: 0o640, wantUser: username, wantCredential: credential},
+		{name: "inline pair wins without reading missing file", missing: true, inline: inlineCredentials, wantUser: "inline-user", wantCredential: "inline-password"},
+		{name: "inline whitespace preserved", missing: true, inline: "      username: ' u '\n      credential: ' c '\n", wantUser: " u ", wantCredential: " c "},
+		{name: "partial inline username is not mixed with file", data: validCredentials, mode: 0o600, inline: "      username: inline-user\n", wantError: true},
+		{name: "partial inline password is not mixed with file", data: validCredentials, mode: 0o600, inline: "      credential: inline-password\n", wantError: true},
+		{name: "missing file", missing: true, wantError: true},
+		{name: "directory cannot be read", directory: true, wantError: true},
+		{name: "others permissions rejected", data: validCredentials, mode: 0o604, wantError: true},
+		{name: "scalar credentials do not leak in errors", data: privateValue, mode: 0o600, wantError: true},
+		{name: "invalid YAML", data: "username: [", mode: 0o600, wantError: true},
+		{name: "empty file", mode: 0o600, wantError: true},
+		{name: "whitespace file", data: " \n\t", mode: 0o600, wantError: true},
+		{name: "missing username", data: "credential: password\n", mode: 0o600, wantError: true},
+		{name: "missing password", data: "username: user\n", mode: 0o600, wantError: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), fileName)
+			switch {
+			case tc.directory:
+				require.NoError(t, os.Mkdir(path, 0o700))
+			case !tc.missing:
+				require.NoError(t, os.WriteFile(path, []byte(tc.data), tc.mode))
+			}
+			conf, err := NewConfig(fmt.Sprintf(configFormat, path, tc.inline), true, nil, nil)
+			require.NoError(t, err)
+			err = conf.LoadTURNSecrets()
+			if tc.wantError {
+				require.Error(t, err)
+				require.NotContains(t, err.Error(), redactedPrefix)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.wantUser, conf.RTC.TURNServers[0].Username)
+			require.Equal(t, tc.wantCredential, conf.RTC.TURNServers[0].Credential)
+		})
+	}
 }

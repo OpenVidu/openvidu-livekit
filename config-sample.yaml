@@ -110,6 +110,13 @@ rtc:
   #     # Insecure username/password authentication
   #     username: ""
   #     credential: ""
+  #     # Alternatively, load the static username/credential pair from one YAML file:
+  #     #   username: myuser
+  #     #   credential: mycredential
+  #     # The file must have no permissions for others (for example, chmod 640).
+  #     # Inline username/credential take precedence; the pair is never mixed with
+  #     # file values. Quoted YAML preserves whitespace in passwords.
+  #     credentials_file: "/run/credentials/livekit/turn.yaml"
   # # allows LiveKit to monitor congestion when sending streams and automatically
   # # manage bandwidth utilization to avoid congestion/loss. Enabled by default
   # congestion_control:
@@ -117,6 +124,21 @@ rtc:
   #   # in the unlikely event of highly congested networks, SFU may choose to pause some tracks
   #   # in order to allow others to stream smoothly. You can disable this behavior here
   #   allow_pause: true
+  #   # use send-side bandwidth estimation instead of relying on receiver reports, default false
+  #   use_send_side_bwe: false
+  #   # how egress is paced when use_send_side_bwe is enabled. one of:
+  #   #   no-queue     - hand packets to a send worker that drains them without rate
+  #   #                  limiting, so the sender never blocks on a write (default)
+  #   #   pass-through - send each packet inline on the calling goroutine
+  #   #   leaky-bucket - accepted, but not currently wired to the bandwidth estimate; it
+  #   #                  logs a warning and falls back to no-queue. see livekit/livekit#4724
+  #   # an unrecognized value is rejected at startup.
+  #   send_side_bwe_pacer: no-queue
+  # # FlexFEC-03 forward error correction, disabled by default.
+  # # Accepts FEC from publishers and uses it to repair lost packets before
+  # # forwarding.
+  # flexfec:
+  #   upstream_enabled: false
   # # allows automatic connection fallback to TCP and TURN/TLS (if configured) when UDP has been unstable, default true
   # allow_tcp_fallback: true
   # # signaling RTT (in milliseconds) below which ICE/TCP is attempted on a UDP failure; at or above it,
@@ -136,6 +158,17 @@ rtc:
   #   low_quality: 500ms
   #   mid_quality: 1s
   #   high_quality: 1s
+  # # cap the bytes a subscriber's track retransmits in response to NACKs. Off by default.
+  # # max_ratio: retransmitted bytes allowed, as a fraction of the media bytes sent; 0 turns the cap off.
+  # # burst_bytes: retransmitted bytes allowed at once above that ratio; at least 1500.
+  # # When the budget is short, the newest packets are retransmitted first.
+  # rtx_budget:
+  #   audio:
+  #     max_ratio: 0.4
+  #     burst_bytes: 4000
+  #   video:
+  #     max_ratio: 0.2
+  #     burst_bytes: 64000
   # # when set, Livekit will collect loopback candidates, it is useful for some VM have public address mapped to its loopback interface.
   # enable_loopback_candidate: true
   # # network interface filter. If the machine has more than one network interface and you'd like it to use or skip specific interfaces
@@ -177,7 +210,8 @@ rtc:
   # datachannel_data_track_target_latency: 100ms
 
 # when enabled, LiveKit will expose prometheus metrics on :6789/metrics
-# prometheus_port: 6789
+# prometheus:
+#   port: 6789
 
 # expose /debug/pprof (and /debug/goroutine, /debug/rooms) on a dedicated port,
 # separate from the public signalling port. only enabled when port is set.
@@ -341,16 +375,15 @@ keys:
 #   # Values <= 0 fall back to the 300s (5m) default; values are capped at 86400 (24h).
 #   ttl_seconds: 300
 # BEGIN OPENVIDU BLOCK
-#   # enable RFC 6062 (TURN Extensions for TCP Allocations): allows clients to relay
-#   # traffic to a peer over an outbound TCP connection (Connect / ConnectionBind).
-#   # Disabled by default — clients can only allocate UDP relays unless this is set.
-#   enable_rfc6062: false
 #   # list of peer CIDRs to explicitly allow relay access to. Any peer IP that falls
 #   # in one of these CIDRs is permitted, regardless of whether it is private, public
 #   # or a cluster-node IP (deny_peer_cidrs still takes precedence).
 #   # In addition, when this list is non-empty, restricted peer IPs (loopback,
-#   # link-local (unicast/multicast), multicast, private, unspecified) that are NOT
-#   # listed here are denied. By default (empty list) this check is disabled.
+#   # link-local (unicast/multicast), multicast, private, unspecified, carrier-grade
+#   # NAT, NAT64 and other special-purpose ranges) that are NOT listed here are
+#   # denied. By default (empty list) this check is disabled.
+#   # Relays to any peer only reach the RTC media UDP ports, and TCP relays
+#   # (RFC 6062) are always refused; the former enable_rfc6062 key is ignored.
 # END OPENVIDU BLOCK
 #   allow_restricted_peer_cidrs:
 #     - 10.0.0.0/8

@@ -157,6 +157,7 @@ func NewSubscribedTrack(params SubscribedTrackParams) (*SubscribedTrack, error) 
 		DisableSenderReportPassThrough: params.Subscriber.GetDisableSenderReportPassThrough(),
 		SupportsCodecChange:            params.Subscriber.SupportsCodecChange(),
 		EnableStartAtDesiredQuality:    params.EnableStartAtDesiredQuality,
+		RTXBudget:                      params.SubscriberConfig.RTXBudget,
 		Listener:                       s,
 	})
 	if err != nil {
@@ -323,7 +324,7 @@ func (t *SubscribedTrack) UpdateSubscriberSettings(settings *livekit.UpdateTrack
 	}
 
 	isImmediate = isImmediate || (!settings.Disabled && settings.Disabled != t.isMutedLocked())
-	t.settings = utils.CloneProto(settings)
+	t.settings = proto.CloneOf(settings)
 	t.logger.Debugw("saving subscriber track settings", "settings", logger.Proto(t.settings))
 	t.settingsLock.Unlock()
 

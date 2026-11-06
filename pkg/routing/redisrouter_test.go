@@ -27,7 +27,7 @@ import (
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/protocol/rpc"
-	"github.com/livekit/psrpc"
+	"github.com/livekit/psrpc/pkg/bus/redisbus"
 
 	"github.com/livekit/livekit-server/pkg/config"
 	"github.com/livekit/livekit-server/pkg/routing/selector"
@@ -192,7 +192,7 @@ func TestRegistrationSteadyThroughRedisRestart(t *testing.T) {
 	rc := redis.NewClient(&redis.Options{Addr: mr.Addr(), DialTimeout: 200 * time.Millisecond,
 		ReadTimeout: 200 * time.Millisecond, WriteTimeout: 200 * time.Millisecond})
 	t.Cleanup(func() { _ = rc.Close() })
-	kps, err := rpc.NewKeepalivePubSub(rpc.NewClientParams(rpc.PSRPCConfig{}, psrpc.NewRedisMessageBus(rc), logger.GetLogger(), nil))
+	kps, err := rpc.NewKeepalivePubSub(rpc.NewClientParams(rpc.PSRPCConfig{}, redisbus.New(rc), logger.GetLogger(), nil))
 	require.NoError(t, err)
 	node, err := NewLocalNodeFromNodeProto(&livekit.Node{Id: "self", Stats: &livekit.NodeStats{UpdatedAt: time.Now().Unix()}})
 	require.NoError(t, err)
