@@ -251,6 +251,22 @@ func TestInitialize(t *testing.T) {
 		require.Equal(t, (720 * time.Hour).Milliseconds(), retention.EventsMs)
 	})
 
+	t.Run("node documents expire with the entities retention", func(t *testing.T) {
+		db := client.Database("init_nodes_retention")
+		_, err := schema.Initialize(ctx, db, testOptions())
+		require.NoError(t, err)
+		nodes := listIndexes(t, db.Collection(schema.CollectionNodes))
+		require.EqualValues(t, 90*24*3600, *nodes["lastSeenAt_ttl"].ExpireAfterSeconds)
+		require.Contains(t, nodes, "mediaNode_firstSeenAt")
+
+		changed := testOptions()
+		changed.Retention.Entities = 30 * 24 * time.Hour
+		result, err := schema.Initialize(ctx, db, changed)
+		require.NoError(t, err)
+		require.Contains(t, result.UpdatedTTLs, "nodes.lastSeenAt_ttl")
+		require.EqualValues(t, 30*24*3600, *listIndexes(t, db.Collection(schema.CollectionNodes))["lastSeenAt_ttl"].ExpireAfterSeconds)
+	})
+
 	t.Run("5-minute rollups retention", func(t *testing.T) {
 		db := client.Database("init_rollups_5min")
 		options := testOptions()

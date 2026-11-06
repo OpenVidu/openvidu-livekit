@@ -108,12 +108,26 @@ func TestContractFixtures(t *testing.T) {
 		p := contractProcessor(t, db, "participant")
 		replayScenario(t, p, contractEvents(t), contractStats())
 		s := store.New(db)
+		hosted := map[string]int32{}
+		for _, event := range contractEvents(t) {
+			if event.GetType() == livekit.AnalyticsEventType_ROOM_CREATED {
+				hosted[event.GetNodeId()]++
+			}
+		}
 		for _, node := range []struct {
 			id        string
+			ip        string
 			firstSeen time.Time
-		}{{scNodeAlpha, time.Date(2026, 10, 1, 8, 0, 0, 0, time.UTC)}, {scNodeBeta, time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)}} {
-			require.NoError(t, s.Heartbeat(ctx, node.id, scServerVersion, scRegion, 10*time.Second, true, scMediaNodes[node.id], node.firstSeen))
-			require.NoError(t, s.Heartbeat(ctx, node.id, scServerVersion, scRegion, 10*time.Second, true, scMediaNodes[node.id], sat("10:35:10")))
+		}{
+			{scNodeAlpha, "10.0.0.1", time.Date(2026, 10, 1, 8, 0, 0, 0, time.UTC)},
+			{scNodeBeta, "10.0.0.2", time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)},
+		} {
+			heartbeat := store.NodeHeartbeat{ServerVersion: scServerVersion, BatchInterval: 10 * time.Second,
+				MediaStats: true, RTCEngine: "pion", MediaNode: scMediaNodes[node.id], IP: node.ip,
+				HostedRooms: hosted[node.id]}
+			require.NoError(t, s.Heartbeat(ctx, node.id, heartbeat, node.firstSeen))
+			heartbeat.HostedRooms = 0
+			require.NoError(t, s.Heartbeat(ctx, node.id, heartbeat, sat("10:35:10")))
 		}
 		reconcileScenario(t, db, p.opts)
 

@@ -67,8 +67,7 @@ type batchStore interface {
 	Identities(ctx context.Context, sids []string) (map[string]string, error)
 	ExistingEvents(ctx context.Context, ids []string) (map[string]bool, error)
 	Tracks(ctx context.Context, trackSids []string, publisherSids []string) (map[string]projection.TrackRef, map[string][]string, error)
-	Heartbeat(ctx context.Context, nodeID string, serverVersion string, region string, batchInterval time.Duration,
-		mediaStats bool, mediaNode string, at time.Time) error
+	Heartbeat(ctx context.Context, nodeID string, heartbeat store.NodeHeartbeat, at time.Time) error
 	Stopped(ctx context.Context, nodeID string, at time.Time) error
 	RoundTrips() int
 	ResetRoundTrips()
@@ -85,6 +84,16 @@ type processor struct {
 	onWriteErrors func(err *store.WriteError)
 	// onUnsupported receives events of a type the projection does not handle and does not ignore on purpose.
 	onUnsupported func(event *livekit.AnalyticsEvent)
+	// hostedRooms counts the ROOM_CREATED events whose rollups were applied, for the node's rooms.hosted: a node
+	// writes only the events it emits, and only the host of a room emits its ROOM_CREATED.
+	hostedRooms int32
+}
+
+// takeHostedRooms returns the hosted rooms counted since the last call and resets the count.
+func (p *processor) takeHostedRooms() int32 {
+	hosted := p.hostedRooms
+	p.hostedRooms = 0
+	return hosted
 }
 
 // apply applies one batch. It returns nil when every step succeeded or failed for good, and the transient error
@@ -345,6 +354,9 @@ func (p *processor) applyRollups(ctx context.Context, events []*eventEntry) erro
 	}
 	for _, entry := range pending {
 		entry.rollupsDone = true
+		if entry.countable && entry.event.GetType() == livekit.AnalyticsEventType_ROOM_CREATED {
+			p.hostedRooms++
+		}
 	}
 	return nil
 }

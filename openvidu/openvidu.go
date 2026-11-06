@@ -24,6 +24,7 @@ import (
 	"github.com/livekit/livekit-server/pkg/service"
 	"github.com/livekit/livekit-server/pkg/telemetry"
 	"github.com/livekit/livekit-server/pkg/telemetry/prometheus"
+	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
 
 	"github.com/OpenVidu/openvidu-golang-utils/monitor"
@@ -43,8 +44,11 @@ func Start(conf *config.Config, server *service.LivekitServer) error {
 	if conf.OpenVidu.Analytics.Enabled {
 		livekithelper.Init(server)
 		node := server.Node()
-		err := analytics.InitializeAnalytics(conf, analytics.Node{ID: node.GetId(), Region: node.GetRegion(),
-			WithoutMediaStats: !openviduconfig.MediaStats, MediaNode: openviduconfig.MediaNode}, livekithelper.GetInstance())
+		err := analytics.InitializeAnalytics(conf, analytics.Node{ID: node.GetId(),
+			WithoutMediaStats: !openviduconfig.MediaStats, MediaNode: openviduconfig.MediaNode,
+			IP: openviduconfig.MediaNodeIP, RTCEngine: openviduconfig.RTCEngine,
+			Draining: func() bool { return server.Node().GetState() == livekit.NodeState_SHUTTING_DOWN },
+		}, livekithelper.GetInstance())
 		if errors.Is(err, analytics.ErrUnsupportedDatabase) {
 			logger.Errorw("analytics disabled: OpenVidu analytics and the dashboard require MongoDB", err)
 			return nil

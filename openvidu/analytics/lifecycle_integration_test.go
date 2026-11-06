@@ -19,6 +19,7 @@ package analytics
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -83,7 +84,7 @@ func TestWriterLifecycle(t *testing.T) {
 
 	t.Run("heartbeat advances lastSeenAt on an idle node", func(t *testing.T) {
 		env := newEnv(t, client)
-		w := newWriter(store.New(env.db), env.settings, Node{ID: testNode, Region: "eu-west"}, newMetrics())
+		w := newWriter(store.New(env.db), env.settings, Node{ID: testNode}, newMetrics())
 
 		require.NoError(t, w.tick(ctx))
 		first := find[schema.NodeDocument](env, schema.CollectionNodes, testNode)
@@ -93,7 +94,9 @@ func TestWriterLifecycle(t *testing.T) {
 
 		require.Equal(t, first.FirstSeenAt, second.FirstSeenAt)
 		require.True(t, second.LastSeenAt.After(first.LastSeenAt))
-		require.Equal(t, "eu-west", second.Region)
+		require.Zero(t, count(env, schema.CollectionNodes, bson.D{{Key: "region", Value: bson.D{{Key: "$exists", Value: true}}}}))
+		require.Equal(t, "pion", second.RTCEngine)
+		require.Nil(t, second.DrainingAt)
 		require.NotEmpty(t, second.ServerVersion)
 		require.Equal(t, int32(env.settings.Interval.Milliseconds()), second.BatchIntervalMs)
 		require.NotNil(t, second.MediaStats)
@@ -112,11 +115,49 @@ func TestWriterLifecycle(t *testing.T) {
 
 	t.Run("heartbeat of a labelled node", func(t *testing.T) {
 		env := newEnv(t, client)
-		w := newWriter(store.New(env.db), env.settings, Node{ID: testNode, MediaNode: "mn-a"}, newMetrics())
+		w := newWriter(store.New(env.db), env.settings, Node{ID: testNode, MediaNode: "mn-a", IP: "10.0.1.23"}, newMetrics())
 
 		require.NoError(t, w.tick(ctx))
-		require.Equal(t, "mn-a", find[schema.NodeDocument](env, schema.CollectionNodes, testNode).MediaNode)
-		require.Nil(t, find[schema.NodeDocument](env, schema.CollectionNodes, testNode).StoppedAt)
+		node := find[schema.NodeDocument](env, schema.CollectionNodes, testNode)
+		require.Equal(t, "mn-a", node.MediaNode)
+		require.Equal(t, "10.0.1.23", node.IP)
+		require.Nil(t, node.StoppedAt)
+	})
+
+	t.Run("heartbeat writes no IP without a label", func(t *testing.T) {
+		env := newEnv(t, client)
+		w := newWriter(store.New(env.db), env.settings, Node{ID: testNode, IP: "10.0.1.23"}, newMetrics())
+
+		require.NoError(t, w.tick(ctx))
+		node := find[schema.NodeDocument](env, schema.CollectionNodes, testNode)
+		require.Empty(t, node.MediaNode)
+		require.Empty(t, node.IP)
+	})
+
+	t.Run("heartbeat of a server running mediasoup", func(t *testing.T) {
+		env := newEnv(t, client)
+		w := newWriter(store.New(env.db), env.settings, Node{ID: testNode, RTCEngine: "mediasoup"}, newMetrics())
+
+		require.NoError(t, w.tick(ctx))
+		require.Equal(t, "mediasoup", find[schema.NodeDocument](env, schema.CollectionNodes, testNode).RTCEngine)
+	})
+
+	t.Run("a draining node records when the drain started, once", func(t *testing.T) {
+		env := newEnv(t, client)
+		var draining atomic.Bool
+		w := newWriter(store.New(env.db), env.settings, Node{ID: testNode, Draining: draining.Load}, newMetrics())
+
+		require.NoError(t, w.tick(ctx))
+		require.Nil(t, find[schema.NodeDocument](env, schema.CollectionNodes, testNode).DrainingAt)
+		draining.Store(true)
+		require.NoError(t, w.tick(ctx))
+		first := find[schema.NodeDocument](env, schema.CollectionNodes, testNode)
+		require.NotNil(t, first.DrainingAt)
+		time.Sleep(20 * time.Millisecond)
+		require.NoError(t, w.tick(ctx))
+		second := find[schema.NodeDocument](env, schema.CollectionNodes, testNode)
+		require.True(t, first.DrainingAt.Equal(*second.DrainingAt))
+		require.True(t, second.LastSeenAt.After(*second.DrainingAt))
 	})
 
 	t.Run("a graceful stop records stoppedAt after the final batch", func(t *testing.T) {
@@ -132,6 +173,8 @@ func TestWriterLifecycle(t *testing.T) {
 		require.NotNil(t, node.StoppedAt)
 		require.False(t, node.StoppedAt.Before(node.LastSeenAt))
 		require.Equal(t, int64(2), count(env, schema.CollectionRooms, bson.D{}))
+		require.NotNil(t, node.Rooms)
+		require.Equal(t, int32(2), node.Rooms.Hosted)
 	})
 
 	t.Run("stop flushes the shutdown events and the final stats", func(t *testing.T) {

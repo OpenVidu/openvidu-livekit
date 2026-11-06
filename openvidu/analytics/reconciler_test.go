@@ -156,6 +156,10 @@ func (f *fakeReconcilerStore) Tracks(context.Context, []string, []string) (map[s
 	return nil, map[string][]string{}, nil
 }
 
+func (f *fakeReconcilerStore) CountReconciledRooms(context.Context, map[string]int32) error {
+	return nil
+}
+
 func (f *fakeReconcilerStore) CloseEntity(_ context.Context, update projection.Update) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

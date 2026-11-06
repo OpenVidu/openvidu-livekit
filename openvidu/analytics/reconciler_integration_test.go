@@ -68,7 +68,8 @@ func newReconcilerEnv(t *testing.T, client *mongo.Client, configure ...func(*ope
 
 func (e *reconcilerEnv) heartbeat(node string, at time.Time) {
 	e.t.Helper()
-	require.NoError(e.t, store.New(e.db).Heartbeat(context.Background(), node, "test", "", 10*time.Second, true, "", at))
+	require.NoError(e.t, store.New(e.db).Heartbeat(context.Background(), node,
+		store.NodeHeartbeat{ServerVersion: "test", BatchInterval: 10 * time.Second, MediaStats: true, RTCEngine: "pion"}, at))
 }
 
 func (e *reconcilerEnv) reconcile() runReport {
@@ -643,6 +644,7 @@ func TestReconcilerClosures(t *testing.T) {
 	t.Run("a room without media statistics closes with its own media statistics mark", func(t *testing.T) {
 		env := newReconcilerEnv(t, client)
 		created := before(2 * time.Minute)
+		env.heartbeat(nodeDead, before(5*time.Minute))
 		env.p.opts.WithoutMediaStats = true
 		env.room("RM_m", nodeDead, created)
 		env.session("RM_m", nodeDead, "PA_a", livekit.ParticipantInfo_STANDARD, created, false)
@@ -657,6 +659,17 @@ func TestReconcilerClosures(t *testing.T) {
 			require.EqualValues(t, 1, *hourly.Rooms.Ended, scope)
 			require.Equal(t, &schema.RollupMediaStats{Missing: true}, hourly.MediaStats, scope)
 		}
+
+		// The closed room counts on the dead server's node document, never on the reconciling one's.
+		require.Equal(t, &schema.NodeRooms{Reconciled: 1},
+			find[schema.NodeDocument](env.testEnv, schema.CollectionNodes, nodeDead).Rooms)
+		require.Nil(t, find[schema.NodeDocument](env.testEnv, schema.CollectionNodes, nodeAlive).Rooms)
+
+		// A late real end of the room changes no counter.
+		env.apply([]*livekit.AnalyticsEvent{on(nodeDead,
+			env.ev.roomEnded("RM_m", "room-RM_m", created, reconcileNow, livekit.RoomEndReason_ROOM_END_IDLE_TIMEOUT))})
+		require.Equal(t, &schema.NodeRooms{Reconciled: 1},
+			find[schema.NodeDocument](env.testEnv, schema.CollectionNodes, nodeDead).Rooms)
 	})
 
 	t.Run("a room still listed waits for the dead node cleanup", func(t *testing.T) {

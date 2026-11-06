@@ -579,11 +579,20 @@ type NodeDocument struct {
 	FirstSeenAt     time.Time  `bson:"firstSeenAt"`
 	LastSeenAt      time.Time  `bson:"lastSeenAt"`
 	ServerVersion   string     `bson:"serverVersion"`
-	Region          string     `bson:"region,omitempty"`
 	BatchIntervalMs int32      `bson:"batchIntervalMs,omitempty"`
 	MediaStats      *bool      `bson:"mediaStats,omitempty"`
+	RTCEngine       string     `bson:"rtcEngine,omitempty"`
 	MediaNode       string     `bson:"mediaNode,omitempty"`
+	IP              string     `bson:"ip,omitempty"`
+	DrainingAt      *time.Time `bson:"drainingAt,omitempty"`
 	StoppedAt       *time.Time `bson:"stoppedAt,omitempty"`
+	Rooms           *NodeRooms `bson:"rooms,omitempty"`
+}
+
+// NodeRooms counts the rooms a server hosted and those of them the reconciler closed.
+type NodeRooms struct {
+	Hosted     int32 `bson:"hosted,omitempty"`
+	Reconciled int32 `bson:"reconciled,omitempty"`
 }
 
 // Identifiers of the `schema_meta` documents.

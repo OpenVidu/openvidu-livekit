@@ -735,6 +735,21 @@ func TestWriter(t *testing.T) {
 		require.Equal(t, "mn-a", find[schema.RoomDocument](env, schema.CollectionRooms, "RM_1").MediaNode)
 	})
 
+	t.Run("the batch counts the rooms it hosts once, from ROOM_CREATED only", func(t *testing.T) {
+		env := newEnv(t, client)
+		var ev events
+		egress := roomCompositeEgress("EG_1", "RM_3", livekit.EgressStatus_EGRESS_STARTING, at("1s"), at("1s"))
+		created := []*livekit.AnalyticsEvent{ev.roomCreated("RM_1", "r1", at("0s")), ev.roomCreated("RM_2", "r2", at("0s"))}
+		env.apply([]*livekit.AnalyticsEvent{ev.egress(livekit.AnalyticsEventType_EGRESS_STARTED, egress, at("1s"))})
+		require.Zero(t, env.p.takeHostedRooms())
+
+		env.apply(created)
+		env.apply(created)
+		env.apply([]*livekit.AnalyticsEvent{ev.roomCreated("RM_3", "r3", at("2s"))})
+		require.Equal(t, int32(3), env.p.takeHostedRooms())
+		require.Zero(t, env.p.takeHostedRooms())
+	})
+
 	t.Run("a server without media statistics marks its rollup buckets as missing", func(t *testing.T) {
 		env := newEnv(t, client)
 		env.p.opts.WithoutMediaStats = true

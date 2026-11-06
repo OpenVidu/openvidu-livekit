@@ -42,6 +42,14 @@ var MediaStats = true
 // node, its rooms and participant sessions, and keys the node scope of the rollups by it. Empty means no label.
 var MediaNode = ""
 
+// MediaNodeIP is the IP of the machine named by MediaNode, set with it; the writer publishes it on the node document
+// only together with a label.
+var MediaNodeIP = ""
+
+// RTCEngine is the RTC engine of this server, "pion" or "mediasoup"; a server edition sets it before the analytics
+// start, and the writer publishes it on the node document.
+var RTCEngine = "pion"
+
 // AnalyticsConfig is the `openvidu.analytics` section. Durations and the event type list are string kinds so that
 // LiveKit derives their LIVEKIT_OPENVIDU_ANALYTICS_* environment variables and CLI flags like any other string.
 type AnalyticsConfig struct {

@@ -47,6 +47,7 @@ type closer struct {
 
 type endedRoom struct {
 	sid        string
+	nodeID     string
 	mediaNode  string
 	mediaStats bool
 	at         time.Time
@@ -198,7 +199,7 @@ func (c *closer) closeRoom(ctx context.Context, room confirmedRoom) error {
 		return nil
 	}
 	c.add(closure)
-	c.endedRooms = append(c.endedRooms, endedRoom{sid: room.SID, mediaNode: room.MediaNode,
+	c.endedRooms = append(c.endedRooms, endedRoom{sid: room.SID, nodeID: room.NodeID, mediaNode: room.MediaNode,
 		mediaStats: !withoutMediaStats(room.MediaStats), at: at})
 	c.report.closed.Room++
 	c.r.logClosure(entityRoom, room.SID, room.SID, room.NodeID, room.reason, room.LastStatsAt, &room.LastEventAt,
@@ -298,10 +299,15 @@ func (c *closer) apply(ctx context.Context) error {
 			return err
 		})
 		errs = append(errs, err)
+		reconciled := map[string]int32{}
 		for _, room := range c.endedRooms {
 			c.increments = append(c.increments,
 				projection.RoomEndedIncrements(room.mediaNode, room.mediaStats, room.at, sessions[room.sid])...)
+			if room.nodeID != "" {
+				reconciled[room.nodeID]++
+			}
 		}
+		errs = append(errs, c.r.retry(ctx, func() error { return c.r.store.CountReconciledRooms(ctx, reconciled) }))
 	}
 	if len(c.cascades) > 0 {
 		errs = append(errs, c.r.retry(ctx, func() error {

@@ -112,12 +112,32 @@ func newReconcilerTask(r *reconciler, locks locker) *reconcilerRunner {
 
 // Node identifies the server node that writes.
 type Node struct {
-	ID     string
-	Region string
+	ID string
 	// WithoutMediaStats marks a node whose media engine produces no media statistics.
 	WithoutMediaStats bool
 	// MediaNode is the media node label of the server, empty when it has none.
 	MediaNode string
+	// IP is the IP of the machine named by MediaNode; it is written only with a label.
+	IP string
+	// RTCEngine is the server's RTC engine; empty means "pion".
+	RTCEngine string
+	// Draining reports whether LiveKit is draining the node; nil means never.
+	Draining func() bool
+}
+
+// heartbeat is what the node document of n records on a batch tick.
+func (n Node) heartbeat(batchInterval time.Duration, hostedRooms int32) store.NodeHeartbeat {
+	engine := n.RTCEngine
+	if engine == "" {
+		engine = "pion"
+	}
+	heartbeat := store.NodeHeartbeat{ServerVersion: openviduversion.Version, BatchInterval: batchInterval,
+		MediaStats: !n.WithoutMediaStats, RTCEngine: engine, MediaNode: n.MediaNode, HostedRooms: hostedRooms,
+		Draining: n.Draining != nil && n.Draining()}
+	if n.MediaNode != "" {
+		heartbeat.IP = n.IP
+	}
+	return heartbeat
 }
 
 // ErrUnsupportedDatabase is the error of InitializeAnalytics for a database without updates with an aggregation

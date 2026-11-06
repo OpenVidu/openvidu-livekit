@@ -90,6 +90,7 @@ type reconcilerStore interface {
 	Tracks(ctx context.Context, trackSids []string, publisherSids []string) (map[string]projection.TrackRef, map[string][]string, error)
 	ParticipantSessions(ctx context.Context, roomSids []string) (map[string]int32, error)
 	CloseEntity(ctx context.Context, update projection.Update) (bool, error)
+	CountReconciledRooms(ctx context.Context, rooms map[string]int32) error
 	ApplyCascadesCounted(ctx context.Context, cascades []projection.Update) (map[string]int64, error)
 	ApplyUpdates(ctx context.Context, updates []projection.Update) error
 	InsertEvents(ctx context.Context, events []schema.EventDocument) (map[string]bool, error)

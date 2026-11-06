@@ -27,7 +27,6 @@ import (
 
 	"github.com/livekit/livekit-server/openvidu/analytics/store"
 	"github.com/livekit/livekit-server/openvidu/openviduconfig"
-	"github.com/livekit/livekit-server/openvidu/openviduversion"
 	"github.com/livekit/livekit-server/openvidu/queue"
 )
 
@@ -162,8 +161,13 @@ func (w *writer) reportOverflow() {
 func (w *writer) applyBatch(ctx context.Context, events []*eventEntry, stats []*statsEntry, started time.Time) error {
 	w.store.ResetRoundTrips()
 	err := w.processor.apply(ctx, events, stats)
-	if heartbeatErr := w.store.Heartbeat(ctx, w.node.ID, openviduversion.Version, w.node.Region, w.interval,
-		!w.node.WithoutMediaStats, w.node.MediaNode, time.Now().UTC().Truncate(time.Millisecond)); err == nil {
+	hosted := w.processor.takeHostedRooms()
+	heartbeatErr := w.store.Heartbeat(ctx, w.node.ID, w.node.heartbeat(w.interval, hosted),
+		time.Now().UTC().Truncate(time.Millisecond))
+	if heartbeatErr != nil {
+		w.processor.hostedRooms += hosted
+	}
+	if err == nil {
 		err = heartbeatErr
 	}
 	w.metrics.batchDuration.Observe(time.Since(started).Seconds())

@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 
@@ -406,25 +407,63 @@ func (s *Store) Tracks(ctx context.Context, trackSids []string, publisherSids []
 
 // Heartbeat upserts the node document: firstSeenAt on insert, lastSeenAt advanced, version, region, whether the node
 // reports media statistics and its media node label refreshed.
-func (s *Store) Heartbeat(ctx context.Context, nodeID string, serverVersion string, region string,
-	batchInterval time.Duration, mediaStats bool, mediaNode string, at time.Time) error {
+func (s *Store) Heartbeat(ctx context.Context, nodeID string, heartbeat NodeHeartbeat, at time.Time) error {
 	set := bson.D{
-		{Key: "serverVersion", Value: serverVersion},
-		{Key: "batchIntervalMs", Value: int32(batchInterval.Milliseconds())},
-		{Key: "mediaStats", Value: mediaStats},
+		{Key: "serverVersion", Value: heartbeat.ServerVersion},
+		{Key: "batchIntervalMs", Value: int32(heartbeat.BatchInterval.Milliseconds())},
+		{Key: "mediaStats", Value: heartbeat.MediaStats},
+		{Key: "rtcEngine", Value: heartbeat.RTCEngine},
 	}
-	if region != "" {
-		set = append(set, bson.E{Key: "region", Value: region})
+	if heartbeat.MediaNode != "" {
+		set = append(set, bson.E{Key: "mediaNode", Value: heartbeat.MediaNode})
 	}
-	if mediaNode != "" {
-		set = append(set, bson.E{Key: "mediaNode", Value: mediaNode})
+	if heartbeat.IP != "" {
+		set = append(set, bson.E{Key: "ip", Value: heartbeat.IP})
 	}
-	s.roundTrips++
-	_, err := s.db.Collection(schema.CollectionNodes).UpdateOne(ctx, bson.D{{Key: "_id", Value: nodeID}}, bson.D{
+	update := bson.D{
 		{Key: "$setOnInsert", Value: bson.D{{Key: "firstSeenAt", Value: at}}},
 		{Key: "$max", Value: bson.D{{Key: "lastSeenAt", Value: at}}},
 		{Key: "$set", Value: set},
-	}, options.UpdateOne().SetUpsert(true))
+	}
+	if heartbeat.Draining {
+		update = append(update, bson.E{Key: "$min", Value: bson.D{{Key: "drainingAt", Value: at}}})
+	}
+	if heartbeat.HostedRooms > 0 {
+		update = append(update, bson.E{Key: "$inc", Value: bson.D{{Key: "rooms.hosted", Value: heartbeat.HostedRooms}}})
+	}
+	s.roundTrips++
+	_, err := s.db.Collection(schema.CollectionNodes).UpdateOne(ctx, bson.D{{Key: "_id", Value: nodeID}}, update,
+		options.UpdateOne().SetUpsert(true))
+	return err
+}
+
+// NodeHeartbeat is what a heartbeat records on its node document.
+type NodeHeartbeat struct {
+	ServerVersion string
+	BatchInterval time.Duration
+	MediaStats    bool
+	RTCEngine     string
+	// MediaNode and IP are written when set.
+	MediaNode string
+	IP        string
+	// Draining sets drainingAt to the first heartbeat that reports it.
+	Draining bool
+	// HostedRooms is added to rooms.hosted: the rooms whose ROOM_CREATED the batch counted.
+	HostedRooms int32
+}
+
+// CountReconciledRooms adds to rooms.reconciled of each node document the rooms of that node the reconciler closed.
+func (s *Store) CountReconciledRooms(ctx context.Context, rooms map[string]int32) error {
+	if len(rooms) == 0 {
+		return nil
+	}
+	models := make([]mongo.WriteModel, 0, len(rooms))
+	for _, nodeID := range slices.Sorted(maps.Keys(rooms)) {
+		models = append(models, mongo.NewUpdateOneModel().SetFilter(bson.D{{Key: "_id", Value: nodeID}}).
+			SetUpdate(bson.D{{Key: "$inc", Value: bson.D{{Key: "rooms.reconciled", Value: rooms[nodeID]}}}}))
+	}
+	s.roundTrips++
+	_, err := s.db.Collection(schema.CollectionNodes).BulkWrite(ctx, models, options.BulkWrite().SetOrdered(false))
 	return err
 }
 
