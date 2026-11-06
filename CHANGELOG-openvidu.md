@@ -18,6 +18,8 @@ OpenVidu. The changes of the upstream project are listed in `CHANGELOG.md`.
 
 ### Changed
 
+- **Synced with LiveKit v1.13.11** (from v1.13.7); the upstream changes are listed in `CHANGELOG.md`. The dynacast re-send after publisher answers (livekit/livekit#4907) and the disconnected participants reported on reconnect (livekit/livekit#4910, #4911), carried ahead of their release since 3.9.0, are now upstream's.
+- **TURN relays reach the same media ports as LiveKit's own relay policy**: the embedded TURN relay only forwarded to peer ports inside `rtc.port_range_start`–`rtc.port_range_end`, and dropped every relayed packet when no range was configured. It now uses the media ports of LiveKit's relay policy (livekit/livekit#4992), still for every peer, cluster nodes included: the ICE port range, else `rtc.udp_port` (plus 3478 with `rtc.use_stun_port_as_ice`), and none with `rtc.force_tcp`. Packets to any other port are dropped silently, as LiveKit does, instead of failing with an error. Relay peers are still limited to this machine and the registered cluster nodes, which LiveKit does not do.
 - **Analytics requires MongoDB**: on a database without updates with an aggregation pipeline, such as Amazon DocumentDB, the server starts with analytics disabled and logs why; the analytics data and the dashboard need MongoDB.
 - **Client IP addresses are no longer stored by default**: `openvidu.analytics.anonymize_ip` defaults to `true`; set it to `false` to store them.
 - **Analytics data survives a graceful shutdown**: queued events and statistics are written, for at most 5 s, before the process exits.
@@ -27,6 +29,7 @@ OpenVidu. The changes of the upstream project are listed in `CHANGELOG.md`.
 
 - `openvidu.analytics.expiration`: mapped to `retention.events` and `retention.stats`, which replace it.
 - `openvidu.analytics.fixer_interval`: mapped to `openvidu.analytics.reconciler.interval`, which replaces it.
+- `turn.enable_rfc6062`: ignored. LiveKit now refuses TURN TCP relay allocations (RFC 6062) unconditionally (livekit/livekit#4992), as this key already did by default, so they can no longer be enabled; a configuration that sets it still loads and logs a warning.
 
 ### Removed
 
