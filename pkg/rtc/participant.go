@@ -3093,6 +3093,28 @@ func (p *ParticipantImpl) addPendingTrack(req *livekit.AddTrackRequest) *livekit
 			return nil
 		}
 
+		// BEGIN OPENVIDU BLOCK
+		// livekit-client announces a codec added to a published track (a backup codec) with the layers
+		// of its own encodings in req.Layers, without sizes, instead of in the codec. As for the codecs
+		// of a new track (below), the codec takes them, keeping the size LiveKit has for each quality
+		// that comes without one: otherwise it keeps the layers of the track's first codec.
+		if sc := req.SimulcastCodecs; len(sc) == 1 && len(sc[0].Layers) == 0 && len(req.Layers) != 0 {
+			var known []*livekit.VideoLayer
+			for _, c := range track.ToProto().Codecs {
+				if mime.GetMimeTypeCodec(c.MimeType) == mime.NormalizeMimeTypeCodec(sc[0].Codec) {
+					known = c.Layers
+				}
+			}
+			for _, layer := range req.Layers {
+				layer = proto.CloneOf(layer)
+				if i := slices.IndexFunc(known, func(l *livekit.VideoLayer) bool { return l.Quality == layer.Quality }); i >= 0 && layer.Width == 0 && layer.Height == 0 {
+					layer.Width, layer.Height = known[i].Width, known[i].Height
+				}
+				sc[0].Layers = append(sc[0].Layers, layer)
+			}
+		}
+		// END OPENVIDU BLOCK
+
 		track.(*MediaTrack).UpdateCodecInfo(req.SimulcastCodecs)
 		ti := track.ToProto()
 		p.pendingTracksLock.Unlock()
