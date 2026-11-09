@@ -54,6 +54,7 @@ var (
 	mu         sync.Mutex
 	instance   *writer
 	reconciles *reconcilerRunner
+	aggregates *aggregatorRunner
 	migrations *task
 )
 
@@ -110,6 +111,13 @@ func newReconcilerTask(r *reconciler, locks locker) *reconcilerRunner {
 	return runner
 }
 
+// aggregatorRunner runs the aggregator loop between Start and Stop.
+type aggregatorRunner struct {
+	task
+	aggregator *aggregator
+	locks      locker
+}
+
 // Node identifies the server node that writes.
 type Node struct {
 	ID string
@@ -145,8 +153,8 @@ func (n Node) heartbeat(batchInterval time.Duration, hostedRooms int32) store.No
 var ErrUnsupportedDatabase = schema.ErrPipelineUpdatesUnsupported
 
 // InitializeAnalytics validates the configuration, connects to MongoDB, initializes the collections, validators,
-// indexes and schema_meta, and prepares the writer and the reconciler. Any failure but ErrUnsupportedDatabase stops
-// the server.
+// indexes and schema_meta, and prepares the writer, the reconciler and the aggregator. Any failure but
+// ErrUnsupportedDatabase stops the server.
 func InitializeAnalytics(conf *config.Config, node Node, helper livekithelperinterface.LivekitHelper) error {
 	settings, warnings, err := conf.OpenVidu.Analytics.Settings()
 	if err != nil {
@@ -179,6 +187,10 @@ func InitializeAnalytics(conf *config.Config, node Node, helper livekithelperint
 	if err != nil {
 		return err
 	}
+	aggregation, err := newAggregatorRunner(conf, settings, db)
+	if err != nil {
+		return err
+	}
 	migration, err := newMigrationTask(ctx, conf, settings, db, helper, node)
 	if err != nil {
 		return err
@@ -186,6 +198,7 @@ func InitializeAnalytics(conf *config.Config, node Node, helper livekithelperint
 	mu.Lock()
 	instance = w
 	reconciles = runner
+	aggregates = aggregation
 	migrations = migration
 	mu.Unlock()
 	return nil
@@ -216,14 +229,20 @@ func newMigrationTask(ctx context.Context, conf *config.Config, settings openvid
 
 // migrationLocker elects the node that runs the migration without waiting for a lock another node holds.
 func migrationLocker(conf *config.Config) (locker, error) {
+	return jobLocker(conf, "migration", 0)
+}
+
+// jobLocker elects the node of a job with a Redis lock, retrying every backoff (once without one), or locally without
+// Redis.
+func jobLocker(conf *config.Config, job string, backoff time.Duration) (locker, error) {
 	if !conf.Redis.IsConfigured() {
 		return &localLocker{}, nil
 	}
 	client, err := redisLiveKit.GetRedisClient(&conf.Redis)
 	if err != nil {
-		return nil, fmt.Errorf("analytics: connect to Redis for the migration lock: %w", err)
+		return nil, fmt.Errorf("analytics: connect to Redis for the %s lock: %w", job, err)
 	}
-	return redisLocker{client: redislock.New(client)}, nil
+	return redisLocker{client: redislock.New(client), backoff: backoff}, nil
 }
 
 // newReconcilerRunner prepares the reconciler of the node, or returns nil when it is disabled.
@@ -249,24 +268,29 @@ func newReconcilerRunner(conf *config.Config, settings openviduconfig.AnalyticsS
 
 func reconcilerSettingsOf(conf *config.Config, settings openviduconfig.AnalyticsSettings) reconcilerSettings {
 	return reconcilerSettings{
-		batchInterval:     settings.Interval,
-		interval:          settings.Reconciler.Interval,
-		cleanupInterval:   conf.OpenVidu.GetCleanupInterval(),
-		maxClosures:       settings.Reconciler.MaxClosuresPerRun,
-		entitiesRetention: settings.Retention.Entities,
+		batchInterval:   settings.Interval,
+		interval:        settings.Reconciler.Interval,
+		cleanupInterval: conf.OpenVidu.GetCleanupInterval(),
+		maxClosures:     settings.Reconciler.MaxClosuresPerRun,
 	}
 }
 
 // reconcilerLocker elects the reconciler node with a Redis lock, or locally without Redis.
 func reconcilerLocker(conf *config.Config, settings openviduconfig.AnalyticsSettings) (locker, error) {
-	if !conf.Redis.IsConfigured() {
-		return &localLocker{}, nil
-	}
-	client, err := redisLiveKit.GetRedisClient(&conf.Redis)
+	return jobLocker(conf, "reconciler", settings.Reconciler.Interval/2)
+}
+
+// newAggregatorRunner prepares the aggregator of the node, which runs whatever reconciler.enabled says.
+func newAggregatorRunner(conf *config.Config, settings openviduconfig.AnalyticsSettings, db *mongo.Database) (*aggregatorRunner, error) {
+	locks, err := jobLocker(conf, "aggregator", aggregatorInterval/2)
 	if err != nil {
-		return nil, fmt.Errorf("analytics: connect to Redis for the reconciler lock: %w", err)
+		return nil, err
 	}
-	return redisLocker{client: redislock.New(client), backoff: settings.Reconciler.Interval / 2}, nil
+	a := newAggregator(store.New(db), aggregatorSettings{interval: aggregatorInterval,
+		entitiesRetention: settings.Retention.Entities}, newAggregatorMetrics())
+	runner := &aggregatorRunner{aggregator: a, locks: locks}
+	runner.loop = func(ctx context.Context) { a.loop(ctx, locks) }
+	return runner, nil
 }
 
 // initialize renames the legacy events collection, initializes the database and builds the writer.
@@ -396,13 +420,16 @@ func isLegacyEvents(ctx context.Context, events *mongo.Collection) (bool, error)
 	return count > 0, err
 }
 
-// Start starts the reconciler and the legacy migration, and runs the batch loop until Stop. It blocks.
+// Start starts the reconciler, the aggregator and the legacy migration, and runs the batch loop until Stop. It blocks.
 func Start() {
 	mu.Lock()
-	w, runner, migration := instance, reconciles, migrations
+	w, runner, aggregation, migration := instance, reconciles, aggregates, migrations
 	mu.Unlock()
 	if runner != nil {
 		runner.start()
+	}
+	if aggregation != nil {
+		aggregation.start()
 	}
 	if migration != nil {
 		migration.start()
@@ -412,17 +439,20 @@ func Start() {
 	}
 }
 
-// Stop stops the reconciler and flushes the queues through the normal batch path, waiting at most until ctx expires,
-// and counts whatever remains as dropped.
+// Stop stops the reconciler and the aggregator and flushes the queues through the normal batch path, waiting at most
+// until ctx expires, and counts whatever remains as dropped.
 func Stop(ctx context.Context) {
 	mu.Lock()
-	w, runner, migration := instance, reconciles, migrations
+	w, runner, aggregation, migration := instance, reconciles, aggregates, migrations
 	mu.Unlock()
 	if migration != nil {
 		migration.stop(ctx)
 	}
 	if runner != nil {
 		runner.stop(ctx)
+	}
+	if aggregation != nil {
+		aggregation.stop(ctx)
 	}
 	if w != nil {
 		w.stop(ctx)

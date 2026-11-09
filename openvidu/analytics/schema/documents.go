@@ -467,6 +467,7 @@ type RollupRooms struct {
 	EndedByReason   map[string]int32 `bson:"endedByReason,omitempty"`
 	DurationMsSum   *int64           `bson:"durationMsSum,omitempty"`
 	ParticipantsSum *int32           `bson:"participantsSum,omitempty"`
+	PeakActive      *int32           `bson:"peakActive,omitempty"`
 }
 
 // RollupParticipants count STANDARD sessions; ByKind counts the sessions of every kind.
@@ -484,6 +485,7 @@ type RollupParticipants struct {
 	ConnectTimeSumMs  *int64           `bson:"connectTimeSumMs,omitempty"`
 	ConnectTimeCount  *int32           `bson:"connectTimeCount,omitempty"`
 	Minutes           *float64         `bson:"minutes,omitempty"`
+	PeakActive        *int32           `bson:"peakActive,omitempty"`
 }
 
 type RollupTracks struct {
@@ -542,16 +544,18 @@ type DailyRollupDocument struct {
 }
 
 type FiveMinuteRooms struct {
-	Created *int32 `bson:"created,omitempty"`
-	Ended   *int32 `bson:"ended,omitempty"`
+	Created    *int32 `bson:"created,omitempty"`
+	Ended      *int32 `bson:"ended,omitempty"`
+	PeakActive *int32 `bson:"peakActive,omitempty"`
 }
 
 type FiveMinuteParticipants struct {
-	Connected *int32 `bson:"connected,omitempty"`
-	Joined    *int32 `bson:"joined,omitempty"`
-	Active    *int32 `bson:"active,omitempty"`
-	Left      *int32 `bson:"left,omitempty"`
-	Aborted   *int32 `bson:"aborted,omitempty"`
+	Connected  *int32 `bson:"connected,omitempty"`
+	Joined     *int32 `bson:"joined,omitempty"`
+	Active     *int32 `bson:"active,omitempty"`
+	Left       *int32 `bson:"left,omitempty"`
+	Aborted    *int32 `bson:"aborted,omitempty"`
+	PeakActive *int32 `bson:"peakActive,omitempty"`
 }
 
 type FiveMinuteEgress struct {

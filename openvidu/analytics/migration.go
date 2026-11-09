@@ -130,7 +130,7 @@ type migrator struct {
 	nodeID     string
 	locks      locker
 	metrics    *migrationMetrics
-	log        reconcilerLog
+	log        jobLog
 	now        func() time.Time
 	backoff    time.Duration
 	lockRetry  time.Duration
@@ -144,7 +144,7 @@ func newMigrator(db *mongo.Database, settings openviduconfig.AnalyticsSettings, 
 	m *migrationMetrics) *migrator {
 	opts := projectionOptions(settings)
 	mig := &migrator{db: db, store: store.New(db), reconciler: rec, settings: settings.Migration, nodeID: nodeID,
-		locks: locks, metrics: m, log: defaultReconcilerLog(),
+		locks: locks, metrics: m, log: defaultJobLog(),
 		now:     func() time.Time { return time.Now().UTC().Truncate(time.Millisecond) },
 		backoff: migrationBackoff, lockRetry: migrationLockRetry}
 	mig.processor = &processor{store: store.New(db), opts: opts, cache: newRefCache(),

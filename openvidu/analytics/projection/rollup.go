@@ -66,6 +66,17 @@ func periodIncrements(mediaNode string, at time.Time, counters map[string]any) [
 	return increments
 }
 
+// PeakIncrements returns the increments that keep, in the 5-minute, hourly and daily documents of scope containing at,
+// the most rooms and STANDARD participant sessions active at once.
+func PeakIncrements(scope string, at time.Time, rooms int32, participants int32) []Increment {
+	maxima := map[string]any{"rooms.peakActive": rooms, "participants.peakActive": participants}
+	return []Increment{
+		{Collection: schema.CollectionAnalytics5Min, Scope: scope, Bucket: at.Truncate(fiveMinutes), Maxima: maxima},
+		{Collection: schema.CollectionAnalyticsHourly, Scope: scope, Bucket: at.Truncate(time.Hour), Maxima: maxima},
+		{Collection: schema.CollectionAnalyticsDaily, Scope: scope, Bucket: at.Truncate(24 * time.Hour), Maxima: maxima},
+	}
+}
+
 // RoomEndedIncrements returns the participantsSum increments of a room of mediaNode (empty without a label) closed at
 // endedAt, once the batch knows its STANDARD participant sessions; mediaStats is the room's mark.
 func RoomEndedIncrements(mediaNode string, mediaStats bool, endedAt time.Time, participants int32) []Increment {

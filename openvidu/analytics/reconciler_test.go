@@ -184,10 +184,6 @@ func (f *fakeReconcilerStore) ApplyIncrements(context.Context, []projection.Incr
 	return nil
 }
 
-func (f *fakeReconcilerStore) DaysWithoutUniqueIdentities(context.Context, time.Time, time.Time, int) ([]time.Time, error) {
-	return nil, nil
-}
-
 func (f *fakeReconcilerStore) RecordReconcilerRun(_ context.Context, run schema.SchemaMetaReconciler) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -212,8 +208,8 @@ func (c *capturedLog) add(level string, msg string, keysAndValues ...any) {
 	c.lines = append(c.lines, fmt.Sprint(append([]any{level, " ", msg}, keysAndValues...)...))
 }
 
-func (c *capturedLog) sink() reconcilerLog {
-	return reconcilerLog{
+func (c *capturedLog) sink() jobLog {
+	return jobLog{
 		debugw: func(msg string, kv ...any) { c.add("debug", msg, kv...) },
 		infow:  func(msg string, kv ...any) { c.add("info", msg, kv...) },
 		warnw:  func(msg string, err error, kv ...any) { c.add("warn", msg, append(kv, "error", err)...) },
@@ -234,7 +230,7 @@ func (c *capturedLog) matching(level string, part string) []string {
 
 func testReconcilerSettings() reconcilerSettings {
 	return reconcilerSettings{batchInterval: 10 * time.Second, interval: time.Minute, cleanupInterval: 3 * time.Minute,
-		maxClosures: 500, entitiesRetention: 2160 * time.Hour}
+		maxClosures: 500}
 }
 
 func newTestReconciler(s reconcilerStore, live liveState) (*reconciler, *capturedLog) {

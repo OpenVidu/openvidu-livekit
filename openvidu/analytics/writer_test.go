@@ -379,6 +379,7 @@ func TestMetricFamiliesAfterABatch(t *testing.T) {
 	w.metrics.dropped.WithLabelValues("events", "overflow").Add(0)
 	w.metrics.writeErrors.WithLabelValues("rooms", "rejected").Add(0)
 	newReconcilerMetrics().observe(runReport{result: resultOK, closed: schema.ReconcilerClosures{Participant: 1}})
+	newAggregatorMetrics().observe(nil, time.Millisecond)
 
 	families, err := prometheus.DefaultGatherer.Gather()
 	require.NoError(t, err)
@@ -405,5 +406,8 @@ func TestMetricFamiliesAfterABatch(t *testing.T) {
 		"openvidu_analytics_reconciler_closed_total":         {"entity": true},
 		"openvidu_analytics_reconciler_candidates":           {"entity": true},
 		"openvidu_analytics_reconciler_run_duration_seconds": {},
+
+		"openvidu_analytics_aggregator_runs_total":           {"result": true},
+		"openvidu_analytics_aggregator_run_duration_seconds": {},
 	}, labels)
 }

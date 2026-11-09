@@ -16,13 +16,9 @@ package analytics
 
 import (
 	"context"
-	"errors"
-	"sync"
 	"time"
 
-	"github.com/bsm/redislock"
 	"github.com/livekit/protocol/livekit"
-	"github.com/livekit/protocol/logger"
 
 	"github.com/livekit/livekit-server/openvidu/analytics/projection"
 	"github.com/livekit/livekit-server/openvidu/analytics/schema"
@@ -38,20 +34,12 @@ const (
 	statsInterval = 30 * time.Second
 	// staleAfter is how long a session or a room goes without stats before it is a candidate.
 	staleAfter = 3 * statsInterval
-	// lockMargin is added to reconciler.interval for the lock TTL and kept free at the end of the run's time budget.
-	lockMargin = 5 * time.Second
 	// continuationDelay spaces the follow-up runs of a run that stopped at its closure limit or time budget.
 	continuationDelay = 5 * time.Second
-	// lockErrorPause spaces the attempts to obtain the lock while Redis fails.
-	lockErrorPause = 5 * time.Second
 	// openMediaLimit bounds the open egresses and ingress sessions read per run.
 	openMediaLimit = 10_000
 	// liveRoomSample bounds the rooms read to decide whether an empty live listing can be trusted.
 	liveRoomSample = 50
-	// uniqueIdentityDaysPerRun bounds the days whose unique identities one run computes.
-	uniqueIdentityDaysPerRun = 7
-	// dayCloseGrace leaves time for the last batches of a UTC day before its unique identities are computed.
-	dayCloseGrace = 5 * time.Minute
 
 	reconcilerLockKey = "analytics-reconciler-lock"
 )
@@ -95,9 +83,6 @@ type reconcilerStore interface {
 	ApplyUpdates(ctx context.Context, updates []projection.Update) error
 	InsertEvents(ctx context.Context, events []schema.EventDocument) (map[string]bool, error)
 	ApplyIncrements(ctx context.Context, increments []projection.Increment) error
-	DaysWithoutUniqueIdentities(ctx context.Context, from time.Time, to time.Time, limit int) ([]time.Time, error)
-	UniqueIdentities(ctx context.Context, from time.Time, to time.Time) (int32, map[string]int32, error)
-	SetUniqueIdentities(ctx context.Context, day time.Time, global int32, perNode map[string]int32) error
 	RecordReconcilerRun(ctx context.Context, run schema.SchemaMetaReconciler) error
 }
 
@@ -115,24 +100,12 @@ type reconcilerSettings struct {
 	// interval is reconciler.interval: the period of the runs and the room grace (two of them).
 	interval time.Duration
 	// cleanupInterval is LiveKit's dead node cleanup period: the egress and ingress grace (two of them).
-	cleanupInterval   time.Duration
-	maxClosures       int
-	entitiesRetention time.Duration
+	cleanupInterval time.Duration
+	maxClosures     int
 }
 
 func (s reconcilerSettings) lockTTL() time.Duration {
 	return s.interval + lockMargin
-}
-
-// reconcilerLog writes the reconciler's log lines.
-type reconcilerLog struct {
-	debugw func(msg string, keysAndValues ...any)
-	infow  func(msg string, keysAndValues ...any)
-	warnw  func(msg string, err error, keysAndValues ...any)
-}
-
-func defaultReconcilerLog() reconcilerLog {
-	return reconcilerLog{debugw: logger.Debugw, infow: logger.Infow, warnw: logger.Warnw}
 }
 
 type reconciler struct {
@@ -142,15 +115,13 @@ type reconciler struct {
 	settings reconcilerSettings
 	nodeID   string
 	metrics  *reconcilerMetrics
-	log      reconcilerLog
+	log      jobLog
 	now      func() time.Time
 
 	// run counts the regular runs; follow-ups of a partial run keep its number.
 	run int
 	// absent maps the candidates absent from a trusted live listing to the last regular run that saw them absent.
 	absent map[string]int
-	// releaseFailed silences repeated warnings while the lock cannot be released.
-	releaseFailed bool
 
 	continuationDelay time.Duration
 	lockErrorPause    time.Duration
@@ -162,7 +133,7 @@ type reconciler struct {
 func newReconciler(s reconcilerStore, live liveState, opts projection.Options, settings reconcilerSettings, nodeID string,
 	m *reconcilerMetrics) *reconciler {
 	return &reconciler{store: s, live: live, opts: opts, settings: settings, nodeID: nodeID, metrics: m,
-		log: defaultReconcilerLog(), now: func() time.Time { return time.Now().UTC().Truncate(time.Millisecond) },
+		log: defaultJobLog(), now: func() time.Time { return time.Now().UTC().Truncate(time.Millisecond) },
 		absent: map[string]int{}, continuationDelay: continuationDelay, lockErrorPause: lockErrorPause}
 }
 
@@ -177,8 +148,8 @@ type runReport struct {
 	err        error
 }
 
-// reconcile runs once: it detects, confirms and closes candidates within the closure limit and the time budget, then
-// computes the unique identities of closed days, and records the run.
+// reconcile runs once: it detects, confirms and closes candidates within the closure limit and the time budget, and
+// records the run.
 func (r *reconciler) reconcile(ctx context.Context, continuation bool) runReport {
 	started := r.now()
 	report := runReport{startedAt: started, result: resultOK}
@@ -187,9 +158,6 @@ func (r *reconciler) reconcile(ctx context.Context, continuation bool) runReport
 	}
 	deadline := started.Add(r.settings.lockTTL() - lockMargin)
 	err := r.reconcileEntities(ctx, started, deadline, &report)
-	if err == nil && r.now().Before(deadline) {
-		err = r.dailyUniqueIdentities(ctx, started)
-	}
 	switch {
 	case err != nil:
 		report.err = err
@@ -218,29 +186,6 @@ func (r *reconciler) reconcileEntities(ctx context.Context, started time.Time, d
 	}
 	closedAny := report.closed.Room+report.closed.Participant+report.closed.Egress+report.closed.IngressSession > 0
 	report.partial = stopped || (found.truncated && closedAny)
-	return nil
-}
-
-// dailyUniqueIdentities sets the unique identities of the closed UTC days inside the entities retention that lack them.
-func (r *reconciler) dailyUniqueIdentities(ctx context.Context, now time.Time) error {
-	day := 24 * time.Hour
-	from := now.Add(-r.settings.entitiesRetention).Truncate(day).Add(day)
-	to := now.Add(-dayCloseGrace).Truncate(day)
-	days, err := r.store.DaysWithoutUniqueIdentities(ctx, from, to, uniqueIdentityDaysPerRun)
-	if err != nil {
-		return err
-	}
-	for _, start := range days {
-		global, perNode, err := r.store.UniqueIdentities(ctx, start, start.Add(day))
-		if err != nil {
-			return err
-		}
-		if err := r.store.SetUniqueIdentities(ctx, start, global, perNode); err != nil {
-			return err
-		}
-		r.log.debugw("analytics reconciler: unique identities of a closed day", "day", start, "global", global,
-			"nodes", len(perNode))
-	}
 	return nil
 }
 
@@ -273,104 +218,12 @@ func (r *reconciler) record(ctx context.Context, report runReport) {
 	}
 }
 
-// locker elects the node that runs the reconciler.
-type locker interface {
-	// Obtain returns a held lease, or an error wrapping redislock.ErrNotObtained when another node holds it.
-	Obtain(ctx context.Context, key string, ttl time.Duration) (lease, error)
-}
-
-type lease interface {
-	Refresh(ctx context.Context, ttl time.Duration) error
-	Release(ctx context.Context) error
-}
-
-// redisLocker obtains the lock in Redis, retrying every backoff until its TTL elapses, or once without backoff.
-type redisLocker struct {
-	client  *redislock.Client
-	backoff time.Duration
-}
-
-func (l redisLocker) Obtain(ctx context.Context, key string, ttl time.Duration) (lease, error) {
-	retry := redislock.NoRetry()
-	if l.backoff > 0 {
-		retry = redislock.LinearBackoff(l.backoff)
-	}
-	lock, err := l.client.Obtain(ctx, key, ttl, &redislock.Options{RetryStrategy: retry})
-	if err != nil {
-		return nil, err
-	}
-	return redisLease{lock}, nil
-}
-
-type redisLease struct {
-	lock *redislock.Lock
-}
-
-func (l redisLease) Refresh(ctx context.Context, ttl time.Duration) error {
-	return l.lock.Refresh(ctx, ttl, nil)
-}
-
-func (l redisLease) Release(ctx context.Context) error {
-	return l.lock.Release(ctx)
-}
-
-// localLocker elects the only node of a deployment without Redis.
-type localLocker struct {
-	mu sync.Mutex
-}
-
-func (l *localLocker) Obtain(context.Context, string, time.Duration) (lease, error) {
-	if !l.mu.TryLock() {
-		return nil, redislock.ErrNotObtained
-	}
-	return localLease{&l.mu}, nil
-}
-
-type localLease struct {
-	mu *sync.Mutex
-}
-
-func (localLease) Refresh(context.Context, time.Duration) error {
-	return nil
-}
-
-func (l localLease) Release(context.Context) error {
-	l.mu.Unlock()
-	return nil
-}
-
-// loop runs the reconciler until ctx is cancelled: once right after obtaining the lock for the first time, then every
-// interval while holding it, with follow-up runs after a partial one.
+// loop runs the reconciler until ctx is cancelled, on one node at a time: once right after obtaining the lock for the
+// first time, then every interval while holding it, with follow-up runs after a partial one.
 func (r *reconciler) loop(ctx context.Context, locks locker) {
-	ttl := r.settings.lockTTL()
-	startup := true
-	lockFailing := false
-	for ctx.Err() == nil {
-		held, err := locks.Obtain(ctx, reconcilerLockKey, ttl)
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			if !errors.Is(err, redislock.ErrNotObtained) {
-				if !lockFailing {
-					r.log.warnw("analytics reconciler: cannot obtain the lock, retrying", err, "pause", r.lockErrorPause)
-					lockFailing = true
-				}
-				sleep(ctx, r.lockErrorPause)
-			}
-			continue
-		}
-		lockFailing = false
-		if !startup {
-			if !sleep(ctx, r.settings.interval) || held.Refresh(ctx, ttl) != nil {
-				r.release(held)
-				continue
-			}
-		}
-		startup = false
-		r.cycle(ctx, held, ttl)
-		r.release(held)
-	}
+	job := &leaderJob{name: "analytics reconciler", key: reconcilerLockKey, interval: r.settings.interval,
+		ttl: r.settings.lockTTL(), lockErrorPause: r.lockErrorPause, log: r.log, cycle: r.cycle}
+	job.loop(ctx, locks)
 }
 
 func (r *reconciler) cycle(ctx context.Context, held lease, ttl time.Duration) {
@@ -380,31 +233,5 @@ func (r *reconciler) cycle(ctx context.Context, held lease, ttl time.Duration) {
 			return
 		}
 		report = r.reconcile(ctx, true)
-	}
-}
-
-// release frees the lock; after a Redis restart the lock is gone, which is harmless.
-func (r *reconciler) release(held lease) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := held.Release(ctx); err != nil {
-		if !r.releaseFailed {
-			r.log.infow("analytics reconciler: lock not released, it expires with its TTL", "error", err.Error())
-			r.releaseFailed = true
-		}
-		return
-	}
-	r.releaseFailed = false
-}
-
-// sleep waits for d and reports false when ctx ended first.
-func sleep(ctx context.Context, d time.Duration) bool {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return true
-	case <-ctx.Done():
-		return false
 	}
 }

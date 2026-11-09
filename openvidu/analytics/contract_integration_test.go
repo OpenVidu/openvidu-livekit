@@ -45,8 +45,8 @@ import (
 // The canonical scenario of the data model contract (dashboard-ce/typings/contract/fixtures/scenario.ts): one closed
 // room on node alpha (09:00–09:45 UTC) and one active room on node beta (since 10:00 UTC) on 2026-10-12. The raw
 // events of the vendored fixtures are replayed as recorded; the other events and the stats that the documents
-// imply are built here. The leave event of the agent is lost: the reconciler closes it, and computes the unique
-// identities of the day once it has closed.
+// imply are built here. The leave event of the agent is lost: the reconciler closes it. The aggregator samples the
+// deployment at 10:34:20 and computes the unique identities of the day once it has closed.
 
 const (
 	scNodeAlpha     = "ND_alpha8Kq2Lm"
@@ -162,12 +162,12 @@ func TestContractFixtures(t *testing.T) {
 }
 
 // reconcileScenario runs the reconciler twice at 10:35:20, with LiveKit listing the active room and its participants
-// only, which closes the agent of the closed room, then once after the day has closed.
+// only, which closes the agent of the closed room, and the aggregator at 10:34:20 and once after the day has closed.
 func reconcileScenario(t *testing.T, db *mongo.Database, opts projection.Options) {
 	live := newFakeLive()
 	live.addRoom(scActiveName, scActiveRoom, scDave, scErin, scIngress2, scStreamer)
 	r := newReconciler(store.New(db), live, opts, reconcilerSettings{batchInterval: 10 * time.Second,
-		interval: time.Minute, cleanupInterval: 3 * time.Minute, maxClosures: 500, entitiesRetention: 2160 * time.Hour},
+		interval: time.Minute, cleanupInterval: 3 * time.Minute, maxClosures: 500},
 		scNodeAlpha, buildReconcilerMetrics())
 	r.log = (&capturedLog{}).sink()
 	now := sat("10:35:20")
@@ -175,8 +175,14 @@ func reconcileScenario(t *testing.T, db *mongo.Database, opts projection.Options
 	for range 2 {
 		require.NoError(t, r.reconcile(context.Background(), false).err)
 	}
+	a := newAggregator(store.New(db), aggregatorSettings{interval: time.Minute, entitiesRetention: 2160 * time.Hour},
+		buildAggregatorMetrics())
+	a.log = (&capturedLog{}).sink()
+	a.now = func() time.Time { return now }
+	now = sat("10:34:20")
+	require.NoError(t, a.run(context.Background()))
 	now = time.Date(2026, 10, 13, 0, 10, 0, 0, time.UTC)
-	require.NoError(t, r.dailyUniqueIdentities(context.Background(), now))
+	require.NoError(t, a.run(context.Background()))
 }
 
 func contractDatabase(t *testing.T, client *mongo.Client, name string) *mongo.Database {
@@ -920,7 +926,7 @@ func daveLastFlushDown() []*livekit.AnalyticsStat {
 // --- Comparison ---------------------------------------------------------------------------------------------------
 
 // compareCollection checks that every fixture document has a stored twin equal in every contract field (`internal`
-// is writer bookkeeping and the daily `uniqueIdentities` is the reconciler's); exact also requires no other document.
+// is writer bookkeeping and the daily `uniqueIdentities` is the aggregator's); exact also requires no other document.
 func compareCollection(t *testing.T, db *mongo.Database, collection string, exact bool) {
 	t.Helper()
 	fixtures, err := schema.Fixtures(collection)

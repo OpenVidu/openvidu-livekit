@@ -58,7 +58,7 @@ func newReconcilerEnv(t *testing.T, client *mongo.Client, configure ...func(*ope
 		metrics: buildReconcilerMetrics(), now: reconcileNow}
 	env.r = newReconciler(store.New(env.db), env.live, projectionOptions(env.settings), reconcilerSettings{
 		batchInterval: env.settings.Interval, interval: env.settings.Reconciler.Interval, cleanupInterval: 3 * time.Minute,
-		maxClosures: env.settings.Reconciler.MaxClosuresPerRun, entitiesRetention: env.settings.Retention.Entities,
+		maxClosures: env.settings.Reconciler.MaxClosuresPerRun,
 	}, "ND_leader", env.metrics)
 	env.r.log = env.logs.sink()
 	env.r.now = func() time.Time { return env.now }
@@ -283,12 +283,6 @@ func TestReconcilerQueryPlans(t *testing.T) {
 		{Key: "query", Value: store.OpenSessionsFilter([]string{"RM_001", "RM_002"}, projection.DependentKinds)}})
 	require.Contains(t, distinct.stages, "IXSCAN")
 	require.NotContains(t, distinct.stages, "COLLSCAN")
-
-	aggregate := explain(t, env.db, bson.D{{Key: "aggregate", Value: schema.CollectionParticipants},
-		{Key: "pipeline", Value: store.UniqueIdentitiesPipeline(before(24*time.Hour), reconcileNow)},
-		{Key: "cursor", Value: bson.D{}}})
-	require.Contains(t, aggregate.indexes, "kind_status_joinedAt_id")
-	require.NotContains(t, aggregate.stages, "COLLSCAN")
 
 	found, err := env.r.candidates(ctx, reconcileNow)
 	require.NoError(t, err)
@@ -844,64 +838,6 @@ func (s *flushingStore) CloseEntity(ctx context.Context, update projection.Updat
 		return false, err
 	}
 	return s.Store.CloseEntity(ctx, update)
-}
-
-func TestReconcilerUniqueIdentities(t *testing.T) {
-	client := mongotest.StartMongo(t)
-	env := newReconcilerEnv(t, client)
-	day1 := time.Date(2026, 10, 10, 9, 0, 0, 0, time.UTC)
-	day2 := day1.Add(24 * time.Hour)
-	joinAs := func(kind livekit.ParticipantInfo_Kind, room string, node string, sid string, identity string, at time.Time) {
-		info := participantInfo(sid, identity, kind, at)
-		env.apply([]*livekit.AnalyticsEvent{on(node, env.ev.joined(room, info, at)),
-			on(node, env.ev.left(room, info, at.Add(time.Minute), livekit.DisconnectReason_CLIENT_INITIATED))})
-	}
-	join := func(room string, node string, sid string, identity string, at time.Time) {
-		joinAs(livekit.ParticipantInfo_STANDARD, room, node, sid, identity, at)
-	}
-	env.room("RM_a1", "ND_a", day1)
-	env.room("RM_b1", "ND_b", day1)
-	join("RM_a1", "ND_a", "PA_1", "alice", day1)
-	joinAs(livekit.ParticipantInfo_INGRESS, "RM_a1", "ND_a", "PA_cam", "cam-1", day1)
-	joinAs(livekit.ParticipantInfo_EGRESS, "RM_b1", "ND_b", "PA_rec", "EG_1", day1)
-	join("RM_a1", "ND_a", "PA_2", "bob", day1.Add(time.Hour))
-	join("RM_b1", "ND_b", "PA_3", "bob", day1.Add(2*time.Hour))
-	join("RM_b1", "ND_b", "PA_4", "carol", day1.Add(3*time.Hour))
-	env.room("RM_a2", "ND_a", day2)
-	env.room("RM_b2", "ND_b", day2)
-	join("RM_a2", "ND_a", "PA_5", "alice", day2)
-	env.room("RM_today", "ND_a", reconcileNow.Add(-time.Hour))
-	join("RM_today", "ND_a", "PA_6", "dave", reconcileNow.Add(-time.Hour))
-
-	env.reconcile()
-	value := func(scope string, day time.Time) any {
-		document := find[bson.M](env.testEnv, schema.CollectionAnalyticsDaily, scope+":"+day.Truncate(24*time.Hour).Format(time.RFC3339))
-		return document["uniqueIdentities"]
-	}
-	require.Equal(t, []any{int32(3), int32(2), int32(2)}, []any{value("global", day1), value("node:mn-a", day1), value("node:mn-b", day1)})
-	require.Equal(t, []any{int32(1), int32(1), int32(0)}, []any{value("global", day2), value("node:mn-a", day2), value("node:mn-b", day2)})
-	require.Nil(t, value("global", reconcileNow), "the current day has no value until it closes")
-
-	first := snapshot(env.testEnv, schema.CollectionAnalyticsDaily)
-	env.reconcile()
-	require.Equal(t, first, snapshot(env.testEnv, schema.CollectionAnalyticsDaily))
-	require.NotEmpty(t, env.logs.matching("debug", "unique identities"))
-}
-
-func TestReconcilerUniqueIdentitiesWithoutLabels(t *testing.T) {
-	client := mongotest.StartMongo(t)
-	env := newReconcilerEnv(t, client)
-	day := time.Date(2026, 10, 10, 9, 0, 0, 0, time.UTC)
-	for i, identity := range []string{"alice", "bob"} {
-		info := participantInfo(fmt.Sprintf("PA_%d", i), identity, livekit.ParticipantInfo_STANDARD, day)
-		env.testEnv.apply([]*livekit.AnalyticsEvent{env.ev.roomCreated("RM_x", "room-x", day), env.ev.joined("RM_x", info, day),
-			env.ev.left("RM_x", info, day.Add(time.Minute), livekit.DisconnectReason_CLIENT_INITIATED)})
-	}
-
-	env.reconcile()
-	global := find[bson.M](env.testEnv, schema.CollectionAnalyticsDaily, "global:"+day.Truncate(24*time.Hour).Format(time.RFC3339))
-	require.Equal(t, int32(2), global["uniqueIdentities"])
-	require.Zero(t, count(env.testEnv, schema.CollectionAnalyticsDaily, bson.D{{Key: "scope", Value: bson.D{{Key: "$ne", Value: "global"}}}}))
 }
 
 func valueOf(n *int32) int32 {

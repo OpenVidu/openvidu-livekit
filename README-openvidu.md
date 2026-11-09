@@ -56,7 +56,7 @@ openvidu:
 | `retention.events`         | `7d`                                   | Time raw events are kept.                                                                                                                                                                                            |
 | `retention.stats`          | `7d`                                   | Time statistics are kept.                                                                                                                                                                                            |
 | `retention.tracks`         | `7d`                                   | Time closed tracks and subscriptions are kept.                                                                                                                                                                       |
-| `retention.entities`       | `90d`                                  | Time closed rooms, participants, egress, ingress and ingress sessions are kept, at least `2d` (the daily unique identities are computed from them).                                                                |
+| `retention.entities`       | `90d`                                  | Time closed rooms, participants, egress, ingress and ingress sessions are kept, at least `2d` (the [aggregator](#aggregator) computes the daily unique identities from them).                                                                |
 | `retention.rollups_5min`   | `7d`                                   | Time 5-minute rollups are kept.                                                                                                                                                                                      |
 | `retention.rollups_hourly` | `400d`                                 | Time hourly rollups are kept.                                                                                                                                                                                        |
 | `retention.rollups_daily`  | —                                      | Time daily rollups are kept, not shorter than `retention.rollups_hourly`. Absent or `0`: forever.                                                                                                                  |
@@ -147,8 +147,25 @@ A node also runs once right after startup.
   and open sessions of a closed room, close with the same end time. Counters and rollups are updated once, and one raw
   event of the close type with `synthetic: true` and `_id: AE_SYN_<entity id>` records each closure. A real close event
   arriving later corrects the end time and the reason without counting the closure again.
-- Each run also sets the daily `uniqueIdentities` of the closed UTC days, logs one line per closure and records itself
-  in `schema_meta` (`_id: reconciler`).
+- Each run logs one line per closure and records itself in `schema_meta` (`_id: reconciler`).
+
+## Aggregator
+
+The aggregator writes the analytics values that no server can compute from its own events. Whenever analytics is
+enabled, whatever `reconciler.enabled` says, one node runs it every 60 s and once right after startup; the node is
+elected with the Redis lock `analytics-aggregator-lock` (TTL 65 s), or is the only node without Redis. It has no
+configuration key.
+
+- Peaks: each run counts the rooms with status `active` and the STANDARD participant sessions with status `active`, and
+  keeps them with `$max` as `rooms.peakActive` and `participants.peakActive` in the global documents of the current
+  bucket of `analytics_5min`, `analytics_hourly` and `analytics_daily`, `0` included. The documents of a media node
+  scope get the counts of its label, for every label held by an active entity or by a node alive within its silent
+  window (`max(60 s, 2 × interval + 15 s)`) that has not stopped. Short entities that start and end between two runs
+  are not counted.
+- Unique identities: each run then sets the daily `uniqueIdentities` (global and per media node label) of up to 7
+  closed UTC days, from 5 minutes after the day closes and inside `retention.entities`.
+- A run never lowers a stored value, so two nodes during a lock handover leave the maximum. A failed run logs a warning
+  and the next one waits for the regular schedule.
 
 ## Metrics
 
@@ -163,6 +180,8 @@ A node also runs once right after startup.
 | `openvidu_analytics_reconciler_closed_total` | `entity`             | Entities closed: `room`, `participant`, `track`, `subscription`, `egress`, `ingress_session`. |
 | `openvidu_analytics_reconciler_candidates`  | `entity`              | Candidates of the last run.                     |
 | `openvidu_analytics_reconciler_run_duration_seconds` |              | Duration of a reconciler run.                   |
+| `openvidu_analytics_aggregator_runs_total`  | `result`              | Aggregator runs: `ok`, `error`.                 |
+| `openvidu_analytics_aggregator_run_duration_seconds` |              | Duration of an aggregator run.                  |
 | `openvidu_analytics_migration_state`        |                       | Legacy migration: 0 none, 1 pending, 2 running, 3 completed, 4 failed. |
 | `openvidu_analytics_migration_processed_total` | `collection`       | Legacy documents replayed: `legacy_events`, `stats`. |
 | `openvidu_analytics_migration_batch_seconds` |                      | Duration of a legacy migration batch.           |

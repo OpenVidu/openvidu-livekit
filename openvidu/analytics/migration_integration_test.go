@@ -208,7 +208,7 @@ func newMigrationEnv(t *testing.T, client *mongo.Client, name string, data *lega
 func (e *migrationEnv) newMigrator(locks locker) *migrator {
 	rec := newReconciler(store.New(e.db), e.live, projectionOptions(e.settings), reconcilerSettings{
 		batchInterval: e.settings.Interval, interval: e.settings.Reconciler.Interval, cleanupInterval: 3 * time.Minute,
-		maxClosures: e.settings.Reconciler.MaxClosuresPerRun, entitiesRetention: e.settings.Retention.Entities,
+		maxClosures: e.settings.Reconciler.MaxClosuresPerRun,
 	}, "ND_migrator", buildReconcilerMetrics())
 	rec.log = e.logs.sink()
 	m := newMigrator(e.db, e.settings, rec, locks, "ND_migrator", e.metrics)

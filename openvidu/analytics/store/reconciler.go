@@ -17,7 +17,6 @@ package store
 import (
 	"context"
 	"errors"
-	"slices"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -69,9 +68,9 @@ type OpenRoom struct {
 
 // RoomRef is what the reconciler needs from the room of an egress or an ingress session.
 type RoomRef struct {
-	SID       string     `bson:"_id"`
-	Name      string     `bson:"name"`
-	NodeID    string     `bson:"nodeId"`
+	SID        string     `bson:"_id"`
+	Name       string     `bson:"name"`
+	NodeID     string     `bson:"nodeId"`
 	MediaNode  string     `bson:"mediaNode"`
 	MediaStats *bool      `bson:"mediaStats"`
 	Status     string     `bson:"status"`
@@ -476,119 +475,6 @@ func (s *Store) ApplyCascadesCounted(ctx context.Context, cascades []projection.
 	return modified, errors.Join(errs...)
 }
 
-// DaysWithoutUniqueIdentities returns, at most limit and the oldest first, the UTC days in [from, to) whose global
-// daily rollup lacks uniqueIdentities.
-func (s *Store) DaysWithoutUniqueIdentities(ctx context.Context, from time.Time, to time.Time, limit int) ([]time.Time, error) {
-	s.roundTrips++
-	cursor, err := s.db.Collection(schema.CollectionAnalyticsDaily).Find(ctx, bson.D{
-		{Key: "scope", Value: "global"},
-		{Key: "bucket", Value: bson.D{{Key: "$gte", Value: from}, {Key: "$lt", Value: to}}},
-		{Key: "uniqueIdentities", Value: bson.D{{Key: "$exists", Value: false}}},
-	}, options.Find().SetSort(bson.D{{Key: "bucket", Value: 1}}).SetLimit(int64(limit)).
-		SetProjection(bson.D{{Key: "bucket", Value: 1}}))
-	if err != nil {
-		return nil, err
-	}
-	var documents []struct {
-		Bucket time.Time `bson:"bucket"`
-	}
-	if err := cursor.All(ctx, &documents); err != nil {
-		return nil, err
-	}
-	days := make([]time.Time, len(documents))
-	for i, document := range documents {
-		days[i] = document.Bucket.UTC()
-	}
-	return days, nil
-}
-
-// UniqueIdentitiesPipeline counts the distinct identities of the STANDARD participant sessions that joined in
-// [from, to), overall and per media node label.
-func UniqueIdentitiesPipeline(from time.Time, to time.Time) mongo.Pipeline {
-	return mongo.Pipeline{
-		{{Key: "$match", Value: bson.D{
-			{Key: "joinedAt", Value: bson.D{{Key: "$gte", Value: from}, {Key: "$lt", Value: to}}},
-			{Key: "kind", Value: projection.StandardKind},
-		}}},
-		{{Key: "$facet", Value: bson.D{
-			{Key: "global", Value: bson.A{
-				bson.D{{Key: "$group", Value: bson.D{{Key: "_id", Value: "$identity"}}}},
-				bson.D{{Key: "$count", Value: "n"}},
-			}},
-			{Key: "nodes", Value: bson.A{
-				bson.D{{Key: "$group", Value: bson.D{{Key: "_id", Value: bson.D{{Key: "node", Value: "$mediaNode"},
-					{Key: "identity", Value: "$identity"}}}}}},
-				bson.D{{Key: "$group", Value: bson.D{{Key: "_id", Value: "$_id.node"}, {Key: "n", Value: bson.D{{Key: "$sum", Value: 1}}}}}},
-			}},
-		}}},
-	}
-}
-
-// UniqueIdentities counts the distinct identities of the participant sessions that joined in [from, to), overall and
-// per media node label; sessions without a label count only overall.
-func (s *Store) UniqueIdentities(ctx context.Context, from time.Time, to time.Time) (int32, map[string]int32, error) {
-	s.roundTrips++
-	cursor, err := s.db.Collection(schema.CollectionParticipants).Aggregate(ctx, UniqueIdentitiesPipeline(from, to))
-	if err != nil {
-		return 0, nil, err
-	}
-	var results []struct {
-		Global []struct {
-			N int32 `bson:"n"`
-		} `bson:"global"`
-		Nodes []struct {
-			Node *string `bson:"_id"`
-			N    int32   `bson:"n"`
-		} `bson:"nodes"`
-	}
-	if err := cursor.All(ctx, &results); err != nil {
-		return 0, nil, err
-	}
-	perNode := map[string]int32{}
-	if len(results) == 0 {
-		return 0, perNode, nil
-	}
-	var global int32
-	if len(results[0].Global) > 0 {
-		global = results[0].Global[0].N
-	}
-	for _, node := range results[0].Nodes {
-		if node.Node != nil && *node.Node != "" {
-			perNode[*node.Node] = node.N
-		}
-	}
-	return global, perNode, nil
-}
-
-// SetUniqueIdentities writes uniqueIdentities on the existing daily rollups of day: the per-node values, zero on the
-// other node scopes, and the global value last, since its absence marks the day as pending.
-func (s *Store) SetUniqueIdentities(ctx context.Context, day time.Time, global int32, perNode map[string]int32) error {
-	collection := s.db.Collection(schema.CollectionAnalyticsDaily)
-	if len(perNode) > 0 {
-		var models []mongo.WriteModel
-		for _, node := range sortedNodes(perNode) {
-			models = append(models, mongo.NewUpdateOneModel().
-				SetFilter(bson.D{{Key: "scope", Value: "node:" + node}, {Key: "bucket", Value: day}}).
-				SetUpdate(bson.D{{Key: "$set", Value: bson.D{{Key: "uniqueIdentities", Value: perNode[node]}}}}))
-		}
-		if err := s.bulkWrite(ctx, schema.CollectionAnalyticsDaily, models); err != nil {
-			return err
-		}
-	}
-	s.roundTrips++
-	if _, err := collection.UpdateMany(ctx, bson.D{
-		{Key: "scope", Value: bson.D{{Key: "$gt", Value: "node:"}, {Key: "$lt", Value: "node;"}}},
-		{Key: "bucket", Value: day},
-		{Key: "uniqueIdentities", Value: bson.D{{Key: "$exists", Value: false}}},
-	}, bson.D{{Key: "$set", Value: bson.D{{Key: "uniqueIdentities", Value: int32(0)}}}}); err != nil {
-		return err
-	}
-	s.roundTrips++
-	_, err := collection.UpdateOne(ctx, bson.D{{Key: "scope", Value: "global"}, {Key: "bucket", Value: day}},
-		bson.D{{Key: "$set", Value: bson.D{{Key: "uniqueIdentities", Value: global}}}})
-	return err
-}
-
 // MigrationState returns the state of the legacy data migration, empty when none was recorded.
 func (s *Store) MigrationState(ctx context.Context) (string, error) {
 	var migration struct {
@@ -610,13 +496,4 @@ func (s *Store) RecordReconcilerRun(ctx context.Context, run schema.SchemaMetaRe
 	_, err := s.db.Collection(schema.CollectionSchemaMeta).ReplaceOne(ctx, bson.D{{Key: "_id", Value: run.ID}}, run,
 		options.Replace().SetUpsert(true))
 	return err
-}
-
-func sortedNodes(perNode map[string]int32) []string {
-	nodes := make([]string, 0, len(perNode))
-	for node := range perNode {
-		nodes = append(nodes, node)
-	}
-	slices.Sort(nodes)
-	return nodes
 }

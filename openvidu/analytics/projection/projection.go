@@ -80,13 +80,15 @@ type Update struct {
 }
 
 // Increment adds counters to a rollup document and members to its sets. Counters hold int32, int64 or float64 values;
-// Sizes maps a counter path to the set whose size it reports. Reported and Missing mark the document with the media
-// statistics of the server or entity the counters come from.
+// Maxima hold values of the same types that never lower the stored one; Sizes maps a counter path to the set whose size
+// it reports. Reported and Missing mark the document with the media statistics of the server or entity the counters
+// come from.
 type Increment struct {
 	Collection string
 	Scope      string
 	Bucket     time.Time
 	Counters   map[string]any
+	Maxima     map[string]any
 	Members    map[string][]string
 	Sizes      map[string]string
 	Reported   bool
@@ -279,7 +281,7 @@ func MergeUpdates(updates []Update, opts Options) []Update {
 	return result
 }
 
-// MergeIncrements sums the increments of the same rollup document.
+// MergeIncrements sums the increments of the same rollup document and keeps the larger of their maxima.
 func MergeIncrements(increments []Increment) []Increment {
 	type key struct{ collection, id string }
 	var order []key
@@ -289,12 +291,15 @@ func MergeIncrements(increments []Increment) []Increment {
 		existing, ok := merged[k]
 		if !ok {
 			existing = &Increment{Collection: increment.Collection, Scope: increment.Scope, Bucket: increment.Bucket,
-				Counters: map[string]any{}, Members: map[string][]string{}, Sizes: map[string]string{}}
+				Counters: map[string]any{}, Maxima: map[string]any{}, Members: map[string][]string{}, Sizes: map[string]string{}}
 			merged[k] = existing
 			order = append(order, k)
 		}
 		for path, value := range increment.Counters {
 			existing.Counters[path] = sum(existing.Counters[path], value)
+		}
+		for path, value := range increment.Maxima {
+			existing.Maxima[path] = larger(existing.Maxima[path], value)
 		}
 		for path, members := range increment.Members {
 			existing.Members[path] = append(existing.Members[path], members...)
@@ -336,6 +341,25 @@ func sum(a any, b any) any {
 	return b
 }
 
+// larger returns b unless a is a larger value of the same type.
+func larger(a any, b any) any {
+	switch v := b.(type) {
+	case int32:
+		if current, ok := a.(int32); ok && current > v {
+			return current
+		}
+	case int64:
+		if current, ok := a.(int64); ok && current > v {
+			return current
+		}
+	case float64:
+		if current, ok := a.(float64); ok && current > v {
+			return current
+		}
+	}
+	return b
+}
+
 func dedupe(sorted []string) []string {
 	out := sorted[:0]
 	for i, value := range sorted {
@@ -349,16 +373,22 @@ func dedupe(sorted []string) []string {
 // RenderIncrement returns the update document or pipeline that applies an increment to its rollup document.
 func RenderIncrement(increment Increment) any {
 	if len(increment.Members) == 0 {
-		inc := bson.D{}
-		for _, path := range sortedKeys(increment.Counters) {
-			inc = append(inc, bson.E{Key: path, Value: increment.Counters[path]})
-		}
 		update := bson.D{
 			{Key: "$setOnInsert", Value: bson.D{{Key: "scope", Value: increment.Scope}, {Key: "bucket", Value: increment.Bucket}}},
-			{Key: "$inc", Value: inc},
 		}
-		if marks := mediaStatsMarks(increment); len(marks) > 0 {
-			update = append(update, bson.E{Key: "$max", Value: marks})
+		if len(increment.Counters) > 0 {
+			inc := bson.D{}
+			for _, path := range sortedKeys(increment.Counters) {
+				inc = append(inc, bson.E{Key: path, Value: increment.Counters[path]})
+			}
+			update = append(update, bson.E{Key: "$inc", Value: inc})
+		}
+		maxima := bson.D{}
+		for _, path := range sortedKeys(increment.Maxima) {
+			maxima = append(maxima, bson.E{Key: path, Value: increment.Maxima[path]})
+		}
+		if maxima = append(maxima, mediaStatsMarks(increment)...); len(maxima) > 0 {
+			update = append(update, bson.E{Key: "$max", Value: maxima})
 		}
 		return update
 	}
@@ -370,6 +400,9 @@ func RenderIncrement(increment Increment) any {
 	for _, path := range sortedKeys(increment.Counters) {
 		value := increment.Counters[path]
 		fields = append(fields, bson.E{Key: path, Value: add(ifNull(path, zeroOf(value)), value)})
+	}
+	for _, path := range sortedKeys(increment.Maxima) {
+		fields = append(fields, bson.E{Key: path, Value: maxOf(path, increment.Maxima[path])})
 	}
 	fields = append(fields, mediaStatsMarks(increment)...)
 	for _, path := range sortedKeys(increment.Members) {

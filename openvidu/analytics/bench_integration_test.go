@@ -26,6 +26,7 @@ import (
 
 	"github.com/livekit/protocol/livekit"
 	"github.com/stretchr/testify/require"
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
@@ -155,4 +156,87 @@ func benchBatch(prefix string, start time.Time) ([]*livekit.AnalyticsEvent, []*l
 		stats[i] = stat(st.room, st.participant, st.track, st.kind, offset(30*(1+i/len(streams))), 4.4, 250000)
 	}
 	return batch, stats
+}
+
+const (
+	benchActiveRooms        = 2000
+	benchActiveParticipants = 20000
+	benchMediaNodes         = 4
+	benchAggregatorRuns     = 20
+	// Performance budget of the peaks of an aggregator run (unique identities excluded): p95 latency.
+	benchAggregatorMaxP95 = 200 * time.Millisecond
+)
+
+// TestAggregatorPerformanceBudget samples the peaks of benchActiveRooms active rooms and benchActiveParticipants
+// active STANDARD sessions on benchMediaNodes media nodes, beside as many closed ones, in a database of its own. It runs
+// only when ANALYTICS_BENCH_MONGO_URI names a MongoDB server.
+func TestAggregatorPerformanceBudget(t *testing.T) {
+	uri := os.Getenv("ANALYTICS_BENCH_MONGO_URI")
+	if uri == "" {
+		t.Skip("set ANALYTICS_BENCH_MONGO_URI to a MongoDB server")
+	}
+	ctx := context.Background()
+	client, err := mongo.Connect(options.Client().ApplyURI(uri))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Disconnect(context.Background()) })
+	db := client.Database("analytics_aggregator_bench")
+	require.NoError(t, db.Drop(ctx))
+	t.Cleanup(func() { _ = db.Drop(context.Background()) })
+	settings, _, err := (&openviduconfig.AnalyticsConfig{Enabled: true, MongoUrl: uri}).Settings()
+	require.NoError(t, err)
+	_, err = schema.Initialize(ctx, db, schema.InitOptions{ValidationAction: "warn", Retention: retentionOf(settings),
+		StatsDetail: settings.StatsDetail, WriterVersion: "bench"})
+	require.NoError(t, err)
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	insert := func(collection string, n int, document func(i int) bson.D) {
+		documents := make([]any, n)
+		for i := range documents {
+			documents[i] = document(i)
+		}
+		_, err := db.Collection(collection).InsertMany(ctx, documents, options.InsertMany().SetBypassDocumentValidation(true))
+		require.NoError(t, err)
+	}
+	label := func(i int) string { return fmt.Sprintf("mn-%d", i%benchMediaNodes) }
+	for _, status := range []string{"active", "ended"} {
+		insert(schema.CollectionRooms, benchActiveRooms, func(i int) bson.D {
+			return bson.D{{Key: "_id", Value: fmt.Sprintf("RM_%s%05d", status, i)}, {Key: "status", Value: status},
+				{Key: "mediaNode", Value: label(i)}, {Key: "createdAt", Value: now.Add(-time.Hour)}, {Key: "lastEventAt", Value: now}}
+		})
+	}
+	for _, status := range []string{"active", "left"} {
+		insert(schema.CollectionParticipants, benchActiveParticipants, func(i int) bson.D {
+			return bson.D{{Key: "_id", Value: fmt.Sprintf("PA_%s%06d", status, i)}, {Key: "status", Value: status},
+				{Key: "kind", Value: "STANDARD"}, {Key: "roomSid", Value: fmt.Sprintf("RM_%s%05d", "active", i%benchActiveRooms)},
+				{Key: "identity", Value: fmt.Sprintf("user-%d", i)}, {Key: "mediaNode", Value: label(i)},
+				{Key: "joinedAt", Value: now.Add(-30 * time.Minute)}}
+		})
+	}
+	for i := range benchMediaNodes {
+		require.NoError(t, store.New(db).Heartbeat(ctx, fmt.Sprintf("ND_%d", i), store.NodeHeartbeat{ServerVersion: "bench",
+			BatchInterval: 10 * time.Second, MediaStats: true, RTCEngine: "pion", MediaNode: label(i)}, now))
+	}
+
+	s := store.New(db)
+	a := newAggregator(s, aggregatorSettings{interval: time.Minute, entitiesRetention: settings.Retention.Entities},
+		buildAggregatorMetrics())
+	var durations []time.Duration
+	var roundTrips []int
+	for range benchAggregatorRuns {
+		s.ResetRoundTrips()
+		started := time.Now()
+		require.NoError(t, a.samplePeaks(ctx, now))
+		durations = append(durations, time.Since(started))
+		roundTrips = append(roundTrips, s.RoundTrips())
+	}
+	slices.Sort(durations)
+	p50, p95 := durations[len(durations)/2], durations[len(durations)*95/100]
+	t.Logf("%d active rooms, %d active STANDARD sessions on %d media nodes: p50 %s, p95 %s, max %s, round trips %d",
+		benchActiveRooms, benchActiveParticipants, benchMediaNodes, p50, p95, durations[len(durations)-1], slices.Max(roundTrips))
+	require.LessOrEqual(t, p95, benchAggregatorMaxP95)
+
+	var global bson.M
+	require.NoError(t, db.Collection(schema.CollectionAnalytics5Min).FindOne(ctx,
+		bson.D{{Key: "_id", Value: "global:" + now.Truncate(5*time.Minute).Format(time.RFC3339)}}).Decode(&global))
+	require.Equal(t, [2]any{int32(benchActiveRooms), int32(benchActiveParticipants)}, peaksOf(global))
 }
