@@ -105,9 +105,6 @@ func (c *PacketConn) Close() error {
 	return c.PacketConn.Close()
 }
 
-// BEGIN OPENVIDU BLOCK — RelayAddressGenerator removed; replaced by openviduRelayAddrGen in turn_security.go
-// END OPENVIDU BLOCK
-
 type RelayAddressGenerator struct {
 	turn.RelayAddressGenerator
 }

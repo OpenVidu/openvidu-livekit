@@ -316,8 +316,8 @@ func (s *TURNSecurity) fetchAllowedIPs() (map[string]struct{}, error) {
 // host. TURNSecurity also lets the relay reach the other cluster nodes, whose
 // private addresses sit behind the same firewall, so relays to any peer may only
 // reach the media ports. Like upstream, packets to other ports are dropped.
-// Upstream's rejectTCPRelayAddressGenerator, wrapped inside, still refuses
-// RFC 6062 TCP relays.
+// RFC 6062 TCP relays pass through to openviduTCPRelayAddrGen, wrapped inside,
+// which refuses them unless turn.enable_rfc6062 is set.
 type openviduRelayPortPolicy struct {
 	turn.RelayAddressGenerator
 	mediaPorts []portRange
@@ -380,6 +380,98 @@ func logOpenViduRelayPortPolicy(mediaPorts []portRange) {
 		return
 	}
 	logger.Infow("TURN relay peer port restriction enabled", "mediaPorts", formatPortRanges(mediaPorts))
+}
+
+// ---------------------------------------------------------------------------
+// RFC 6062 TCP relays (turn.enable_rfc6062)
+// ---------------------------------------------------------------------------
+
+// errRFC6062Disabled wraps upstream's ErrTURNTCPRelayDisabled, so the refusal is
+// the same error upstream returns, with the key that lifts it.
+var errRFC6062Disabled = fmt.Errorf("%w (RFC 6062 (TURN TCP allocations) is disabled, see turn.enable_rfc6062)", ErrTURNTCPRelayDisabled)
+
+// openviduTCPRelayAddrGen stands in for upstream's rejectTCPRelayAddressGenerator
+// (turnrelay.go). LiveKit refuses RFC 6062 (TURN Extensions for TCP Allocations)
+// unconditionally since livekit#4992; OpenVidu keeps them as the opt-in it has
+// documented since 3.8.0, turn.enable_rfc6062 (false by default). RFC 6062 has
+// two entry points on the relay address generator:
+//   - AllocateListener: a TCP Allocate (REQUESTED-TRANSPORT=TCP) creating a
+//     relay listener for inbound peer connections (used with ConnectionBind).
+//     pion/turn answers a refusal with 508 (Insufficient Capacity).
+//   - AllocateConn: a Connect request creating an outbound TCP connection.
+//     pion/turn answers a refusal with 447 (Connection Timeout or Failure).
+//
+// When disabled, both are refused. When enabled, TCP relays get the same
+// protection as UDP ones: pion/turn checks TURNSecurity's permission handler
+// for every peer (Connect, and inbound connections to a TCP allocation), and
+// an outbound connection may only reach the WebRTC media port range
+// [minPort, maxPort] (rtc.port_range_start / rtc.port_range_end; with no range
+// configured every Connect is refused), so the relay cannot reach other
+// services, such as SSH, on the hosts it is allowed to relay to. UDP relays
+// (AllocatePacketConn) are unaffected.
+type openviduTCPRelayAddrGen struct {
+	turn.RelayAddressGenerator
+	minPort       uint16
+	maxPort       uint16
+	enableRFC6062 bool
+}
+
+func newOpenViduTCPRelayAddrGen(g turn.RelayAddressGenerator, minPort, maxPort uint16, enableRFC6062 bool) *openviduTCPRelayAddrGen {
+	return &openviduTCPRelayAddrGen{
+		RelayAddressGenerator: g,
+		minPort:               minPort,
+		maxPort:               maxPort,
+		enableRFC6062:         enableRFC6062,
+	}
+}
+
+func (g *openviduTCPRelayAddrGen) AllocateListener(c turn.AllocateListenerConfig) (net.Listener, net.Addr, error) {
+	if !g.enableRFC6062 {
+		logger.Warnw("TURN AllocateListener denied: RFC 6062 (TURN TCP allocations) is disabled", errRFC6062Disabled,
+			"network", c.Network)
+		return nil, nil, errRFC6062Disabled
+	}
+	return g.RelayAddressGenerator.AllocateListener(c)
+}
+
+func (g *openviduTCPRelayAddrGen) AllocateConn(c turn.AllocateConnConfig) (net.Conn, error) {
+	// The RFC 6062 check comes first, so a disabled Connect is refused for that
+	// reason whatever its port.
+	if !g.enableRFC6062 {
+		logger.Warnw("TURN AllocateConn denied: RFC 6062 (TURN TCP allocations) is disabled", errRFC6062Disabled,
+			"network", c.Network, "remoteAddr", c.RemoteAddr.String())
+		return nil, errRFC6062Disabled
+	}
+
+	var port uint16
+	if tcpAddr, ok := c.RemoteAddr.(*net.TCPAddr); ok {
+		port = tcpAddr.AddrPort().Port()
+	}
+	if port == 0 || port < g.minPort || port > g.maxPort {
+		portErr := fmt.Errorf("destination port %d outside allowed range [%d, %d]", port, g.minPort, g.maxPort)
+		logger.Warnw("TURN AllocateConn denied: destination port outside allowed range", portErr,
+			"remoteAddr", c.RemoteAddr.String(), "port", port, "minPort", g.minPort, "maxPort", g.maxPort)
+		return nil, portErr
+	}
+
+	conn, err := g.RelayAddressGenerator.AllocateConn(c)
+	if err != nil {
+		logger.Warnw("TURN AllocateConn failed", err, "network", c.Network, "remoteAddr", c.RemoteAddr.String())
+		return nil, err
+	}
+	return conn, nil
+}
+
+func logOpenViduRFC6062(enableRFC6062 bool, minPort, maxPort uint16) {
+	if !enableRFC6062 {
+		logger.Infow("TURN RFC 6062 (TCP allocations) disabled — clients can only allocate UDP relays")
+		return
+	}
+	if minPort == 0 || maxPort == 0 {
+		logger.Warnw("TURN RFC 6062 (TCP allocations) enabled, but no ICE port range is configured: every TCP Connect will be denied", nil)
+		return
+	}
+	logger.Infow("TURN RFC 6062 (TCP allocations) enabled", "connectMinPort", minPort, "connectMaxPort", maxPort)
 }
 
 // END OPENVIDU BLOCK

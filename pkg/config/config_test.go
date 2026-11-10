@@ -173,15 +173,38 @@ func TestYAMLTag(t *testing.T) {
 
 // BEGIN OPENVIDU BLOCK
 
-func TestConfig_TURN_DeprecatedRFC6062KeyStillParses(t *testing.T) {
-	// turn.enable_rfc6062 shipped in OpenVidu 3.8.0 and is ignored since TCP
-	// relays are always refused (livekit#4992). Configs that still set it must
-	// keep loading in strict mode.
-	for _, value := range []string{"true", "false"} {
-		conf, err := NewConfig("turn:\n  enable_rfc6062: "+value, true, nil, nil)
-		require.NoError(t, err, "enable_rfc6062: %s", value)
-		require.Equal(t, value == "true", conf.TURN.EnableRFC6062)
-	}
+func TestConfig_TURN_RFC6062DisabledByDefault(t *testing.T) {
+	conf, err := NewConfig("", true, nil, nil)
+	require.NoError(t, err)
+	require.False(t, conf.TURN.EnableRFC6062, "RFC 6062 (TURN TCP allocations) must be disabled by default")
+}
+
+func TestConfig_TURN_RFC6062DisabledWhenOmittedFromTurnBlock(t *testing.T) {
+	// A turn block that is present but does not mention enable_rfc6062 must
+	// still leave it disabled — omitting the key keeps the default (false).
+	const content = `turn:
+  enabled: true
+  udp_port: 3478`
+	conf, err := NewConfig(content, true, nil, nil)
+	require.NoError(t, err)
+	require.True(t, conf.TURN.Enabled, "sanity: the turn block was applied")
+	require.False(t, conf.TURN.EnableRFC6062, "RFC 6062 must stay disabled when not defined in the config")
+}
+
+func TestConfig_TURN_RFC6062EnabledViaYAML(t *testing.T) {
+	const content = `turn:
+  enable_rfc6062: true`
+	conf, err := NewConfig(content, true, nil, nil)
+	require.NoError(t, err)
+	require.True(t, conf.TURN.EnableRFC6062)
+}
+
+func TestConfig_TURN_RFC6062DisabledViaYAML(t *testing.T) {
+	const content = `turn:
+  enable_rfc6062: false`
+	conf, err := NewConfig(content, true, nil, nil)
+	require.NoError(t, err)
+	require.False(t, conf.TURN.EnableRFC6062)
 }
 
 func TestConfig_AdvertiseInternalIP_DefaultFalse(t *testing.T) {

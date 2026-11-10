@@ -98,12 +98,6 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 		}
 	}
 
-	// BEGIN OPENVIDU BLOCK
-	if turnConf.EnableRFC6062 {
-		logger.Warnw("turn.enable_rfc6062 is deprecated and ignored: TURN TCP relay allocations (RFC 6062) are always refused", nil)
-	}
-	// END OPENVIDU BLOCK
-
 	// parse peer CIDR policies once at startup so a malformed entry fails loudly
 	// instead of being silently skipped on every permission decision (fail-open)
 	allowRestrictedPeerCIDRs, err := parsePeerCIDRs("turn.allow_restricted_peer_cidrs", turnConf.AllowRestrictedPeerCIDRs)
@@ -156,6 +150,7 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 	if !standalone {
 		logOpenViduRelayPortPolicy(mediaPorts)
 	}
+	logOpenViduRFC6062(turnConf.EnableRFC6062, uint16(conf.RTC.ICEPortRangeStart), uint16(conf.RTC.ICEPortRangeEnd))
 	// END OPENVIDU BLOCK
 
 	for _, addr := range turnConf.BindAddresses {
@@ -192,7 +187,10 @@ func NewTurnServer(conf *config.Config, authHandler turn.AuthHandler, standalone
 		permissionHandler := turnSecurity.PermissionHandler()
 		// END OPENVIDU BLOCK
 
-		relayAddrGen = newRejectTCPRelayAddressGenerator(relayAddrGen)
+		// BEGIN OPENVIDU BLOCK
+		// In place of upstream's newRejectTCPRelayAddressGenerator: RFC 6062 TCP relays stay an opt-in (turn.enable_rfc6062).
+		relayAddrGen = newOpenViduTCPRelayAddrGen(relayAddrGen, uint16(conf.RTC.ICEPortRangeStart), uint16(conf.RTC.ICEPortRangeEnd), turnConf.EnableRFC6062)
+		// END OPENVIDU BLOCK
 		if standalone {
 			relayAddrGen = telemetry.NewRelayAddressGenerator(relayAddrGen)
 		} else {

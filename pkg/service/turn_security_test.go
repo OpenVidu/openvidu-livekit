@@ -931,24 +931,181 @@ func TestTURNSecurity_PortPolicy_WrapsUDPRelays(t *testing.T) {
 	require.Equal(t, testMediaPorts, wrapped.mediaPorts)
 }
 
-func TestTURNSecurity_PortPolicy_KeepsUpstreamTCPRelayRefusal(t *testing.T) {
-	// NewTurnServer wraps the policy around upstream's rejectTCPRelayAddressGenerator:
-	// RFC 6062 TCP relays must still be refused through it.
-	gen := newOpenViduRelayPortPolicy(newRejectTCPRelayAddressGenerator(&mockRelayAddrGen{}), testMediaPorts)
+func TestTURNSecurity_PortPolicy_LeavesTCPRelaysToRFC6062Gen(t *testing.T) {
+	// NewTurnServer wraps the policy around openviduTCPRelayAddrGen: TCP relays
+	// pass through it, refused unless turn.enable_rfc6062 is set.
+	remote := &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 5500}
 
-	_, _, err := gen.AllocateListener(turn.AllocateListenerConfig{Network: "tcp4"})
+	disabled := newOpenViduRelayPortPolicy(newOpenViduTCPRelayAddrGen(&mockRelayAddrGen{}, 5000, 6000, false), testMediaPorts)
+	_, _, err := disabled.AllocateListener(turn.AllocateListenerConfig{Network: "tcp4"})
 	require.ErrorIs(t, err, ErrTURNTCPRelayDisabled)
-	_, err = gen.AllocateConn(turn.AllocateConnConfig{
-		Network:    "tcp4",
-		RemoteAddr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 5500},
-	})
+	_, err = disabled.AllocateConn(turn.AllocateConnConfig{Network: "tcp4", RemoteAddr: remote})
 	require.ErrorIs(t, err, ErrTURNTCPRelayDisabled)
+
+	enabled := newOpenViduRelayPortPolicy(newOpenViduTCPRelayAddrGen(&mockRelayAddrGen{}, 5000, 6000, true), testMediaPorts)
+	ln, _, err := enabled.AllocateListener(turn.AllocateListenerConfig{Network: "tcp4"})
+	require.NoError(t, err)
+	_ = ln.Close()
+	conn, err := enabled.AllocateConn(turn.AllocateConnConfig{Network: "tcp4", RemoteAddr: remote})
+	require.NoError(t, err)
+	_ = conn.Close()
 }
 
 func TestTURNSecurity_FormatPortRanges(t *testing.T) {
 	require.Equal(t, []string{"50000-60000", "3478-3478"},
 		formatPortRanges([]portRange{{start: 50000, end: 60000}, {start: 3478, end: 3478}}))
 	require.Empty(t, formatPortRanges(nil))
+}
+
+func TestTURNSecurity_OpenViduTCPRelayAddrGen_Wraps(t *testing.T) {
+	gen := newOpenViduTCPRelayAddrGen(nil, 5000, 6000, true)
+	require.NotNil(t, gen)
+	require.Equal(t, uint16(5000), gen.minPort)
+	require.Equal(t, uint16(6000), gen.maxPort)
+	require.True(t, gen.enableRFC6062)
+}
+
+func TestTURNSecurity_OpenViduTCPRelayAddrGen_Disabled(t *testing.T) {
+	gen := newOpenViduTCPRelayAddrGen(nil, 0, 0, false)
+	require.NotNil(t, gen)
+	require.False(t, gen.enableRFC6062)
+}
+
+func TestTURNSecurity_AllocateConn_PortOutOfRange(t *testing.T) {
+	inner := &mockRelayAddrGen{}
+	// RFC 6062 enabled so the port restriction is the only thing under test.
+	gen := newOpenViduTCPRelayAddrGen(inner, 5000, 6000, true)
+
+	conn, err := gen.AllocateConn(turn.AllocateConnConfig{
+		Network:    "tcp4",
+		RemoteAddr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 80},
+	})
+	require.Nil(t, conn)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "outside allowed range")
+}
+
+func TestTURNSecurity_AllocateConn_PortInRange(t *testing.T) {
+	inner := &mockRelayAddrGen{}
+	// RFC 6062 enabled so an in-range Connect is allowed through.
+	gen := newOpenViduTCPRelayAddrGen(inner, 5000, 6000, true)
+
+	conn, err := gen.AllocateConn(turn.AllocateConnConfig{
+		Network:    "tcp4",
+		RemoteAddr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 5500},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+	_ = conn.Close()
+}
+
+func TestTURNSecurity_AllocateConn_ZeroPortRange_AllDenied(t *testing.T) {
+	inner := &mockRelayAddrGen{}
+	// RFC 6062 enabled so the zero-range port denial is the only thing under test.
+	gen := newOpenViduTCPRelayAddrGen(inner, 0, 0, true)
+
+	conn, err := gen.AllocateConn(turn.AllocateConnConfig{
+		Network:    "tcp4",
+		RemoteAddr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 5500},
+	})
+	require.Nil(t, conn)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "outside allowed range")
+}
+
+// ---------------------------------------------------------------------------
+// RFC 6062 (TURN TCP allocations) — disabled by default, opt-in to enable
+// ---------------------------------------------------------------------------
+
+func TestTURNSecurity_RFC6062_DisabledRejectsConnect(t *testing.T) {
+	// With RFC 6062 disabled, an otherwise-valid in-range Connect is rejected
+	// and the inner generator is never invoked.
+	inner := &mockRelayAddrGen{}
+	gen := newOpenViduTCPRelayAddrGen(inner, 5000, 6000, false)
+
+	conn, err := gen.AllocateConn(turn.AllocateConnConfig{
+		Network:    "tcp4",
+		RemoteAddr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 5500},
+	})
+	require.Nil(t, conn)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "RFC 6062")
+	require.Contains(t, err.Error(), "disabled")
+	require.ErrorIs(t, err, ErrTURNTCPRelayDisabled, "the refusal is upstream's error")
+}
+
+func TestTURNSecurity_RFC6062_EnabledAllowsConnect(t *testing.T) {
+	// With RFC 6062 enabled, an in-range Connect is allocated through the
+	// inner generator.
+	inner := &mockRelayAddrGen{}
+	gen := newOpenViduTCPRelayAddrGen(inner, 5000, 6000, true)
+
+	conn, err := gen.AllocateConn(turn.AllocateConnConfig{
+		Network:    "tcp4",
+		RemoteAddr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 5500},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+	_ = conn.Close()
+}
+
+func TestTURNSecurity_RFC6062_DisabledTakesPrecedenceOverPort(t *testing.T) {
+	// When disabled, the RFC 6062 rejection happens before the port check, so
+	// even an in-range port is denied with the RFC 6062 reason — never the
+	// port-range reason.
+	inner := &mockRelayAddrGen{}
+	gen := newOpenViduTCPRelayAddrGen(inner, 5000, 6000, false)
+
+	conn, err := gen.AllocateConn(turn.AllocateConnConfig{
+		Network:    "tcp4",
+		RemoteAddr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 5500},
+	})
+	require.Nil(t, conn)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "RFC 6062")
+	require.NotContains(t, err.Error(), "outside allowed range")
+}
+
+func TestTURNSecurity_RFC6062_DisabledRejectsTCPAllocate(t *testing.T) {
+	// The inbound RFC 6062 path: a TCP Allocate (REQUESTED-TRANSPORT=TCP) goes
+	// through AllocateListener. When disabled, it must be rejected so clients
+	// cannot create a TCP relay listener at all.
+	inner := &mockRelayAddrGen{}
+	gen := newOpenViduTCPRelayAddrGen(inner, 5000, 6000, false)
+
+	ln, addr, err := gen.AllocateListener(turn.AllocateListenerConfig{Network: "tcp4"})
+	require.Nil(t, ln)
+	require.Nil(t, addr)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "RFC 6062")
+	require.Contains(t, err.Error(), "disabled")
+	require.ErrorIs(t, err, ErrTURNTCPRelayDisabled, "the refusal is upstream's error")
+}
+
+func TestTURNSecurity_RFC6062_EnabledAllowsTCPAllocate(t *testing.T) {
+	// When enabled, the TCP Allocate is delegated to the inner generator and a
+	// relay listener is returned.
+	inner := &mockRelayAddrGen{}
+	gen := newOpenViduTCPRelayAddrGen(inner, 5000, 6000, true)
+
+	ln, addr, err := gen.AllocateListener(turn.AllocateListenerConfig{Network: "tcp4"})
+	require.NoError(t, err)
+	require.NotNil(t, ln)
+	require.NotNil(t, addr)
+	_ = ln.Close()
+}
+
+func TestTURNSecurity_RFC6062_DisabledLeavesUDPUnaffected(t *testing.T) {
+	// Disabling RFC 6062 must not touch UDP relays: AllocatePacketConn (the UDP
+	// allocation path) still delegates to the inner generator.
+	inner := &mockRelayAddrGen{}
+	gen := newOpenViduTCPRelayAddrGen(inner, 5000, 6000, false)
+
+	conn, addr, err := gen.AllocatePacketConn(turn.AllocateListenerConfig{Network: "udp4"})
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+	require.NotNil(t, addr)
+	_ = conn.Close()
 }
 
 // mockRelayAddrGen is a minimal turn.RelayAddressGenerator for testing.

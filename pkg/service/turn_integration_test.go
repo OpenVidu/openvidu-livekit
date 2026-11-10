@@ -7,8 +7,7 @@
 //   - the TURNSecurity wiring (open-relay regression): only local/cluster IPs
 //     may be reached, never arbitrary public IPs;
 //   - authentication (TURNAuthHandler): valid/invalid/expired/malformed creds;
-//   - the deprecated enable_rfc6062: TCP allocations stay refused when it is set
-//     (upstream's own TestNewTurnServer_RejectsTCPRelay covers the default).
+//   - enable_rfc6062: TCP allocations rejected by default, allowed when enabled.
 package service
 
 import (
@@ -183,13 +182,25 @@ func TestNewTurnServer_NoRedis_StaticAllowlist(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// enable_rfc6062 (deprecated)
+// enable_rfc6062 wiring
 // ---------------------------------------------------------------------------
 
-// TestNewTurnServer_DeprecatedRFC6062Key_StillRejectsTCPAllocate verifies that
-// the deprecated enable_rfc6062 key, which used to opt in to TCP (RFC 6062)
-// allocations, no longer enables them: upstream refuses them unconditionally.
-func TestNewTurnServer_DeprecatedRFC6062Key_StillRejectsTCPAllocate(t *testing.T) {
+// TestNewTurnServer_RFC6062_DisabledByDefault_RejectsTCPAllocate verifies that
+// enable_rfc6062 is wired through NewTurnServer: by default a TCP (RFC 6062)
+// allocation is rejected end-to-end.
+func TestNewTurnServer_RFC6062_DisabledByDefault_RejectsTCPAllocate(t *testing.T) {
+	udpPort := freeUDPPort(t)
+	h := newTestTurnAuthHandler()
+	startTestTurnServer(t, newTestTurnServerConfig(udpPort), h, nil) // EnableRFC6062 defaults to false
+
+	client := dialValidTURNClient(t, udpPort, h)
+	_, err := client.AllocateTCP()
+	require.Error(t, err, "RFC 6062 disabled by default => TCP allocation must be rejected")
+}
+
+// TestNewTurnServer_RFC6062_Enabled_AllowsTCPAllocate verifies the opposite: when
+// enable_rfc6062 is true, a TCP allocation succeeds end-to-end.
+func TestNewTurnServer_RFC6062_Enabled_AllowsTCPAllocate(t *testing.T) {
 	udpPort := freeUDPPort(t)
 	conf := newTestTurnServerConfig(udpPort)
 	conf.TURN.EnableRFC6062 = true
@@ -198,13 +209,11 @@ func TestNewTurnServer_DeprecatedRFC6062Key_StillRejectsTCPAllocate(t *testing.T
 	startTestTurnServer(t, conf, h, nil)
 
 	client := dialValidTURNClient(t, udpPort, h)
-	_, err := client.AllocateTCP()
-	require.Error(t, err, "TCP allocation must be refused even with the deprecated enable_rfc6062 set")
-
-	// UDP relays are unaffected.
-	relayConn, err := client.Allocate()
-	require.NoError(t, err)
-	_ = relayConn.Close()
+	alloc, err := client.AllocateTCP()
+	require.NoError(t, err, "RFC 6062 enabled => TCP allocation must succeed")
+	if alloc != nil {
+		_ = alloc.Close()
+	}
 }
 
 // ---------------------------------------------------------------------------

@@ -411,9 +411,11 @@ type TURNConfig struct {
 	// when auto-discovering on nodes that are not publicly reachable.
 	// Ignored when RelayAddress is explicitly set or the node is publicly reachable.
 	RelayPreferredInterface string `yaml:"relay_preferred_interface,omitempty"`
-	// Deprecated: EnableRFC6062 is ignored. TURN TCP relay allocations (RFC 6062)
-	// are always refused since LiveKit v1.13.10 (livekit#4992). Still parsed so
-	// that configs which set it keep loading in strict mode.
+	// EnableRFC6062 enables RFC 6062 (TURN Extensions for TCP Allocations), i.e.
+	// the Connect / ConnectionBind requests that let a client relay traffic to a
+	// peer over an outbound TCP connection. Disabled by default: clients can only
+	// allocate UDP relays unless this is explicitly turned on. LiveKit refuses
+	// them unconditionally (livekit#4992); OpenVidu keeps this opt-in.
 	EnableRFC6062 bool `yaml:"enable_rfc6062,omitempty"`
 	// TCPConnectionIdleTimeoutSeconds closes a TURN TCP (TLS) connection that
 	// neither sends nor receives for this many seconds, so a client cannot hold a
@@ -727,6 +729,8 @@ var DefaultConfig = Config{
 	},
 	TURN: TURNConfig{
 		// BEGIN OPENVIDU BLOCK
+		// RFC 6062 (TURN TCP allocations) is disabled by default.
+		EnableRFC6062: false,
 		// Close TURN TCP/TLS connections idle in both directions after 60s.
 		TCPConnectionIdleTimeoutSeconds: DefaultTURNTCPConnectionIdleTimeoutSeconds,
 		// END OPENVIDU BLOCK

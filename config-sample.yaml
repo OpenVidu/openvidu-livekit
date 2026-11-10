@@ -375,6 +375,12 @@ keys:
 #   # Values <= 0 fall back to the 300s (5m) default; values are capped at 86400 (24h).
 #   ttl_seconds: 300
 # BEGIN OPENVIDU BLOCK
+#   # enable RFC 6062 (TURN Extensions for TCP Allocations): allows clients to relay
+#   # traffic to a peer over an outbound TCP connection (Connect / ConnectionBind).
+#   # Disabled by default — clients can only allocate UDP relays unless this is set.
+#   # Outbound TCP connections only reach the ICE port range (rtc.port_range_start
+#   # to rtc.port_range_end). LiveKit itself refuses TCP relays unconditionally.
+#   enable_rfc6062: false
 #   # list of peer CIDRs to explicitly allow relay access to. Any peer IP that falls
 #   # in one of these CIDRs is permitted, regardless of whether it is private, public
 #   # or a cluster-node IP (deny_peer_cidrs still takes precedence).
@@ -382,8 +388,7 @@ keys:
 #   # link-local (unicast/multicast), multicast, private, unspecified, carrier-grade
 #   # NAT, NAT64 and other special-purpose ranges) that are NOT listed here are
 #   # denied. By default (empty list) this check is disabled.
-#   # Relays to any peer only reach the RTC media UDP ports, and TCP relays
-#   # (RFC 6062) are always refused; the former enable_rfc6062 key is ignored.
+#   # UDP relays to any peer only reach the RTC media UDP ports.
 # END OPENVIDU BLOCK
 #   allow_restricted_peer_cidrs:
 #     - 10.0.0.0/8
