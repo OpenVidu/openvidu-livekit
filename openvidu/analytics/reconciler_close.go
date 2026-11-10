@@ -229,7 +229,7 @@ func (c *closer) closeEgress(ctx context.Context, candidate egressCandidate) err
 		}
 	}
 	state := projection.EgressState{ID: egress.ID, RoomSID: egress.RoomSID, RoomName: firstNonEmpty(egress.RoomName, room.Name),
-		NodeID: room.NodeID, MediaNode: room.MediaNode, WithoutMediaStats: withoutMediaStats(room.MediaStats),
+		NodeID: room.NodeID, WithoutMediaStats: withoutMediaStats(room.MediaStats),
 		Status: egress.Status, StartedAt: egress.StartedAt}
 	closure := projection.CloseEgress(state, at, reason, c.r.opts)
 	closed, err := c.r.store.CloseEntity(ctx, closure.Entity)
@@ -256,7 +256,7 @@ func (c *closer) closeIngressSession(ctx context.Context, candidate ingressSessi
 		}
 	}
 	state := projection.IngressSessionState{ID: session.ID, IngressID: session.IngressID, RoomSID: session.RoomSID,
-		RoomName: firstNonEmpty(session.RoomName, room.Name), NodeID: room.NodeID, MediaNode: room.MediaNode,
+		RoomName: firstNonEmpty(session.RoomName, room.Name), NodeID: room.NodeID,
 		WithoutMediaStats: withoutMediaStats(room.MediaStats), Status: session.Status, StartedAt: session.StartedAt}
 	closure := projection.CloseIngressSession(state, at, reason, c.r.opts)
 	closed, err := c.r.store.CloseEntity(ctx, closure.Entity)

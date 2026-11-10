@@ -162,6 +162,10 @@ const (
 	benchActiveRooms        = 2000
 	benchActiveParticipants = 20000
 	benchMediaNodes         = 4
+	benchOpenEgress         = 500
+	benchClosedEgress       = 50000
+	benchOpenIngress        = 200
+	benchClosedIngress      = 20000
 	benchAggregatorRuns     = 20
 	// Performance budget of the peaks of an aggregator run (unique identities excluded): p95 latency.
 	benchAggregatorMaxP95 = 200 * time.Millisecond
@@ -212,6 +216,24 @@ func TestAggregatorPerformanceBudget(t *testing.T) {
 				{Key: "joinedAt", Value: now.Add(-30 * time.Minute)}}
 		})
 	}
+	egressStatuses := []string{"starting", "active", "ending"}
+	insert(schema.CollectionEgresses, benchOpenEgress+benchClosedEgress, func(i int) bson.D {
+		status := "complete"
+		if i < benchOpenEgress {
+			status = egressStatuses[i%len(egressStatuses)]
+		}
+		return bson.D{{Key: "_id", Value: fmt.Sprintf("EG_%06d", i)}, {Key: "status", Value: status},
+			{Key: "roomSid", Value: fmt.Sprintf("RM_active%05d", i%benchActiveRooms)}, {Key: "startedAt", Value: now.Add(-time.Hour)}}
+	})
+	ingressStatuses := []string{"buffering", "publishing"}
+	insert(schema.CollectionIngressSessions, benchOpenIngress+benchClosedIngress, func(i int) bson.D {
+		status := "complete"
+		if i < benchOpenIngress {
+			status = ingressStatuses[i%len(ingressStatuses)]
+		}
+		return bson.D{{Key: "_id", Value: fmt.Sprintf("IS_%06d", i)}, {Key: "status", Value: status},
+			{Key: "ingressId", Value: fmt.Sprintf("IN_%06d", i)}, {Key: "startedAt", Value: now.Add(-time.Hour)}}
+	})
 	for i := range benchMediaNodes {
 		require.NoError(t, store.New(db).Heartbeat(ctx, fmt.Sprintf("ND_%d", i), store.NodeHeartbeat{ServerVersion: "bench",
 			BatchInterval: 10 * time.Second, MediaStats: true, RTCEngine: "pion", MediaNode: label(i)}, now))
@@ -231,12 +253,19 @@ func TestAggregatorPerformanceBudget(t *testing.T) {
 	}
 	slices.Sort(durations)
 	p50, p95 := durations[len(durations)/2], durations[len(durations)*95/100]
-	t.Logf("%d active rooms, %d active STANDARD sessions on %d media nodes: p50 %s, p95 %s, max %s, round trips %d",
-		benchActiveRooms, benchActiveParticipants, benchMediaNodes, p50, p95, durations[len(durations)-1], slices.Max(roundTrips))
+	t.Logf("%d active rooms, %d active STANDARD sessions on %d media nodes, %d of %d egresses and %d of %d ingress "+
+		"sessions open: p50 %s, p95 %s, max %s, round trips %d", benchActiveRooms, benchActiveParticipants, benchMediaNodes,
+		benchOpenEgress, benchOpenEgress+benchClosedEgress, benchOpenIngress, benchOpenIngress+benchClosedIngress, p50, p95,
+		durations[len(durations)-1], slices.Max(roundTrips))
 	require.LessOrEqual(t, p95, benchAggregatorMaxP95)
 
 	var global bson.M
 	require.NoError(t, db.Collection(schema.CollectionAnalytics5Min).FindOne(ctx,
 		bson.D{{Key: "_id", Value: "global:" + now.Truncate(5*time.Minute).Format(time.RFC3339)}}).Decode(&global))
 	require.Equal(t, [2]any{int32(benchActiveRooms), int32(benchActiveParticipants)}, peaksOf(global))
+	require.Equal(t, int32(benchOpenEgress), valueAt(global, "egress.peakActive"))
+	var hourly bson.M
+	require.NoError(t, db.Collection(schema.CollectionAnalyticsHourly).FindOne(ctx,
+		bson.D{{Key: "_id", Value: "global:" + now.Truncate(time.Hour).Format(time.RFC3339)}}).Decode(&hourly))
+	require.Equal(t, int32(benchOpenIngress), valueAt(hourly, "ingress.peakActive"))
 }

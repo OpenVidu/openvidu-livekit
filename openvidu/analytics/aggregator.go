@@ -41,6 +41,8 @@ const (
 type aggregatorStore interface {
 	ActiveRooms(ctx context.Context) (store.ActiveCount, error)
 	ActiveParticipants(ctx context.Context) (store.ActiveCount, error)
+	ActiveEgress(ctx context.Context) (int32, error)
+	ActiveIngressSessions(ctx context.Context) (int32, error)
 	LiveMediaNodes(ctx context.Context, now time.Time) ([]string, error)
 	ApplyIncrements(ctx context.Context, increments []projection.Increment) error
 	DaysWithoutUniqueIdentities(ctx context.Context, from time.Time, to time.Time, limit int) ([]time.Time, error)
@@ -72,7 +74,7 @@ func newAggregator(s aggregatorStore, settings aggregatorSettings, m *aggregator
 		now: func() time.Time { return time.Now().UTC().Truncate(time.Millisecond) }, lockErrorPause: lockErrorPause}
 }
 
-// run samples the active rooms and participant sessions into the peaks of the current buckets, then, within the time
+// run samples the active rooms, participant sessions, egresses and ingress sessions into the peaks of the current buckets, then, within the time
 // budget, computes the unique identities of the closed days that lack them.
 func (a *aggregator) run(ctx context.Context) error {
 	started := a.now()
@@ -90,14 +92,22 @@ func (a *aggregator) run(ctx context.Context) error {
 	return err
 }
 
-// samplePeaks writes the active rooms and STANDARD participant sessions at `at` into the peaks of the global scope and
-// of the media node labels that are active or alive.
+// samplePeaks writes the active rooms, STANDARD participant sessions, egresses and ingress sessions at `at` into the
+// peaks of the global scope, and the rooms and sessions into those of the media node labels that are active or alive.
 func (a *aggregator) samplePeaks(ctx context.Context, at time.Time) error {
 	rooms, err := a.store.ActiveRooms(ctx)
 	if err != nil {
 		return err
 	}
 	participants, err := a.store.ActiveParticipants(ctx)
+	if err != nil {
+		return err
+	}
+	egress, err := a.store.ActiveEgress(ctx)
+	if err != nil {
+		return err
+	}
+	ingress, err := a.store.ActiveIngressSessions(ctx)
 	if err != nil {
 		return err
 	}
@@ -114,10 +124,11 @@ func (a *aggregator) samplePeaks(ctx context.Context, at time.Time) error {
 	}
 	slices.Sort(labels)
 
-	increments := projection.PeakIncrements("global", at, rooms.Total, participants.Total)
+	increments := projection.PeakIncrements("global", at, projection.Peaks{Rooms: rooms.Total,
+		Participants: participants.Total, Egress: egress, Ingress: ingress})
 	for _, label := range labels {
-		increments = append(increments,
-			projection.PeakIncrements("node:"+label, at, rooms.ByNode[label], participants.ByNode[label])...)
+		increments = append(increments, projection.PeakIncrements("node:"+label, at,
+			projection.Peaks{Rooms: rooms.ByNode[label], Participants: participants.ByNode[label]})...)
 	}
 	return a.store.ApplyIncrements(ctx, increments)
 }

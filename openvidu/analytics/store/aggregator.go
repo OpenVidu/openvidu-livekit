@@ -60,6 +60,26 @@ func ActiveParticipantsAggregation() Aggregation {
 		Pipeline: countByMediaNode(bson.D{{Key: "status", Value: "active"}, {Key: "kind", Value: projection.StandardKind}})}
 }
 
+// ActiveEgressAggregation counts the egresses in progress; egress runs on a media node its events do not name, so the
+// count has no label.
+func ActiveEgressAggregation() Aggregation {
+	return Aggregation{Collection: schema.CollectionEgresses, Hint: "status_startedAt",
+		Pipeline: countAll(bson.D{{Key: "status", Value: bson.D{{Key: "$in", Value: projection.OpenEgressStatuses}}}})}
+}
+
+// ActiveIngressSessionsAggregation counts the ingress sessions buffering or publishing, without a label as egress.
+func ActiveIngressSessionsAggregation() Aggregation {
+	return Aggregation{Collection: schema.CollectionIngressSessions, Hint: "status",
+		Pipeline: countAll(bson.D{{Key: "status", Value: bson.D{{Key: "$in", Value: projection.OpenIngressSessionStatuses}}}})}
+}
+
+func countAll(filter bson.D) mongo.Pipeline {
+	return mongo.Pipeline{
+		{{Key: "$match", Value: filter}},
+		{{Key: "$group", Value: bson.D{{Key: "_id", Value: nil}, {Key: "n", Value: bson.D{{Key: "$sum", Value: 1}}}}}},
+	}
+}
+
 func countByMediaNode(filter bson.D) mongo.Pipeline {
 	return mongo.Pipeline{
 		{{Key: "$match", Value: filter}},
@@ -82,6 +102,18 @@ func (s *Store) ActiveRooms(ctx context.Context) (ActiveCount, error) {
 // ActiveParticipants counts the STANDARD participant sessions with status active.
 func (s *Store) ActiveParticipants(ctx context.Context) (ActiveCount, error) {
 	return s.countActive(ctx, ActiveParticipantsAggregation())
+}
+
+// ActiveEgress counts the egresses in progress.
+func (s *Store) ActiveEgress(ctx context.Context) (int32, error) {
+	count, err := s.countActive(ctx, ActiveEgressAggregation())
+	return count.Total, err
+}
+
+// ActiveIngressSessions counts the ingress sessions buffering or publishing.
+func (s *Store) ActiveIngressSessions(ctx context.Context) (int32, error) {
+	count, err := s.countActive(ctx, ActiveIngressSessionsAggregation())
+	return count.Total, err
 }
 
 func (s *Store) countActive(ctx context.Context, aggregation Aggregation) (ActiveCount, error) {

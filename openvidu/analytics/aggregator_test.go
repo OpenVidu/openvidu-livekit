@@ -42,6 +42,8 @@ type fakeAggregatorStore struct {
 	mu           sync.Mutex
 	rooms        store.ActiveCount
 	participants store.ActiveCount
+	egress       int32
+	ingress      int32
 	live         []string
 	countErr     error
 	documents    map[string]map[string]any
@@ -90,6 +92,18 @@ func (f *fakeAggregatorStore) ActiveParticipants(context.Context) (store.ActiveC
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.participants, nil
+}
+
+func (f *fakeAggregatorStore) ActiveEgress(context.Context) (int32, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.egress, nil
+}
+
+func (f *fakeAggregatorStore) ActiveIngressSessions(context.Context) (int32, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.ingress, nil
 }
 
 func (f *fakeAggregatorStore) LiveMediaNodes(context.Context, time.Time) ([]string, error) {
@@ -170,8 +184,30 @@ func (f *fakeAggregatorStore) applied() int {
 	return len(f.increments)
 }
 
+// peaks are the peaks of a node document: rooms and participants only.
 func peaks(rooms int32, participants int32) map[string]any {
 	return map[string]any{"rooms.peakActive": rooms, "participants.peakActive": participants}
+}
+
+// globalPeaks are the peaks of a global document of collection: egress in every collection, ingress in the hourly and
+// daily ones.
+func globalPeaks(collection string, p projection.Peaks) map[string]any {
+	document := map[string]any{"rooms.peakActive": p.Rooms, "participants.peakActive": p.Participants,
+		"egress.peakActive": p.Egress}
+	if collection != schema.CollectionAnalytics5Min {
+		document["ingress.peakActive"] = p.Ingress
+	}
+	return document
+}
+
+// globalDocuments are the collections and buckets of the global documents a run at sampleHour writes.
+var globalDocuments = []struct {
+	collection string
+	bucket     time.Time
+}{
+	{schema.CollectionAnalytics5Min, sampleHour},
+	{schema.CollectionAnalyticsHourly, sampleHour},
+	{schema.CollectionAnalyticsDaily, sampleDay},
 }
 
 func newTestAggregator(s aggregatorStore, at time.Time) (*aggregator, *capturedLog, *aggregatorMetrics) {
@@ -194,15 +230,24 @@ func TestAggregatorPeaks(t *testing.T) {
 	t.Run("busy minute", func(t *testing.T) {
 		s := newFakeAggregatorStore()
 		s.counts(map[string]int32{"": 3}, map[string]int32{"": 7})
+		s.egress, s.ingress = 2, 1
 		a, _, _ := newTestAggregator(s, sampleHour.Add(2*time.Minute))
 		require.NoError(t, a.run(ctx))
-		for _, document := range []map[string]any{
-			s.document(schema.CollectionAnalytics5Min, "global", sampleHour),
-			s.document(schema.CollectionAnalyticsHourly, "global", sampleHour),
-			s.document(schema.CollectionAnalyticsDaily, "global", sampleDay),
-		} {
-			require.Equal(t, peaks(3, 7), document)
+		for _, d := range globalDocuments {
+			require.Equal(t, globalPeaks(d.collection, projection.Peaks{Rooms: 3, Participants: 7, Egress: 2, Ingress: 1}),
+				s.document(d.collection, "global", d.bucket))
 		}
+	})
+
+	t.Run("no ingress in the 5-minute rollups", func(t *testing.T) {
+		s := newFakeAggregatorStore()
+		s.counts(nil, nil)
+		s.ingress = 2
+		a, _, _ := newTestAggregator(s, sampleHour)
+		require.NoError(t, a.run(ctx))
+		require.NotContains(t, s.document(schema.CollectionAnalytics5Min, "global", sampleHour), "ingress.peakActive")
+		require.Equal(t, int32(2), s.document(schema.CollectionAnalyticsHourly, "global", sampleHour)["ingress.peakActive"])
+		require.Equal(t, int32(2), s.document(schema.CollectionAnalyticsDaily, "global", sampleDay)["ingress.peakActive"])
 	})
 
 	t.Run("peak kept across samples", func(t *testing.T) {
@@ -222,8 +267,10 @@ func TestAggregatorPeaks(t *testing.T) {
 		s.counts(nil, nil)
 		a, _, _ := newTestAggregator(s, sampleHour.Add(2*time.Minute))
 		require.NoError(t, a.run(ctx))
-		require.Equal(t, peaks(0, 0), s.document(schema.CollectionAnalytics5Min, "global", sampleHour),
-			"the peaks and nothing else")
+		for _, d := range globalDocuments {
+			require.Equal(t, globalPeaks(d.collection, projection.Peaks{}), s.document(d.collection, "global", d.bucket),
+				"the peaks and nothing else")
+		}
 		require.Len(t, s.documents, 3)
 	})
 
@@ -245,9 +292,22 @@ func TestAggregatorPeaks(t *testing.T) {
 		a, _, _ := newTestAggregator(s, sampleHour)
 		require.NoError(t, a.run(ctx))
 		for _, collection := range []string{schema.CollectionAnalytics5Min, schema.CollectionAnalyticsHourly} {
-			require.Equal(t, peaks(3, 7), s.document(collection, "global", sampleHour))
+			require.Equal(t, globalPeaks(collection, projection.Peaks{Rooms: 3, Participants: 7}),
+				s.document(collection, "global", sampleHour))
 			require.Equal(t, peaks(2, 5), s.document(collection, "node:mn-1", sampleHour))
 			require.Equal(t, peaks(1, 2), s.document(collection, "node:mn-2", sampleHour))
+		}
+	})
+
+	t.Run("egress and ingress stay global", func(t *testing.T) {
+		s := newFakeAggregatorStore()
+		s.counts(map[string]int32{"mn-1": 1}, nil)
+		s.egress, s.ingress = 2, 1
+		a, _, _ := newTestAggregator(s, sampleHour)
+		require.NoError(t, a.run(ctx))
+		for _, d := range globalDocuments {
+			require.Equal(t, peaks(1, 0), s.document(d.collection, "node:mn-1", d.bucket), d.collection)
+			require.Equal(t, int32(2), s.document(d.collection, "global", d.bucket)["egress.peakActive"], d.collection)
 		}
 	})
 
@@ -279,7 +339,7 @@ func TestAggregatorPeaks(t *testing.T) {
 		first := s.document(schema.CollectionAnalytics5Min, "global", sampleHour)
 		require.NoError(t, a.run(ctx))
 		require.Equal(t, first, s.document(schema.CollectionAnalytics5Min, "global", sampleHour))
-		require.Equal(t, peaks(3, 1), first)
+		require.Equal(t, globalPeaks(schema.CollectionAnalytics5Min, projection.Peaks{Rooms: 3, Participants: 1}), first)
 	})
 }
 

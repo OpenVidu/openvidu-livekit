@@ -138,6 +138,82 @@ func TestAggregatorActiveCounts(t *testing.T) {
 	require.Equal(t, store.ActiveCount{Total: 4, ByNode: map[string]int32{"mn-a": 2, "mn-b": 1}}, participants)
 }
 
+// egressAt writes an egress of room on node through one event of eventType with status, started at start.
+func (e *aggregatorEnv) egressAt(node string, room string, id string, eventType livekit.AnalyticsEventType,
+	status livekit.EgressStatus, start time.Time) {
+	e.t.Helper()
+	info := roomCompositeEgress(id, room, status, start, start.Add(time.Minute))
+	if eventType == livekit.AnalyticsEventType_EGRESS_ENDED {
+		info.EndedAt = start.Add(time.Minute).UnixNano()
+	}
+	e.apply([]*livekit.AnalyticsEvent{on(node, e.ev.egress(eventType, info, start.Add(time.Minute)))})
+}
+
+// ingressAt writes the ingress session `IS_<id>` of ingress `IN_<id>` in room on node through one event of eventType
+// with status, started at start.
+func (e *aggregatorEnv) ingressAt(node string, room string, id string, eventType livekit.AnalyticsEventType,
+	status livekit.IngressState_Status, start time.Time) {
+	e.t.Helper()
+	ended := time.Time{}
+	if eventType == livekit.AnalyticsEventType_INGRESS_ENDED {
+		ended = start.Add(time.Minute)
+	}
+	state := ingressState(status, room, "IS_"+id, start, ended)
+	if status == livekit.IngressState_ENDPOINT_ERROR {
+		state.Error = "input lost"
+	}
+	e.apply([]*livekit.AnalyticsEvent{on(node, e.ev.ingress(eventType, rtmpIngress("IN_"+id, "room-"+room, state),
+		start.Add(time.Minute)))})
+}
+
+func TestAggregatorActiveEgressAndIngressSessions(t *testing.T) {
+	ctx := context.Background()
+	client := mongotest.StartMongo(t)
+	env := newAggregatorEnv(t, client)
+	start := before(30 * time.Minute)
+	env.room("RM_a1", "ND_a", before(time.Hour))
+	env.egressAt("ND_a", "RM_a1", "EG_starting", livekit.AnalyticsEventType_EGRESS_STARTED, livekit.EgressStatus_EGRESS_STARTING, start)
+	env.egressAt("ND_a", "RM_a1", "EG_active", livekit.AnalyticsEventType_EGRESS_UPDATED, livekit.EgressStatus_EGRESS_ACTIVE, start)
+	env.egressAt("ND_a", "RM_a1", "EG_ending", livekit.AnalyticsEventType_EGRESS_UPDATED, livekit.EgressStatus_EGRESS_ENDING, start)
+	env.egressAt("ND_a", "RM_a1", "EG_complete", livekit.AnalyticsEventType_EGRESS_ENDED, livekit.EgressStatus_EGRESS_COMPLETE, start)
+	env.egressAt("ND_a", "RM_a1", "EG_failed", livekit.AnalyticsEventType_EGRESS_ENDED, livekit.EgressStatus_EGRESS_FAILED, start)
+	env.ingressAt("ND_a", "RM_a1", "buffering", livekit.AnalyticsEventType_INGRESS_STARTED, livekit.IngressState_ENDPOINT_BUFFERING, start)
+	env.ingressAt("ND_a", "RM_a1", "publishing", livekit.AnalyticsEventType_INGRESS_STARTED, livekit.IngressState_ENDPOINT_PUBLISHING, start)
+	env.ingressAt("ND_a", "RM_a1", "error", livekit.AnalyticsEventType_INGRESS_ENDED, livekit.IngressState_ENDPOINT_ERROR, start)
+	env.ingressAt("ND_a", "RM_a1", "complete", livekit.AnalyticsEventType_INGRESS_ENDED, livekit.IngressState_ENDPOINT_COMPLETE, start)
+
+	statuses := func(collection string) []string {
+		var documents []struct {
+			Status    string `bson:"status"`
+			MediaNode string `bson:"mediaNode"`
+		}
+		cursor, err := env.db.Collection(collection).Find(ctx, bson.D{})
+		require.NoError(t, err)
+		require.NoError(t, cursor.All(ctx, &documents))
+		var values []string
+		for _, document := range documents {
+			require.Empty(t, document.MediaNode, "%s carries no media node", collection)
+			values = append(values, document.Status)
+		}
+		return values
+	}
+	require.ElementsMatch(t, []string{"starting", "active", "ending", "complete", "failed"}, statuses(schema.CollectionEgresses))
+	require.ElementsMatch(t, []string{"buffering", "publishing", "error", "complete"}, statuses(schema.CollectionIngressSessions))
+
+	s := store.New(env.db)
+	egress, err := s.ActiveEgress(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int32(3), egress)
+	ingress, err := s.ActiveIngressSessions(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int32(2), ingress)
+	for _, collection := range rollupCollections {
+		require.Zero(t, count(env.testEnv, collection, bson.D{{Key: "scope", Value: "node:mn-a"},
+			{Key: "$or", Value: bson.A{bson.D{{Key: "egress", Value: bson.D{{Key: "$exists", Value: true}}}},
+				bson.D{{Key: "ingress", Value: bson.D{{Key: "$exists", Value: true}}}}}}}), collection)
+	}
+}
+
 func TestAggregatorLiveMediaNodes(t *testing.T) {
 	client := mongotest.StartMongo(t)
 	env := newAggregatorEnv(t, client)
@@ -178,6 +254,31 @@ func TestAggregatorQueryPlans(t *testing.T) {
 		}
 		env.apply(batch)
 	}
+	for e := range 40 {
+		status, eventType := livekit.EgressStatus_EGRESS_COMPLETE, livekit.AnalyticsEventType_EGRESS_ENDED
+		if e < 4 {
+			status, eventType = livekit.EgressStatus_EGRESS_ACTIVE, livekit.AnalyticsEventType_EGRESS_UPDATED
+		}
+		env.egressAt(nodeAlive, "RM_000", fmt.Sprintf("EG_%02d", e), eventType, status, before(2*time.Hour))
+	}
+	for i := range 20 {
+		status, eventType := livekit.IngressState_ENDPOINT_COMPLETE, livekit.AnalyticsEventType_INGRESS_ENDED
+		if i < 3 {
+			status, eventType = livekit.IngressState_ENDPOINT_PUBLISHING, livekit.AnalyticsEventType_INGRESS_STARTED
+		}
+		env.ingressAt(nodeAlive, "RM_000", fmt.Sprintf("%02d", i), eventType, status, before(2*time.Hour))
+	}
+
+	for _, aggregation := range []store.Aggregation{store.ActiveEgressAggregation(), store.ActiveIngressSessionsAggregation()} {
+		plan := explain(t, env.db, bson.D{{Key: "aggregate", Value: aggregation.Collection},
+			{Key: "pipeline", Value: aggregation.Pipeline}, {Key: "hint", Value: aggregation.Hint},
+			{Key: "cursor", Value: bson.D{}}})
+		require.Contains(t, plan.indexes, aggregation.Hint)
+		require.NotContains(t, plan.stages, "COLLSCAN")
+		active := count(env.testEnv, aggregation.Collection, aggregation.Pipeline[0][0].Value.(bson.D))
+		require.Positive(t, active)
+		require.LessOrEqual(t, plan.docsExamined, active, "%s: at most the open entities are read", aggregation.Collection)
+	}
 
 	for _, aggregation := range []store.Aggregation{store.ActiveRoomsAggregation(), store.ActiveParticipantsAggregation()} {
 		plan := explain(t, env.db, bson.D{{Key: "aggregate", Value: aggregation.Collection},
@@ -213,6 +314,10 @@ func TestAggregatorPeaksInTheRollups(t *testing.T) {
 	}
 	// Written by the server in the bucket of the samples: its counters and media statistics mark stay as they are.
 	env.room("RM_a3", "ND_a", hour.Add(time.Minute))
+	env.egressAt("ND_a", "RM_a1", "EG_live", livekit.AnalyticsEventType_EGRESS_STARTED, livekit.EgressStatus_EGRESS_STARTING,
+		before(30*time.Minute))
+	env.ingressAt("ND_a", "RM_a1", "live", livekit.AnalyticsEventType_INGRESS_STARTED, livekit.IngressState_ENDPOINT_PUBLISHING,
+		before(30*time.Minute))
 
 	env.now = sampled
 	env.aggregate()
@@ -228,6 +333,15 @@ func TestAggregatorPeaksInTheRollups(t *testing.T) {
 		require.Equal(t, [2]any{int32(3), int32(3)}, peaksOf(env.rollup(check.collection, "node:mn-a", check.bucket)), check.collection)
 		require.Equal(t, [2]any{int32(0), int32(0)}, peaksOf(env.rollup(check.collection, "node:mn-idle", check.bucket)), check.collection)
 		require.Nil(t, env.rollup(check.collection, "node:mn-stopped", check.bucket), check.collection)
+		global, node := env.rollup(check.collection, "global", check.bucket), env.rollup(check.collection, "node:mn-a", check.bucket)
+		require.Equal(t, int32(1), valueAt(global, "egress.peakActive"), check.collection)
+		require.Nil(t, valueAt(node, "egress"), check.collection)
+		require.Nil(t, valueAt(node, "ingress"), check.collection)
+		if check.collection == schema.CollectionAnalytics5Min {
+			require.Nil(t, valueAt(global, "ingress"), "no ingress in the 5-minute rollups")
+		} else {
+			require.Equal(t, int32(1), valueAt(global, "ingress.peakActive"), check.collection)
+		}
 	}
 	global := env.rollup(schema.CollectionAnalytics5Min, "global", hour)
 	require.Equal(t, true, valueAt(global, "mediaStats.reported"))

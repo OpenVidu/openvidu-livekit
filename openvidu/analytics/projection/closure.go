@@ -93,8 +93,8 @@ type ParticipantState struct {
 	MediaNode string
 	// WithoutMediaStats is the mark of an entity whose mediaStats is false: the media statistics mark of its closure.
 	WithoutMediaStats bool
-	Status    string
-	JoinedAt  time.Time
+	Status            string
+	JoinedAt          time.Time
 	// TrackSIDs are the tracks the participant published, whose open subscriptions close with it.
 	TrackSIDs []string
 }
@@ -118,8 +118,6 @@ type EgressState struct {
 	RoomSID  string
 	RoomName string
 	NodeID   string
-	// MediaNode is the media node label of its room, empty without one: the node scope of its closure.
-	MediaNode string
 	// WithoutMediaStats is the mark of a room whose mediaStats is false: the media statistics mark of its closure.
 	WithoutMediaStats bool
 	Status            string
@@ -133,8 +131,6 @@ type IngressSessionState struct {
 	RoomSID   string
 	RoomName  string
 	NodeID    string
-	// MediaNode is the media node label of its room, empty without one: the node scope of its closure.
-	MediaNode string
 	// WithoutMediaStats is the mark of a room whose mediaStats is false: the media statistics mark of its closure.
 	WithoutMediaStats bool
 	Status            string
@@ -312,8 +308,9 @@ func CloseEgress(state EgressState, at time.Time, reason string, opts Options) C
 			Synthetic: true,
 			Payload:   bson.D{{Key: "egress", Value: egress}, reconcilerPayload(reason)},
 		},
-		Increments: marked(append(periodIncrements(state.MediaNode, at, counters),
-			fiveMinuteIncrements(state.MediaNode, at, map[string]any{"egress.ended": one})...), !state.WithoutMediaStats),
+		// Egress counters are global only, like those of its events.
+		Increments: marked(append(periodIncrements("", at, counters),
+			fiveMinuteIncrements("", at, map[string]any{"egress.ended": one})...), !state.WithoutMediaStats),
 	}
 }
 
@@ -381,7 +378,8 @@ func CloseIngressSession(state IngressSessionState, at time.Time, reason string,
 			Synthetic:        true,
 			Payload:          bson.D{{Key: "ingress", Value: ingressPayload}, reconcilerPayload(reason)},
 		},
-		Increments: marked(periodIncrements(state.MediaNode, at, counters), !state.WithoutMediaStats),
+		// Ingress counters are global only, like those of its events.
+		Increments: marked(periodIncrements("", at, counters), !state.WithoutMediaStats),
 	}
 }
 

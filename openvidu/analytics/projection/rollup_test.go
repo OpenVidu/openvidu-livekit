@@ -78,3 +78,32 @@ func TestMergeIncrementsKeepsTheLargerMaximum(t *testing.T) {
 	require.Equal(t, map[string]any{"rooms.created": int32(2)}, merged[0].Counters)
 	require.Equal(t, map[string]any{"rooms.peakActive": int32(4), "participants.peakActive": int32(7)}, merged[0].Maxima)
 }
+
+func TestPeakIncrements(t *testing.T) {
+	at := rollupBucket.Add(2 * time.Minute)
+	maxima := func(increments []Increment) map[string]map[string]any {
+		byCollection := map[string]map[string]any{}
+		for _, increment := range increments {
+			byCollection[increment.Collection] = increment.Maxima
+		}
+		return byCollection
+	}
+
+	t.Run("global", func(t *testing.T) {
+		got := maxima(PeakIncrements("global", at, Peaks{Rooms: 3, Participants: 7, Egress: 2, Ingress: 1}))
+		require.Equal(t, map[string]any{"rooms.peakActive": int32(3), "participants.peakActive": int32(7),
+			"egress.peakActive": int32(2)}, got[schema.CollectionAnalytics5Min])
+		for _, collection := range []string{schema.CollectionAnalyticsHourly, schema.CollectionAnalyticsDaily} {
+			require.Equal(t, map[string]any{"rooms.peakActive": int32(3), "participants.peakActive": int32(7),
+				"egress.peakActive": int32(2), "ingress.peakActive": int32(1)}, got[collection])
+		}
+	})
+
+	t.Run("node scope without egress or ingress", func(t *testing.T) {
+		got := maxima(PeakIncrements("node:mn-1", at, Peaks{Rooms: 1, Participants: 2, Egress: 5, Ingress: 5}))
+		for _, collection := range []string{schema.CollectionAnalytics5Min, schema.CollectionAnalyticsHourly,
+			schema.CollectionAnalyticsDaily} {
+			require.Equal(t, map[string]any{"rooms.peakActive": int32(1), "participants.peakActive": int32(2)}, got[collection])
+		}
+	})
+}

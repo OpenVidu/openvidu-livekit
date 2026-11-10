@@ -15,6 +15,7 @@
 package projection
 
 import (
+	"maps"
 	"strings"
 	"time"
 
@@ -23,14 +24,17 @@ import (
 	"github.com/livekit/livekit-server/openvidu/analytics/schema"
 )
 
-const fiveMinutes = 5 * time.Minute
+const (
+	fiveMinutes = 5 * time.Minute
+	globalScope = "global"
+)
 
 // Scopes of a rollup increment: the whole deployment and, for a labelled server, its media node.
 func scopes(mediaNode string) []string {
 	if mediaNode == "" {
-		return []string{"global"}
+		return []string{globalScope}
 	}
-	return []string{"global", "node:" + mediaNode}
+	return []string{globalScope, "node:" + mediaNode}
 }
 
 // counters adds the same counters to the hourly and daily documents of the node's scopes.
@@ -43,6 +47,19 @@ func (p *projector) counters(counters map[string]any) {
 func (p *projector) fiveMinute(counters map[string]any) {
 	p.result.Increments = append(p.result.Increments,
 		marked(fiveMinuteIncrements(p.opts.MediaNode, p.ts, counters), !p.opts.WithoutMediaStats)...)
+}
+
+// globalCounters adds counters to the hourly and daily global documents only: egress and ingress run on a media node
+// that their events do not name.
+func (p *projector) globalCounters(counters map[string]any) {
+	p.result.Increments = append(p.result.Increments,
+		marked(periodIncrements("", p.ts, counters), !p.opts.WithoutMediaStats)...)
+}
+
+// globalFiveMinute adds counters to the 5-minute global document only.
+func (p *projector) globalFiveMinute(counters map[string]any) {
+	p.result.Increments = append(p.result.Increments,
+		marked(fiveMinuteIncrements("", p.ts, counters), !p.opts.WithoutMediaStats)...)
 }
 
 func fiveMinuteIncrements(mediaNode string, at time.Time, counters map[string]any) []Increment {
@@ -66,14 +83,31 @@ func periodIncrements(mediaNode string, at time.Time, counters map[string]any) [
 	return increments
 }
 
+// Peaks are the entities active at once in a scope: rooms, STANDARD participant sessions, egresses in progress and
+// ingress sessions buffering or publishing.
+type Peaks struct {
+	Rooms        int32
+	Participants int32
+	Egress       int32
+	Ingress      int32
+}
+
 // PeakIncrements returns the increments that keep, in the 5-minute, hourly and daily documents of scope containing at,
-// the most rooms and STANDARD participant sessions active at once.
-func PeakIncrements(scope string, at time.Time, rooms int32, participants int32) []Increment {
-	maxima := map[string]any{"rooms.peakActive": rooms, "participants.peakActive": participants}
+// the most entities active at once. Egress and ingress go to the global scope only, as their counters, and ingress to
+// the hourly and daily documents only.
+func PeakIncrements(scope string, at time.Time, peaks Peaks) []Increment {
+	fiveMinute := map[string]any{"rooms.peakActive": peaks.Rooms, "participants.peakActive": peaks.Participants}
+	if scope == globalScope {
+		fiveMinute["egress.peakActive"] = peaks.Egress
+	}
+	period := maps.Clone(fiveMinute)
+	if scope == globalScope {
+		period["ingress.peakActive"] = peaks.Ingress
+	}
 	return []Increment{
-		{Collection: schema.CollectionAnalytics5Min, Scope: scope, Bucket: at.Truncate(fiveMinutes), Maxima: maxima},
-		{Collection: schema.CollectionAnalyticsHourly, Scope: scope, Bucket: at.Truncate(time.Hour), Maxima: maxima},
-		{Collection: schema.CollectionAnalyticsDaily, Scope: scope, Bucket: at.Truncate(24 * time.Hour), Maxima: maxima},
+		{Collection: schema.CollectionAnalytics5Min, Scope: scope, Bucket: at.Truncate(fiveMinutes), Maxima: fiveMinute},
+		{Collection: schema.CollectionAnalyticsHourly, Scope: scope, Bucket: at.Truncate(time.Hour), Maxima: period},
+		{Collection: schema.CollectionAnalyticsDaily, Scope: scope, Bucket: at.Truncate(24 * time.Hour), Maxima: period},
 	}
 }
 
@@ -154,8 +188,8 @@ func (p *projector) rollups() {
 	case livekit.AnalyticsEventType_TRACK_SUBSCRIBE_FAILED:
 		p.counters(map[string]any{"tracks.subscribeFailed": one})
 	case livekit.AnalyticsEventType_EGRESS_STARTED:
-		p.counters(map[string]any{"egress.started": one, "egress.byType." + egressType(p.event.GetEgress()): one})
-		p.fiveMinute(map[string]any{"egress.started": one})
+		p.globalCounters(map[string]any{"egress.started": one, "egress.byType." + egressType(p.event.GetEgress()): one})
+		p.globalFiveMinute(map[string]any{"egress.started": one})
 	case livekit.AnalyticsEventType_EGRESS_ENDED:
 		info := p.event.GetEgress()
 		status := strings.ToLower(enumName(info.GetStatus().String(), "EGRESS_"))
@@ -164,10 +198,10 @@ func (p *projector) rollups() {
 			ended := orTime(schema.UnixNanos(info.GetEndedAt()), p.ts)
 			counters["egress.durationMs"] = schema.DurationMs(schema.UnixNanos(info.GetStartedAt()), ended)
 		}
-		p.counters(counters)
-		p.fiveMinute(map[string]any{"egress.ended": one})
+		p.globalCounters(counters)
+		p.globalFiveMinute(map[string]any{"egress.ended": one})
 	case livekit.AnalyticsEventType_INGRESS_STARTED:
-		p.counters(map[string]any{
+		p.globalCounters(map[string]any{
 			"ingress.sessionsStarted": one,
 			"ingress.byInputType." + ingressInputType(p.event.GetIngress().GetInputType()): one,
 		})
@@ -178,7 +212,7 @@ func (p *projector) rollups() {
 			ended := orTime(schema.UnixNanos(state.GetEndedAt()), p.ts)
 			counters["ingress.durationMs"] = schema.DurationMs(schema.UnixNanos(state.GetStartedAt()), ended)
 		}
-		p.counters(counters)
+		p.globalCounters(counters)
 	}
 }
 

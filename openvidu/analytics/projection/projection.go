@@ -39,7 +39,7 @@ type Options struct {
 	// WithoutMediaStats stamps mediaStats: false on the rooms and participant sessions this node creates.
 	WithoutMediaStats bool
 	// MediaNode is the media node label stamped on the rooms and participant sessions this node hosts and the node
-	// scope of its rollup increments; empty writes neither.
+	// scope of its rollup increments, egress and ingress excepted; empty writes neither.
 	MediaNode string
 	Encode    schema.EncodeOptions
 	// Stores reports whether events of a type are stored raw.

@@ -499,6 +499,7 @@ type RollupEgress struct {
 	ByType        map[string]int32 `bson:"byType,omitempty"`
 	EndedByStatus map[string]int32 `bson:"endedByStatus,omitempty"`
 	DurationMs    *int64           `bson:"durationMs,omitempty"`
+	PeakActive    *int32           `bson:"peakActive,omitempty"`
 }
 
 type RollupIngress struct {
@@ -506,6 +507,7 @@ type RollupIngress struct {
 	SessionsEnded   *int32           `bson:"sessionsEnded,omitempty"`
 	ByInputType     map[string]int32 `bson:"byInputType,omitempty"`
 	DurationMs      *int64           `bson:"durationMs,omitempty"`
+	PeakActive      *int32           `bson:"peakActive,omitempty"`
 }
 
 type RollupAPICalls struct {
@@ -559,8 +561,9 @@ type FiveMinuteParticipants struct {
 }
 
 type FiveMinuteEgress struct {
-	Started *int32 `bson:"started,omitempty"`
-	Ended   *int32 `bson:"ended,omitempty"`
+	Started    *int32 `bson:"started,omitempty"`
+	Ended      *int32 `bson:"ended,omitempty"`
+	PeakActive *int32 `bson:"peakActive,omitempty"`
 }
 
 // FiveMinuteRollupDocument is an `analytics_5min` document.

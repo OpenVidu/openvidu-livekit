@@ -86,7 +86,7 @@ An invalid value stops the server at startup with an error that names the key. T
 
 At startup the server creates or updates the collections, validators and indexes of the data model, whose contract is vendored in [`openvidu/analytics/schema/contract`](./openvidu/analytics/schema/contract), and records the schema version, retention and capabilities in `schema_meta`. An `events` collection written by previous versions is renamed to `legacy_events`.
 
-Every `interval`, each node writes one batch: rooms, participants, tracks, subscriptions, egress, ingress and ingress sessions (idempotent updates, so a replayed or reordered batch converges), raw events, statistics (`track_stats`, a time-series collection when the server supports it), 5-minute, hourly and daily rollups, and its heartbeat in `nodes`. A batch that fails with a transient error (network, election) is retried first in the next interval. On a graceful shutdown the queues are written for at most 5 s.
+Every `interval`, each node writes one batch: rooms, participants, tracks, subscriptions, egress, ingress and ingress sessions (idempotent updates, so a replayed or reordered batch converges), raw events, statistics (`track_stats`, a time-series collection when the server supports it), 5-minute, hourly and daily rollups, and its heartbeat in `nodes`. A server with a media node label also writes its rollups into the `node:<label>` scope, except the egress and ingress counters: the events do not say which media node runs an egress or an ingress session, so those counters exist in the global scope only. A batch that fails with a transient error (network, election) is retried first in the next interval. On a graceful shutdown the queues are written for at most 5 s.
 
 Credentials (TURN passwords, storage keys, stream keys, tokens in URLs) are never stored: protocol messages go through an allow-list.
 
@@ -156,12 +156,15 @@ enabled, whatever `reconciler.enabled` says, one node runs it every 60 s and onc
 elected with the Redis lock `analytics-aggregator-lock` (TTL 65 s), or is the only node without Redis. It has no
 configuration key.
 
-- Peaks: each run counts the rooms with status `active` and the STANDARD participant sessions with status `active`, and
-  keeps them with `$max` as `rooms.peakActive` and `participants.peakActive` in the global documents of the current
-  bucket of `analytics_5min`, `analytics_hourly` and `analytics_daily`, `0` included. The documents of a media node
-  scope get the counts of its label, for every label held by an active entity or by a node alive within its silent
-  window (`max(60 s, 2 × interval + 15 s)`) that has not stopped. Short entities that start and end between two runs
-  are not counted.
+- Peaks: each run counts the rooms with status `active`, the STANDARD participant sessions with status `active`, the
+  egresses with status `starting`, `active` or `ending` and the ingress sessions with status `buffering` or
+  `publishing`. It keeps them with `$max` as `rooms.peakActive`, `participants.peakActive`, `egress.peakActive` and
+  `ingress.peakActive` in the global documents of the current bucket of `analytics_5min`, `analytics_hourly` and
+  `analytics_daily`, `0` included; `ingress.peakActive` goes to the hourly and daily documents only, like every
+  ingress counter. The documents of a media node scope get the room and participant counts of its label, for every
+  label held by an active room or session or by a node alive within its silent window (`max(60 s, 2 × interval +
+  15 s)`) that has not stopped; egress and ingress peaks stay global. Short entities that start and end between two
+  runs are not counted.
 - Unique identities: each run then sets the daily `uniqueIdentities` (global and per media node label) of up to 7
   closed UTC days, from 5 minutes after the day closes and inside `retention.entities`.
 - A run never lowers a stored value, so two nodes during a lock handover leave the maximum. A failed run logs a warning
