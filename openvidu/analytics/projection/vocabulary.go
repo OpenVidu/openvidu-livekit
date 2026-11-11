@@ -78,16 +78,11 @@ const (
 	TopologyManyToMany        = "many_to_many"       // N ≥ 3, P ≥ 2
 )
 
-// sizedTopology reports whether the rooms of a topology are counted by size range.
-func sizedTopology(topology string) bool {
-	return topology == TopologyNoPublishers || topology == TopologyOneToMany || topology == TopologyManyToMany
-}
-
 // roomSizeRange is the size range of a room whose most STANDARD sessions active at once are peak.
 func roomSizeRange(peak int32) string {
 	switch {
 	case peak <= 5:
-		return "2-5"
+		return "0-5"
 	case peak <= 10:
 		return "6-10"
 	case peak <= 25:

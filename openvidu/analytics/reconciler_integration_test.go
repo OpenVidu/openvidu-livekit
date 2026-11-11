@@ -679,7 +679,7 @@ func TestReconcilerClosures(t *testing.T) {
 			rooms := classCounters(env, scope, *closed.EndedAt)
 			require.Equal(t, map[string]int32{"one_to_many": 1}, rooms.ByTopology, scope)
 			require.EqualValues(t, 1, *rooms.Recorded, scope)
-			require.Equal(t, map[string]map[string]int32{"one_to_many": {"6-10": 1}}, rooms.SizeByTopology, scope)
+			require.Equal(t, map[string]int32{"6-10": 1}, rooms.BySize, scope)
 		}
 
 		env.apply([]*livekit.AnalyticsEvent{on(nodeDead, env.ev.roomEnded("RM_t", "room-RM_t", before(2*time.Minute),
@@ -708,7 +708,7 @@ func TestReconcilerClosures(t *testing.T) {
 		require.EqualValues(t, 8, *rooms.ParticipantsSum)
 		require.Nil(t, rooms.ByTopology)
 		require.Nil(t, rooms.Recorded)
-		require.Nil(t, rooms.SizeByTopology)
+		require.Nil(t, rooms.BySize)
 	})
 
 	t.Run("a room without media statistics closes with its own media statistics mark", func(t *testing.T) {

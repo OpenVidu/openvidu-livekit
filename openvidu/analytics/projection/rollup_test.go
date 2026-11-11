@@ -118,32 +118,32 @@ func TestRoomEndedIncrements(t *testing.T) {
 	}
 
 	t.Run("range bounds", func(t *testing.T) {
-		for peak, expected := range map[int32]string{3: "2-5", 5: "2-5", 6: "6-10", 10: "6-10", 11: "11-25", 25: "11-25",
+		for peak, expected := range map[int32]string{0: "0-5", 1: "0-5", 2: "0-5", 5: "0-5", 6: "6-10", 10: "6-10", 11: "11-25", 25: "11-25",
 			26: "26-50", 50: "26-50", 51: "51-100", 100: "51-100", 101: "101+", 5000: "101+"} {
 			require.Equal(t, expected, roomSizeRange(peak), "N = %d", peak)
 		}
 	})
 
-	t.Run("a recorded room of a sized class in both scopes", func(t *testing.T) {
+	t.Run("a recorded room in both scopes", func(t *testing.T) {
 		counters := countersOf(RoomEndedIncrements("mn-a", true, rollupBucket,
 			ClosedRoom{Sessions: 40, PeakActive: 30, Topology: TopologyOneToMany, Recorded: true}))
 		require.Len(t, counters, 4)
 		for document, values := range counters {
 			require.Equal(t, map[string]any{
-				"rooms.participantsSum":                  int32(40),
-				"rooms.byTopology.one_to_many":           one,
-				"rooms.recorded":                         one,
-				"rooms.sizeByTopology.one_to_many.26-50": one,
+				"rooms.participantsSum":        int32(40),
+				"rooms.byTopology.one_to_many": one,
+				"rooms.recorded":               one,
+				"rooms.bySize.26-50":           one,
 			}, values, document)
 		}
 	})
 
-	t.Run("classes without a range", func(t *testing.T) {
-		for _, topology := range []string{TopologyEmpty, TopologySingleParticipant, TopologyOneToOne} {
+	t.Run("every class has a size range", func(t *testing.T) {
+		for topology, peak := range map[string]int32{TopologyEmpty: 0, TopologySingleParticipant: 1, TopologyOneToOne: 2} {
 			for _, values := range countersOf(RoomEndedIncrements("", true, rollupBucket,
-				ClosedRoom{Sessions: 2, PeakActive: 2, Topology: topology})) {
-				require.Equal(t, map[string]any{"rooms.participantsSum": int32(2), "rooms.byTopology." + topology: one},
-					values, topology)
+				ClosedRoom{Sessions: 2, PeakActive: peak, Topology: topology})) {
+				require.Equal(t, map[string]any{"rooms.participantsSum": int32(2), "rooms.byTopology." + topology: one,
+					"rooms.bySize.0-5": one}, values, topology)
 			}
 		}
 	})

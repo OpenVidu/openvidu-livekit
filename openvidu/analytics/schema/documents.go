@@ -474,10 +474,10 @@ type RollupRooms struct {
 	DurationMsSum   *int64           `bson:"durationMsSum,omitempty"`
 	ParticipantsSum *int32           `bson:"participantsSum,omitempty"`
 	PeakActive      *int32           `bson:"peakActive,omitempty"`
-	// ByTopology, Recorded and SizeByTopology count the rooms ended in the bucket that have a topology.
-	ByTopology     map[string]int32            `bson:"byTopology,omitempty"`
-	Recorded       *int32                      `bson:"recorded,omitempty"`
-	SizeByTopology map[string]map[string]int32 `bson:"sizeByTopology,omitempty"`
+	// ByTopology, Recorded and BySize count the rooms ended in the bucket that have a topology.
+	ByTopology map[string]int32 `bson:"byTopology,omitempty"`
+	Recorded   *int32           `bson:"recorded,omitempty"`
+	BySize     map[string]int32 `bson:"bySize,omitempty"`
 }
 
 // RollupParticipants count STANDARD sessions; ByKind counts the sessions of every kind.

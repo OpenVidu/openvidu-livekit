@@ -134,9 +134,7 @@ func RoomEndedIncrements(mediaNode string, mediaStats bool, endedAt time.Time, r
 		if room.Recorded {
 			counters["rooms.recorded"] = one
 		}
-		if sizedTopology(room.Topology) {
-			counters["rooms.sizeByTopology."+room.Topology+"."+roomSizeRange(room.PeakActive)] = one
-		}
+		counters["rooms.bySize."+roomSizeRange(room.PeakActive)] = one
 	}
 	return marked(periodIncrements(mediaNode, endedAt, counters), mediaStats)
 }

@@ -331,7 +331,7 @@ func TestRoomClassCounters(t *testing.T) {
 			for _, rooms := range []*schema.RollupRooms{hourly.Rooms, daily.Rooms} {
 				require.Equal(t, map[string]int32{"many_to_many": 1, "one_to_one": 1}, rooms.ByTopology, scope)
 				require.EqualValues(t, 1, *rooms.Recorded, scope)
-				require.Equal(t, map[string]map[string]int32{"many_to_many": {"11-25": 1}}, rooms.SizeByTopology, scope)
+				require.Equal(t, map[string]int32{"11-25": 1, "0-5": 1}, rooms.BySize, scope)
 			}
 			fiveMinute := find[schema.FiveMinuteRollupDocument](env, schema.CollectionAnalytics5Min, scope+":"+hourID)
 			require.NotNil(t, fiveMinute.Rooms)
@@ -369,7 +369,7 @@ func TestRoomClassCounters(t *testing.T) {
 
 		hourly := find[schema.HourlyRollupDocument](env, schema.CollectionAnalyticsHourly, "global:"+hourID)
 		require.Equal(t, map[string]int32{"one_to_many": 1}, hourly.Rooms.ByTopology)
-		require.Equal(t, map[string]map[string]int32{"one_to_many": {"2-5": 1}}, hourly.Rooms.SizeByTopology)
+		require.Equal(t, map[string]int32{"0-5": 1}, hourly.Rooms.BySize)
 		require.EqualValues(t, 4, *hourly.Rooms.ParticipantsSum)
 	})
 }
