@@ -43,6 +43,8 @@ func (p *projector) roomTouch(name string) *fields {
 	f.set("status", keep("status", roomActive))
 	f.set("createdAt", minDate("createdAt", p.ts))
 	f.set("nodeId", keep("nodeId", p.event.GetNodeId()))
+	// Marks a room this writer version projects: only such a room gets a topology (deriveRoom).
+	f.set("participants.peakPublishers", keep("participants.peakPublishers", int32(0)))
 	p.markFirstWriter(f)
 	f.set("lastEventAt", maxDate("lastEventAt", p.ts))
 	f.set("schemaVersion", int32(schema.SchemaVersion))
@@ -128,6 +130,38 @@ func activeAfter(sid string) any {
 	return size(difference(union("internal.activeSids", sid), emptyArray("internal.closedSids")))
 }
 
+// publishersAfter is the number of active STANDARD sessions that have sent media, from the given active and sender
+// sets: the stored ones, or the stored ones with the session an event adds. The active set holds STANDARD sessions
+// only, so agents and ingress, which send media too, never count.
+func publishersAfter(active any, senders any) any {
+	return size(difference(intersection(active, senders), emptyArray("internal.closedSids")))
+}
+
+// sentMedia records that session sid of a room sent media, and raises the room's publisher peak.
+func sentMedia(room *fields, sid string) {
+	room.set("internal.senderSids", union("internal.senderSids", sid))
+	room.set("participants.peakPublishers", maxOf("participants.peakPublishers",
+		publishersAfter(emptyArray("internal.activeSids"), union("internal.senderSids", sid))))
+}
+
+// topologyOf is the class of a room from its most STANDARD sessions active at once (N) and the most of them that
+// have sent media at once (P).
+func topologyOf(peakActive any, peakPublishers any) bson.D {
+	branch := func(condition any, topology string) bson.D {
+		return bson.D{{Key: "case", Value: condition}, {Key: "then", Value: topology}}
+	}
+	return bson.D{{Key: "$switch", Value: bson.D{
+		{Key: "branches", Value: bson.A{
+			branch(eq(peakActive, 0), TopologyEmpty),
+			branch(eq(peakActive, 1), TopologySingleParticipant),
+			branch(eq(peakPublishers, 0), TopologyNoPublishers),
+			branch(eq(peakActive, 2), TopologyOneToOne),
+			branch(eq(peakPublishers, 1), TopologyOneToMany),
+		}},
+		{Key: "default", Value: TopologyManyToMany},
+	}}}
+}
+
 func deriveRoom(opts Options) *fields {
 	retention, _, _ := opts.Retention.Of(schema.RetentionEntities)
 	active := size(difference(emptyArray("internal.activeSids"), emptyArray("internal.closedSids")))
@@ -153,6 +187,12 @@ func deriveRoom(opts Options) *fields {
 	f.set("features.ingress", or(gt(ingressSessions, 0), gt(sizeOf("internal.kinds.INGRESS"), 0)))
 	f.set("features.agent", gt(sizeOf("internal.kinds.AGENT"), 0))
 	f.set("features.sip", gt(sizeOf("internal.kinds.SIP"), 0))
+	// Only rooms this writer version projects carry the marker; a room of an earlier writer closed by the reconciler
+	// gets neither a class nor a recording flag, rather than a wrong one.
+	classified := exists("participants.peakPublishers")
+	f.set("features.recording", cond(classified, gt(sizeOf("internal.recordingEgressIds"), 0), remove))
+	f.set("topology", cond(classified,
+		topologyOf(keep("participants.peakActive", int32(0)), keep("participants.peakPublishers", int32(0))), remove))
 	f.set("bytes.up", keep("bytes.up", int64(0)))
 	f.set("bytes.down", keep("bytes.down", int64(0)))
 	setQualityDefaults(f)

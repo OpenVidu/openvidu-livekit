@@ -41,6 +41,19 @@ var egressRanks = []rank{
 
 var egressTerminal = bson.A{"complete", "failed", "aborted", "limit_reached"}
 
+// recordingStatuses are the statuses of an egress that has gone active.
+var recordingStatuses = []string{"active", "ending", "complete", "limit_reached"}
+
+// isRecording reports whether an egress event shows a recording: a request with a file or segments output whose
+// egress has gone active.
+func isRecording(info *livekit.EgressInfo, status string) bool {
+	if !containsString(recordingStatuses, status) {
+		return false
+	}
+	outputs := requestOutputKinds(info)
+	return containsString(outputs, "file") || containsString(outputs, "segments")
+}
+
 func (p *projector) egress() {
 	info := p.event.GetEgress()
 	id := firstNonEmpty(p.event.GetEgressId(), info.GetEgressId())
@@ -94,6 +107,9 @@ func (p *projector) egress() {
 		room := p.roomTouch(info.GetRoomName())
 		room.set("internal.egressIds", union("internal.egressIds", id))
 		room.set("internal.egressByType."+kind, union("internal.egressByType."+kind, id))
+		if isRecording(info, status) {
+			room.set("internal.recordingEgressIds", union("internal.recordingEgressIds", id))
+		}
 		if p.event.GetType() == livekit.AnalyticsEventType_EGRESS_ENDED || isTerminal(status) {
 			room.set("internal.endedEgressIds", union("internal.endedEgressIds", id))
 		}
@@ -194,8 +210,56 @@ func egressRequest(info *livekit.EgressInfo, encode schema.EncodeOptions) bson.D
 			summary.set("preset", preset.String())
 		}
 	}
+	switch request := info.GetRequest().(type) {
+	case *livekit.EgressInfo_RoomComposite:
+		r := request.RoomComposite
+		text("layout", r.GetLayout())
+		text("customBaseUrl", redactURL(r.GetCustomBaseUrl()))
+		flag("audioOnly", r.GetAudioOnly())
+		flag("videoOnly", r.GetVideoOnly())
+		encoding(r.GetPreset(), r.GetAdvanced())
+	case *livekit.EgressInfo_Web:
+		r := request.Web
+		text("url", redactURL(r.GetUrl()))
+		flag("audioOnly", r.GetAudioOnly())
+		flag("videoOnly", r.GetVideoOnly())
+		encoding(r.GetPreset(), r.GetAdvanced())
+	case *livekit.EgressInfo_Participant:
+		r := request.Participant
+		text("participantIdentity", r.GetIdentity())
+		flag("screenShare", r.GetScreenShare())
+		encoding(r.GetPreset(), r.GetAdvanced())
+	case *livekit.EgressInfo_TrackComposite:
+		r := request.TrackComposite
+		text("audioTrackId", r.GetAudioTrackId())
+		text("videoTrackId", r.GetVideoTrackId())
+		encoding(r.GetPreset(), r.GetAdvanced())
+	case *livekit.EgressInfo_Track:
+		r := request.Track
+		text("trackId", r.GetTrackId())
+	case *livekit.EgressInfo_Egress:
+		r := request.Egress
+		unifiedSource(summary, r.GetTemplate(), r.GetWeb(), r.GetMedia())
+		encoding(r.GetPreset(), r.GetAdvanced())
+	case *livekit.EgressInfo_Replay:
+		r := request.Replay
+		unifiedSource(summary, r.GetTemplate(), r.GetWeb(), r.GetMedia())
+		encoding(r.GetPreset(), r.GetAdvanced())
+	}
+	if outputs := requestOutputKinds(info); len(outputs) > 0 {
+		kinds := bson.A{}
+		for _, kind := range outputs {
+			kinds = append(kinds, kind)
+		}
+		summary.set("outputs", kinds)
+	}
+	return summary.doc()
+}
+
+// requestOutputKinds lists the kinds of output of an egress request (file, stream, segments, images), each once.
+func requestOutputKinds(info *livekit.EgressInfo) []string {
 	var outputs []string
-	addOutputs := func(file bool, stream bool, segments bool, images bool) {
+	add := func(file bool, stream bool, segments bool, images bool) {
 		for _, output := range []struct {
 			kind    string
 			present bool
@@ -205,66 +269,36 @@ func egressRequest(info *livekit.EgressInfo, encode schema.EncodeOptions) bson.D
 			}
 		}
 	}
-
 	switch request := info.GetRequest().(type) {
 	case *livekit.EgressInfo_RoomComposite:
 		r := request.RoomComposite
-		text("layout", r.GetLayout())
-		text("customBaseUrl", redactURL(r.GetCustomBaseUrl()))
-		flag("audioOnly", r.GetAudioOnly())
-		flag("videoOnly", r.GetVideoOnly())
-		encoding(r.GetPreset(), r.GetAdvanced())
-		addOutputs(len(r.GetFileOutputs()) > 0 || r.GetFile() != nil, len(r.GetStreamOutputs()) > 0 || r.GetStream() != nil,
+		add(len(r.GetFileOutputs()) > 0 || r.GetFile() != nil, len(r.GetStreamOutputs()) > 0 || r.GetStream() != nil,
 			len(r.GetSegmentOutputs()) > 0 || r.GetSegments() != nil, len(r.GetImageOutputs()) > 0)
 	case *livekit.EgressInfo_Web:
 		r := request.Web
-		text("url", redactURL(r.GetUrl()))
-		flag("audioOnly", r.GetAudioOnly())
-		flag("videoOnly", r.GetVideoOnly())
-		encoding(r.GetPreset(), r.GetAdvanced())
-		addOutputs(len(r.GetFileOutputs()) > 0 || r.GetFile() != nil, len(r.GetStreamOutputs()) > 0 || r.GetStream() != nil,
+		add(len(r.GetFileOutputs()) > 0 || r.GetFile() != nil, len(r.GetStreamOutputs()) > 0 || r.GetStream() != nil,
 			len(r.GetSegmentOutputs()) > 0 || r.GetSegments() != nil, len(r.GetImageOutputs()) > 0)
 	case *livekit.EgressInfo_Participant:
 		r := request.Participant
-		text("participantIdentity", r.GetIdentity())
-		flag("screenShare", r.GetScreenShare())
-		encoding(r.GetPreset(), r.GetAdvanced())
-		addOutputs(len(r.GetFileOutputs()) > 0, len(r.GetStreamOutputs()) > 0, len(r.GetSegmentOutputs()) > 0,
+		add(len(r.GetFileOutputs()) > 0, len(r.GetStreamOutputs()) > 0, len(r.GetSegmentOutputs()) > 0,
 			len(r.GetImageOutputs()) > 0)
 	case *livekit.EgressInfo_TrackComposite:
 		r := request.TrackComposite
-		text("audioTrackId", r.GetAudioTrackId())
-		text("videoTrackId", r.GetVideoTrackId())
-		encoding(r.GetPreset(), r.GetAdvanced())
-		addOutputs(len(r.GetFileOutputs()) > 0 || r.GetFile() != nil, len(r.GetStreamOutputs()) > 0 || r.GetStream() != nil,
+		add(len(r.GetFileOutputs()) > 0 || r.GetFile() != nil, len(r.GetStreamOutputs()) > 0 || r.GetStream() != nil,
 			len(r.GetSegmentOutputs()) > 0 || r.GetSegments() != nil, len(r.GetImageOutputs()) > 0)
 	case *livekit.EgressInfo_Track:
 		r := request.Track
-		text("trackId", r.GetTrackId())
-		addOutputs(r.GetFile() != nil, r.GetWebsocketUrl() != "", false, false)
+		add(r.GetFile() != nil, r.GetWebsocketUrl() != "", false, false)
 	case *livekit.EgressInfo_Egress:
-		r := request.Egress
-		unifiedSource(summary, r.GetTemplate(), r.GetWeb(), r.GetMedia())
-		encoding(r.GetPreset(), r.GetAdvanced())
-		for _, output := range r.GetOutputs() {
-			addOutputs(output.GetFile() != nil, output.GetStream() != nil, output.GetSegments() != nil, output.GetImages() != nil)
+		for _, output := range request.Egress.GetOutputs() {
+			add(output.GetFile() != nil, output.GetStream() != nil, output.GetSegments() != nil, output.GetImages() != nil)
 		}
 	case *livekit.EgressInfo_Replay:
-		r := request.Replay
-		unifiedSource(summary, r.GetTemplate(), r.GetWeb(), r.GetMedia())
-		encoding(r.GetPreset(), r.GetAdvanced())
-		for _, output := range r.GetOutputs() {
-			addOutputs(output.GetFile() != nil, output.GetStream() != nil, output.GetSegments() != nil, output.GetImages() != nil)
+		for _, output := range request.Replay.GetOutputs() {
+			add(output.GetFile() != nil, output.GetStream() != nil, output.GetSegments() != nil, output.GetImages() != nil)
 		}
 	}
-	if len(outputs) > 0 {
-		kinds := bson.A{}
-		for _, kind := range outputs {
-			kinds = append(kinds, kind)
-		}
-		summary.set("outputs", kinds)
-	}
-	return summary.doc()
+	return outputs
 }
 
 // egressRawRequest is the request as raw events store egress.request: the set member of the oneof under its name,

@@ -291,33 +291,44 @@ func encodeDocument[T any](document T) error {
 	return err
 }
 
-// ParticipantSessions returns, per room, the STANDARD participant sessions, for the participantsSum rollup of closed
-// rooms.
-func (s *Store) ParticipantSessions(ctx context.Context, roomSids []string) (map[string]int32, error) {
-	sessions := map[string]int32{}
+// ClosedRooms returns, per room, what the rollups of a closed room need: its STANDARD participant sessions, its most
+// STANDARD sessions active at once, its topology and whether it was recorded.
+func (s *Store) ClosedRooms(ctx context.Context, roomSids []string) (map[string]projection.ClosedRoom, error) {
+	closed := map[string]projection.ClosedRoom{}
 	if len(roomSids) == 0 {
-		return sessions, nil
+		return closed, nil
 	}
 	s.roundTrips++
 	cursor, err := s.db.Collection(schema.CollectionRooms).Find(ctx,
 		bson.D{{Key: "_id", Value: bson.D{{Key: "$in", Value: roomSids}}}},
-		options.Find().SetProjection(bson.D{{Key: "participants.sessions", Value: 1}}))
+		options.Find().SetProjection(bson.D{
+			{Key: "participants.sessions", Value: 1},
+			{Key: "participants.peakActive", Value: 1},
+			{Key: "topology", Value: 1},
+			{Key: "features.recording", Value: 1},
+		}))
 	if err != nil {
 		return nil, err
 	}
 	var rooms []struct {
 		ID           string `bson:"_id"`
 		Participants struct {
-			Sessions int32 `bson:"sessions"`
+			Sessions   int32 `bson:"sessions"`
+			PeakActive int32 `bson:"peakActive"`
 		} `bson:"participants"`
+		Topology string `bson:"topology"`
+		Features struct {
+			Recording bool `bson:"recording"`
+		} `bson:"features"`
 	}
 	if err := cursor.All(ctx, &rooms); err != nil {
 		return nil, err
 	}
 	for _, room := range rooms {
-		sessions[room.ID] = room.Participants.Sessions
+		closed[room.ID] = projection.ClosedRoom{Sessions: room.Participants.Sessions,
+			PeakActive: room.Participants.PeakActive, Topology: room.Topology, Recorded: room.Features.Recording}
 	}
-	return sessions, nil
+	return closed, nil
 }
 
 // Identities returns the identity of each participant session found.

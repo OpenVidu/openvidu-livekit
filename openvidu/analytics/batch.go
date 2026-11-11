@@ -63,7 +63,7 @@ type batchStore interface {
 	ApplyIncrements(ctx context.Context, increments []projection.Increment) error
 	InsertEvents(ctx context.Context, events []schema.EventDocument) (map[string]bool, error)
 	InsertStats(ctx context.Context, stats []schema.TrackStatsDocument) error
-	ParticipantSessions(ctx context.Context, roomSids []string) (map[string]int32, error)
+	ClosedRooms(ctx context.Context, roomSids []string) (map[string]projection.ClosedRoom, error)
 	Identities(ctx context.Context, sids []string) (map[string]string, error)
 	ExistingEvents(ctx context.Context, ids []string) (map[string]bool, error)
 	Tracks(ctx context.Context, trackSids []string, publisherSids []string) (map[string]projection.TrackRef, map[string][]string, error)
@@ -335,7 +335,7 @@ func (p *processor) applyRollups(ctx context.Context, events []*eventEntry) erro
 		return nil
 	}
 	if len(endedRooms) > 0 {
-		sessions, err := p.store.ParticipantSessions(ctx, endedRooms)
+		closed, err := p.store.ClosedRooms(ctx, endedRooms)
 		if err != nil {
 			return err
 		}
@@ -346,7 +346,7 @@ func (p *processor) applyRollups(ctx context.Context, events []*eventEntry) erro
 			ts := schema.FromTimestamp(entry.event.GetTimestamp())
 			increments = append(increments,
 				projection.RoomEndedIncrements(p.opts.MediaNode, !p.opts.WithoutMediaStats, ts,
-					sessions[entry.result.EndedRoom])...)
+					closed[entry.result.EndedRoom])...)
 		}
 	}
 	if err := p.rejected(p.store.ApplyIncrements(ctx, projection.MergeIncrements(increments))); err != nil {

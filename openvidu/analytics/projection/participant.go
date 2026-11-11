@@ -121,6 +121,8 @@ func (p *projector) participant() {
 		if standard {
 			room.set("internal.activeSids", union("internal.activeSids", sid))
 			room.set("participants.peakActive", maxOf("participants.peakActive", activeAfter(sid)))
+			room.set("participants.peakPublishers", maxOf("participants.peakPublishers",
+				publishersAfter(union("internal.activeSids", sid), emptyArray("internal.senderSids"))))
 		}
 	case livekit.AnalyticsEventType_PARTICIPANT_LEFT, livekit.AnalyticsEventType_PARTICIPANT_CONNECTION_ABORTED:
 		status := participantLeft

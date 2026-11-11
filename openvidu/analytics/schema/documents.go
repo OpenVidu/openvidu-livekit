@@ -46,12 +46,14 @@ type RoomConfig struct {
 
 // RoomParticipantCounters count STANDARD sessions; ByKind counts the sessions of every kind.
 type RoomParticipantCounters struct {
-	Sessions   int32            `bson:"sessions"`
-	Unique     int32            `bson:"unique"`
-	Active     int32            `bson:"active"`
-	PeakActive int32            `bson:"peakActive"`
-	Aborted    int32            `bson:"aborted"`
-	ByKind     map[string]int32 `bson:"byKind"`
+	Sessions   int32 `bson:"sessions"`
+	Unique     int32 `bson:"unique"`
+	Active     int32 `bson:"active"`
+	PeakActive int32 `bson:"peakActive"`
+	// PeakPublishers is the most sessions active at once that have sent media; absent on rooms of an earlier writer.
+	PeakPublishers *int32           `bson:"peakPublishers,omitempty"`
+	Aborted        int32            `bson:"aborted"`
+	ByKind         map[string]int32 `bson:"byKind"`
 }
 
 type RoomTrackCounters struct {
@@ -75,6 +77,9 @@ type RoomFeatures struct {
 	Ingress bool `bson:"ingress"`
 	Agent   bool `bson:"agent"`
 	SIP     bool `bson:"sip"`
+	// Recording is set once an egress with a file or segments output reached active; absent on rooms of an earlier
+	// writer.
+	Recording *bool `bson:"recording,omitempty"`
 }
 
 // RoomDocument is a `rooms` document (one room session).
@@ -97,6 +102,7 @@ type RoomDocument struct {
 	Bytes         ByteTotals              `bson:"bytes"`
 	Quality       QualityTotals           `bson:"quality"`
 	Features      RoomFeatures            `bson:"features"`
+	Topology      string                  `bson:"topology,omitempty"`
 	LastEventAt   time.Time               `bson:"lastEventAt"`
 	LastStatsAt   *time.Time              `bson:"lastStatsAt,omitempty"`
 	MediaStats    *bool                   `bson:"mediaStats,omitempty"`
@@ -468,6 +474,10 @@ type RollupRooms struct {
 	DurationMsSum   *int64           `bson:"durationMsSum,omitempty"`
 	ParticipantsSum *int32           `bson:"participantsSum,omitempty"`
 	PeakActive      *int32           `bson:"peakActive,omitempty"`
+	// ByTopology, Recorded and SizeByTopology count the rooms ended in the bucket that have a topology.
+	ByTopology     map[string]int32            `bson:"byTopology,omitempty"`
+	Recorded       *int32                      `bson:"recorded,omitempty"`
+	SizeByTopology map[string]map[string]int32 `bson:"sizeByTopology,omitempty"`
 }
 
 // RollupParticipants count STANDARD sessions; ByKind counts the sessions of every kind.

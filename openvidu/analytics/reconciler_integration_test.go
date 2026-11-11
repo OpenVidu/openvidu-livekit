@@ -635,6 +635,82 @@ func TestReconcilerClosures(t *testing.T) {
 		require.EqualValues(t, 1, *hourly.Rooms.Ended)
 	})
 
+	// recordedBroadcast builds RM_t on the dead node: eight STANDARD sessions, one of them sending media, and a
+	// recording that completed, so the room is a recorded one_to_many room of size 6-10.
+	recordedBroadcast := func(env *reconcilerEnv) {
+		created := before(2 * time.Minute)
+		env.room("RM_t", nodeDead, created)
+		var speaker *livekit.ParticipantInfo
+		for i := range 8 {
+			sid := fmt.Sprintf("PA_t%d", i)
+			info := env.session("RM_t", nodeDead, sid, livekit.ParticipantInfo_STANDARD, created, false)
+			if i == 0 {
+				speaker = info
+			}
+			env.statsAt("RM_t", nodeDead, sid, before(110*time.Second))
+		}
+		egress := func(status livekit.EgressStatus) *livekit.EgressInfo {
+			return roomCompositeEgress("EG_t", "RM_t", status, created, created)
+		}
+		env.apply([]*livekit.AnalyticsEvent{
+			on(nodeDead, env.ev.track(livekit.AnalyticsEventType_TRACK_PUBLISHED, "RM_t", speaker, microphoneTrack("TR_t"),
+				created.Add(2*time.Second))),
+			on(nodeDead, env.ev.egress(livekit.AnalyticsEventType_EGRESS_UPDATED, egress(livekit.EgressStatus_EGRESS_ACTIVE),
+				created.Add(3*time.Second))),
+			on(nodeDead, env.ev.egress(livekit.AnalyticsEventType_EGRESS_ENDED, egress(livekit.EgressStatus_EGRESS_COMPLETE),
+				created.Add(4*time.Second))),
+		})
+	}
+	classCounters := func(env *reconcilerEnv, scope string, endedAt time.Time) *schema.RollupRooms {
+		env.t.Helper()
+		return find[schema.HourlyRollupDocument](env.testEnv, schema.CollectionAnalyticsHourly,
+			scope+":"+endedAt.Truncate(time.Hour).Format(time.RFC3339)).Rooms
+	}
+
+	t.Run("a room of a dead node counts its class and recording once", func(t *testing.T) {
+		env := newReconcilerEnv(t, client)
+		recordedBroadcast(env)
+
+		report := env.reconcile()
+		require.EqualValues(t, 1, report.closed.Room)
+		closed := find[schema.RoomDocument](env.testEnv, schema.CollectionRooms, "RM_t")
+		require.Equal(t, "one_to_many", closed.Topology)
+		for _, scope := range []string{"global", "node:" + mediaNodeOf(nodeDead)} {
+			rooms := classCounters(env, scope, *closed.EndedAt)
+			require.Equal(t, map[string]int32{"one_to_many": 1}, rooms.ByTopology, scope)
+			require.EqualValues(t, 1, *rooms.Recorded, scope)
+			require.Equal(t, map[string]map[string]int32{"one_to_many": {"6-10": 1}}, rooms.SizeByTopology, scope)
+		}
+
+		env.apply([]*livekit.AnalyticsEvent{on(nodeDead, env.ev.roomEnded("RM_t", "room-RM_t", before(2*time.Minute),
+			before(30*time.Second), livekit.RoomEndReason_ROOM_END_API_DELETE))})
+		rooms := classCounters(env, "global", *closed.EndedAt)
+		require.Equal(t, map[string]int32{"one_to_many": 1}, rooms.ByTopology, "the late real end counts nothing")
+		require.EqualValues(t, 1, *rooms.Recorded)
+		require.EqualValues(t, 1, *rooms.Ended)
+	})
+
+	t.Run("a room of an earlier writer closes without a class", func(t *testing.T) {
+		env := newReconcilerEnv(t, client)
+		recordedBroadcast(env)
+		_, err := env.db.Collection(schema.CollectionRooms).UpdateByID(ctx, "RM_t", bson.D{{Key: "$unset", Value: bson.D{
+			{Key: "participants.peakPublishers", Value: ""}, {Key: "topology", Value: ""}, {Key: "features.recording", Value: ""},
+		}}})
+		require.NoError(t, err)
+
+		env.reconcile()
+		closed := find[schema.RoomDocument](env.testEnv, schema.CollectionRooms, "RM_t")
+		require.Equal(t, "closed", closed.Status)
+		require.Empty(t, closed.Topology)
+		require.Nil(t, closed.Participants.PeakPublishers)
+		require.Nil(t, closed.Features.Recording)
+		rooms := classCounters(env, "global", *closed.EndedAt)
+		require.EqualValues(t, 8, *rooms.ParticipantsSum)
+		require.Nil(t, rooms.ByTopology)
+		require.Nil(t, rooms.Recorded)
+		require.Nil(t, rooms.SizeByTopology)
+	})
+
 	t.Run("a room without media statistics closes with its own media statistics mark", func(t *testing.T) {
 		env := newReconcilerEnv(t, client)
 		created := before(2 * time.Minute)

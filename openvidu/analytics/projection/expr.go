@@ -68,6 +68,10 @@ func sizeOf(path string) bson.D {
 	return size(emptyArray(path))
 }
 
+func intersection(a any, b any) bson.D {
+	return bson.D{{Key: "$setIntersection", Value: bson.A{a, b}}}
+}
+
 func difference(a any, b any) bson.D {
 	return bson.D{{Key: "$setDifference", Value: bson.A{a, b}}}
 }

@@ -111,10 +111,34 @@ func PeakIncrements(scope string, at time.Time, peaks Peaks) []Increment {
 	}
 }
 
-// RoomEndedIncrements returns the participantsSum increments of a room of mediaNode (empty without a label) closed at
-// endedAt, once the batch knows its STANDARD participant sessions; mediaStats is the room's mark.
-func RoomEndedIncrements(mediaNode string, mediaStats bool, endedAt time.Time, participants int32) []Increment {
-	return marked(periodIncrements(mediaNode, endedAt, map[string]any{"rooms.participantsSum": participants}), mediaStats)
+// ClosedRoom is what the document of a closed room reads once the batch or reconciler run that closed it is applied:
+// its STANDARD participant sessions and, when this writer version classified it, its topology, its most STANDARD
+// sessions active at once and whether it was recorded.
+type ClosedRoom struct {
+	Sessions   int32
+	PeakActive int32
+	Topology   string
+	Recorded   bool
+}
+
+var topologies = []string{TopologyEmpty, TopologySingleParticipant, TopologyNoPublishers, TopologyOneToOne,
+	TopologyOneToMany, TopologyManyToMany}
+
+// RoomEndedIncrements returns the increments of a room of mediaNode (empty without a label) closed at endedAt, once
+// the batch knows its document: participantsSum and, for a room with a topology, its class, its recording and its
+// size range. mediaStats is the room's mark.
+func RoomEndedIncrements(mediaNode string, mediaStats bool, endedAt time.Time, room ClosedRoom) []Increment {
+	counters := map[string]any{"rooms.participantsSum": room.Sessions}
+	if containsString(topologies, room.Topology) {
+		counters["rooms.byTopology."+room.Topology] = one
+		if room.Recorded {
+			counters["rooms.recorded"] = one
+		}
+		if sizedTopology(room.Topology) {
+			counters["rooms.sizeByTopology."+room.Topology+"."+roomSizeRange(room.PeakActive)] = one
+		}
+	}
+	return marked(periodIncrements(mediaNode, endedAt, counters), mediaStats)
 }
 
 var one = int32(1)

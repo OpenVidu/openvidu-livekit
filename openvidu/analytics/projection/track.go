@@ -163,7 +163,7 @@ func (p *projector) track() {
 		if p.event.GetType() == livekit.AnalyticsEventType_TRACK_PUBLISHED {
 			f.set("status", ranked("status", trackPublished, trackRanks))
 			f.set("muted", info.GetMuted())
-			p.publishedBy(publisherSid, roomSid, roomName, trackSid, info.GetSource().String())
+			p.publishedBy(publisherSid, roomSid, roomName, trackSid, info.GetSource().String(), !info.GetMuted())
 		}
 		p.upsert(schema.CollectionTracks, trackSid, f)
 	case livekit.AnalyticsEventType_TRACK_MUTED, livekit.AnalyticsEventType_TRACK_UNMUTED:
@@ -174,6 +174,11 @@ func (p *projector) track() {
 		f.set("internal.mutedAt", maxDate("internal.mutedAt", p.ts))
 		p.upsert(schema.CollectionTracks, trackSid, f)
 		p.touchParticipant(publisherSid)
+		if !muted && roomSid != "" && publisherSid != "" {
+			room := p.roomTouch(roomName)
+			sentMedia(room, publisherSid)
+			p.upsert(schema.CollectionRooms, roomSid, room)
+		}
 	case livekit.AnalyticsEventType_TRACK_UNPUBLISHED:
 		f := p.trackBase(trackSid, roomSid, publisherSid, publisherIdentity)
 		trackFacts(f, info, true)
@@ -201,8 +206,10 @@ func (p *projector) touchParticipant(sid string) {
 	p.amend(schema.CollectionParticipants, sid, f)
 }
 
-// publishedBy records a published track on its publisher and its room.
-func (p *projector) publishedBy(publisherSid string, roomSid string, roomName string, trackSid string, source string) {
+// publishedBy records a published track on its publisher and its room, and, for an unmuted track, that its publisher
+// sent media.
+func (p *projector) publishedBy(publisherSid string, roomSid string, roomName string, trackSid string, source string,
+	unmuted bool) {
 	if publisherSid != "" {
 		participant := newFields()
 		participant.set("internal.trackSids", union("internal.trackSids", trackSid))
@@ -215,6 +222,9 @@ func (p *projector) publishedBy(publisherSid string, roomSid string, roomName st
 		room := p.roomTouch(roomName)
 		room.set("internal.trackSids", union("internal.trackSids", trackSid))
 		room.set("internal.tracksBySource."+source, union("internal.tracksBySource."+source, trackSid))
+		if unmuted && publisherSid != "" {
+			sentMedia(room, publisherSid)
+		}
 		p.upsert(schema.CollectionRooms, roomSid, room)
 	}
 }

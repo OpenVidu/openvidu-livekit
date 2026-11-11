@@ -106,8 +106,8 @@ func (f *fakeStore) InsertStats(_ context.Context, stats []schema.TrackStatsDocu
 	return nil
 }
 
-func (f *fakeStore) ParticipantSessions(context.Context, []string) (map[string]int32, error) {
-	return map[string]int32{}, nil
+func (f *fakeStore) ClosedRooms(context.Context, []string) (map[string]projection.ClosedRoom, error) {
+	return map[string]projection.ClosedRoom{}, nil
 }
 
 func (f *fakeStore) Identities(context.Context, []string) (map[string]string, error) {

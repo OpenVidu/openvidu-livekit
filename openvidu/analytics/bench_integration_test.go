@@ -29,6 +29,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/livekit/livekit-server/openvidu/analytics/schema"
 	"github.com/livekit/livekit-server/openvidu/analytics/store"
@@ -98,7 +99,8 @@ func entriesOf(events []*livekit.AnalyticsEvent) []*eventEntry {
 	return entries
 }
 
-// benchBatch builds benchEvents events of rooms of five publishers that subscribe to each other, with every second
+// benchBatch builds benchEvents events of rooms of five publishers that subscribe to each other, three of them with
+// their microphone published muted and one of those unmuting it for a while, each room recorded, with every second
 // room ended, and benchStats stats of their streams; prefix keeps the IDs of each batch apart.
 func benchBatch(prefix string, start time.Time) ([]*livekit.AnalyticsEvent, []*livekit.AnalyticsStat) {
 	var ev events
@@ -119,6 +121,7 @@ func benchBatch(prefix string, start time.Time) ([]*livekit.AnalyticsEvent, []*l
 			info := participantInfo(fmt.Sprintf("PA_b%s%04d%d", prefix, room, p), fmt.Sprintf("user-%d", p),
 				livekit.ParticipantInfo_STANDARD, offset(1))
 			camera, mic := cameraTrack(fmt.Sprintf("TR_c%s%04d%d", prefix, room, p)), microphoneTrack(fmt.Sprintf("TR_m%s%04d%d", prefix, room, p))
+			mic.Muted = p >= 2
 			participants = append(participants, info)
 			tracks = append(tracks, [2]*livekit.TrackInfo{camera, mic})
 			batch = append(batch, ev.joined(roomSid, info, offset(1)), ev.active(roomSid, info, offset(2)),
@@ -140,6 +143,16 @@ func benchBatch(prefix string, start time.Time) ([]*livekit.AnalyticsEvent, []*l
 				streams = append(streams, stream{roomSid, subscriber.GetSid(), track.GetSid(), livekit.StreamType_UPSTREAM})
 			}
 		}
+		unmuted := proto.Clone(tracks[2][1]).(*livekit.TrackInfo)
+		unmuted.Muted = false
+		egressID := fmt.Sprintf("EG_b%s%04d", prefix, room)
+		batch = append(batch,
+			ev.track(livekit.AnalyticsEventType_TRACK_UNMUTED, roomSid, participants[2], unmuted, offset(10)),
+			ev.track(livekit.AnalyticsEventType_TRACK_MUTED, roomSid, participants[2], tracks[2][1], offset(20)),
+			ev.egress(livekit.AnalyticsEventType_EGRESS_STARTED,
+				roomCompositeEgress(egressID, roomSid, livekit.EgressStatus_EGRESS_STARTING, offset(5), offset(5)), offset(5)),
+			ev.egress(livekit.AnalyticsEventType_EGRESS_UPDATED,
+				roomCompositeEgress(egressID, roomSid, livekit.EgressStatus_EGRESS_ACTIVE, offset(5), offset(6)), offset(6)))
 		if room%2 == 1 {
 			for _, info := range participants {
 				batch = append(batch, ev.left(roomSid, info, offset(50), livekit.DisconnectReason_CLIENT_INITIATED))

@@ -66,3 +66,37 @@ func connectionTypeKey(connectionType string) string {
 		return "other"
 	}
 }
+
+// Room topologies, from the most STANDARD sessions active at once (N) and the most of them that have sent media at once
+// (P).
+const (
+	TopologyEmpty             = "empty"              // N = 0
+	TopologySingleParticipant = "single_participant" // N = 1
+	TopologyNoPublishers      = "no_publishers"      // N ≥ 2, P = 0
+	TopologyOneToOne          = "one_to_one"         // N = 2, P ≥ 1
+	TopologyOneToMany         = "one_to_many"        // N ≥ 3, P = 1
+	TopologyManyToMany        = "many_to_many"       // N ≥ 3, P ≥ 2
+)
+
+// sizedTopology reports whether the rooms of a topology are counted by size range.
+func sizedTopology(topology string) bool {
+	return topology == TopologyNoPublishers || topology == TopologyOneToMany || topology == TopologyManyToMany
+}
+
+// roomSizeRange is the size range of a room whose most STANDARD sessions active at once are peak.
+func roomSizeRange(peak int32) string {
+	switch {
+	case peak <= 5:
+		return "2-5"
+	case peak <= 10:
+		return "6-10"
+	case peak <= 25:
+		return "11-25"
+	case peak <= 50:
+		return "26-50"
+	case peak <= 100:
+		return "51-100"
+	default:
+		return "101+"
+	}
+}

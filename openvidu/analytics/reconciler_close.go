@@ -284,7 +284,7 @@ func (c *closer) skipped(entity string, id string) {
 		"id", id)
 }
 
-// apply writes what follows the closures: participantsSum of the closed rooms, cascades, counters of related
+// apply writes what follows the closures: participantsSum, topology and recording of the closed rooms, cascades, counters of related
 // documents, synthetic events and rollups. Every step is attempted; transient errors are retried.
 func (c *closer) apply(ctx context.Context) error {
 	var errs []error
@@ -293,16 +293,16 @@ func (c *closer) apply(ctx context.Context) error {
 		for i, room := range c.endedRooms {
 			sids[i] = room.sid
 		}
-		var sessions map[string]int32
+		var closed map[string]projection.ClosedRoom
 		err := c.r.retry(ctx, func() (err error) {
-			sessions, err = c.r.store.ParticipantSessions(ctx, sids)
+			closed, err = c.r.store.ClosedRooms(ctx, sids)
 			return err
 		})
 		errs = append(errs, err)
 		reconciled := map[string]int32{}
 		for _, room := range c.endedRooms {
 			c.increments = append(c.increments,
-				projection.RoomEndedIncrements(room.mediaNode, room.mediaStats, room.at, sessions[room.sid])...)
+				projection.RoomEndedIncrements(room.mediaNode, room.mediaStats, room.at, closed[room.sid])...)
 			if room.nodeID != "" {
 				reconciled[room.nodeID]++
 			}
