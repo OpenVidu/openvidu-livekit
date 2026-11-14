@@ -152,6 +152,10 @@ type Room struct {
 	onStateChangeMu              sync.Mutex
 	localParticipantListener     types.LocalParticipantListener
 	participantTelemetryListener types.ParticipantTelemetryListener
+
+	// BEGIN OPENVIDU BLOCK
+	openviduAutoEgress openviduAutoEgress
+	// END OPENVIDU BLOCK
 }
 
 type ParticipantOptions struct {
@@ -1119,7 +1123,9 @@ func (r *Room) onTrackPublished(participant types.Participant, track types.Media
 		r.lock.RLock()
 		r.launchTargetAgents(slices.Collect(maps.Values(r.agentDispatches)), participant, livekit.JobType_JT_PUBLISHER)
 		r.lock.RUnlock()
-		if r.internal != nil && r.internal.ParticipantEgress != nil {
+		// BEGIN OPENVIDU BLOCK
+		if r.internal != nil && r.internal.ParticipantEgress != nil && r.openviduStartsAutoEgress(participant.Identity()) {
+			// END OPENVIDU BLOCK
 			go func() {
 				if err := StartParticipantEgress(
 					context.Background(),
@@ -1428,6 +1434,9 @@ func (r *Room) RemoveParticipant(
 	delete(r.participants, identity)
 	delete(r.participantOpts, identity)
 	delete(r.participantRequestSources, identity)
+	// BEGIN OPENVIDU BLOCK
+	r.openviduOnParticipantRemoved(identity, reason)
+	// END OPENVIDU BLOCK
 	delete(r.hasPublished, identity)
 	delete(r.launchedTrackEgresses, identity)
 	delete(r.agentParticpants, identity)
