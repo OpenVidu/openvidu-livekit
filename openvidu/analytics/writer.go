@@ -110,6 +110,8 @@ func (w *writer) enqueueStats(stats []*livekit.AnalyticsStat) {
 
 func (w *writer) run() {
 	defer close(w.stopped)
+	// A panic outside the batch itself ends the writer, not the server.
+	defer recoverPanic("the batch writer", nil)
 	timer := time.NewTimer(w.interval)
 	defer timer.Stop()
 	for {
@@ -160,7 +162,8 @@ func (w *writer) reportOverflow() {
 
 func (w *writer) applyBatch(ctx context.Context, events []*eventEntry, stats []*statsEntry, started time.Time) error {
 	w.store.ResetRoundTrips()
-	err := w.processor.apply(ctx, events, stats)
+	// A batch that panics is dropped like one that fails with a non-transient error.
+	err := guarded("a batch", func() error { return w.processor.apply(ctx, events, stats) })
 	hosted := w.processor.takeHostedRooms()
 	heartbeatErr := w.store.Heartbeat(ctx, w.node.ID, w.node.heartbeat(w.interval, hosted),
 		time.Now().UTC().Truncate(time.Millisecond))

@@ -79,6 +79,8 @@ func (t *task) start() {
 	t.done = make(chan struct{})
 	go func(done chan struct{}) {
 		defer close(done)
+		// Last resort: a panic outside the guarded cycles ends this task, not the server.
+		defer recoverPanic("an analytics task", nil)
 		t.loop(ctx)
 	}(t.done)
 }

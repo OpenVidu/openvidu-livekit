@@ -152,7 +152,11 @@ func (j *leaderJob) loop(ctx context.Context, locks locker) {
 			}
 		}
 		startup = false
-		j.cycle(ctx, held, j.ttl)
+		// A cycle that panics ends there; the lock is released and the next cycle runs as usual.
+		_ = guarded(j.name, func() error {
+			j.cycle(ctx, held, j.ttl)
+			return nil
+		})
 		j.release(held)
 	}
 }

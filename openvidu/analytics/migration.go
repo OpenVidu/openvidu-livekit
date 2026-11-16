@@ -288,7 +288,8 @@ func (m *migrator) run(ctx context.Context, held lease) error {
 func (m *migrator) withRetries(ctx context.Context, phase func() error) error {
 	for attempt := 1; ; attempt++ {
 		processed := m.state.Processed
-		err := phase()
+		// A phase that panics fails the migration, which the next start retries from its checkpoint.
+		err := guarded("the legacy migration", phase)
 		if err == nil || errors.Is(err, errLockLost) || !isTransient(err) || ctx.Err() != nil {
 			return err
 		}
