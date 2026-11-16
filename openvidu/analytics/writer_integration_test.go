@@ -906,31 +906,75 @@ func TestWriter(t *testing.T) {
 		}
 	})
 
-	t.Run("IP addresses kept on request", func(t *testing.T) {
-		storeIP := false
-		env := newEnv(t, client, func(c *openviduconfig.AnalyticsConfig) { c.AnonymizeIP = &storeIP })
+	// joinWithAddress projects a room and a STANDARD participant whose PARTICIPANT_JOINED carries client_info.address,
+	// room metadata, participant metadata and attributes.
+	joinWithAddress := func(t *testing.T, configure ...func(*openviduconfig.AnalyticsConfig)) *testEnv {
+		env := newEnv(t, client, configure...)
 		var ev events
 		alice := participantInfo("PA_a", "alice", livekit.ParticipantInfo_STANDARD, at("1s"))
-		env.apply([]*livekit.AnalyticsEvent{ev.roomCreated("RM_1", "r", at("0s")), ev.joined("RM_1", alice, at("1s"))})
-		participant := find[schema.ParticipantDocument](env, schema.CollectionParticipants, "PA_a")
-		require.NotEmpty(t, participant.Client.Address)
+		joined := ev.joined("RM_1", alice, at("1s"))
+		require.NotEmpty(t, joined.GetClientInfo().GetAddress())
+		env.apply([]*livekit.AnalyticsEvent{ev.roomCreated("RM_1", "r", at("0s")), joined})
+		return env
+	}
+	rawAddresses := func(env *testEnv) int64 {
+		return count(env, schema.CollectionEvents, bson.D{{Key: "payload.client_info.address", Value: bson.D{{Key: "$exists", Value: true}}}})
+	}
+	storeIP := func(c *openviduconfig.AnalyticsConfig) {
+		anonymize := false
+		c.AnonymizeIP = &anonymize
+	}
+	storeMetadata := func(c *openviduconfig.AnalyticsConfig) { c.StoreMetadata = true }
+
+	assertNoAddress := func(t *testing.T, env *testEnv) {
+		require.Empty(t, find[schema.ParticipantDocument](env, schema.CollectionParticipants, "PA_a").Client.Address)
+		require.Positive(t, count(env, schema.CollectionEvents, bson.D{{Key: "type", Value: "PARTICIPANT_JOINED"}}))
+		require.Zero(t, rawAddresses(env))
+	}
+
+	t.Run("Anonymized IP", func(t *testing.T) {
+		assertNoAddress(t, joinWithAddress(t))
 	})
 
-	t.Run("personal data flags", func(t *testing.T) {
-		env := newEnv(t, client, func(c *openviduconfig.AnalyticsConfig) { c.StoreMetadata = true })
-		var ev events
-		alice := participantInfo("PA_a", "alice", livekit.ParticipantInfo_STANDARD, at("1s"))
-		env.apply([]*livekit.AnalyticsEvent{ev.roomCreated("RM_1", "r", at("0s")), ev.joined("RM_1", alice, at("1s"))})
+	t.Run("Client address absent by default", func(t *testing.T) {
+		assertNoAddress(t, joinWithAddress(t))
+	})
+
+	t.Run("IP addresses stored on request", func(t *testing.T) {
+		env := joinWithAddress(t, storeIP)
+		require.Equal(t, "203.0.113.10", find[schema.ParticipantDocument](env, schema.CollectionParticipants, "PA_a").Client.Address)
+	})
+
+	t.Run("IP addresses kept", func(t *testing.T) {
+		env := joinWithAddress(t, storeIP)
+		require.Equal(t, "203.0.113.10", find[schema.ParticipantDocument](env, schema.CollectionParticipants, "PA_a").Client.Address)
+		require.EqualValues(t, 1, count(env, schema.CollectionEvents, bson.D{{Key: "payload.client_info.address", Value: "203.0.113.10"}}))
+	})
+
+	assertNoMetadata := func(t *testing.T, env *testEnv) {
 		participant := find[schema.ParticipantDocument](env, schema.CollectionParticipants, "PA_a")
-		require.Empty(t, participant.Client.Address)
-		require.Equal(t, "participant metadata", participant.Metadata)
-		require.Equal(t, "host", participant.Attributes["role"])
+		require.Empty(t, participant.Metadata)
+		require.Nil(t, participant.Attributes)
 		room := find[schema.RoomDocument](env, schema.CollectionRooms, "RM_1")
-		require.Equal(t, "room metadata", room.Config.Metadata)
-		raw, err := env.db.Collection(schema.CollectionEvents).CountDocuments(context.Background(),
-			bson.D{{Key: "payload.client_info.address", Value: bson.D{{Key: "$exists", Value: true}}}})
-		require.NoError(t, err)
-		require.Zero(t, raw)
+		require.NotNil(t, room.Config)
+		require.Empty(t, room.Config.Metadata)
+	}
+
+	t.Run("Metadata enabled", func(t *testing.T) {
+		env := joinWithAddress(t, storeMetadata)
+		participant := find[schema.ParticipantDocument](env, schema.CollectionParticipants, "PA_a")
+		require.Equal(t, "participant metadata", participant.Metadata)
+		require.Equal(t, map[string]string{"role": "host"}, participant.Attributes)
+		require.Equal(t, "room metadata", find[schema.RoomDocument](env, schema.CollectionRooms, "RM_1").Config.Metadata)
+		// storing metadata does not store addresses
+		require.Empty(t, participant.Client.Address)
+		require.Zero(t, rawAddresses(env))
+
+		assertNoMetadata(t, joinWithAddress(t))
+	})
+
+	t.Run("Metadata disabled by default", func(t *testing.T) {
+		assertNoMetadata(t, joinWithAddress(t))
 	})
 }
 

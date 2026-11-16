@@ -519,6 +519,22 @@ func TestMigrationReplay(t *testing.T) {
 		require.NotEmpty(t, env.logs.matching("info", "analytics migration: completed"))
 	})
 
+	t.Run("Migrated legacy session", func(t *testing.T) {
+		data := recordedData(t)
+		joinedWithAddress := 0
+		for _, raw := range data.events {
+			if legacyOfType("PARTICIPANT_JOINED")(raw) && lookupString(raw, "client_info", "address") != "" {
+				joinedWithAddress++
+			}
+		}
+		require.Positive(t, joinedWithAddress, "the recorded legacy sessions joined with a client address")
+
+		env := newMigrationEnv(t, client, "migration_client_address", &data)
+		env.run()
+		require.Positive(t, env.count(schema.CollectionParticipants, bson.D{}))
+		require.Zero(t, env.count(schema.CollectionParticipants, bson.D{{Key: "client.address", Value: bson.D{{Key: "$exists", Value: true}}}}))
+	})
+
 	t.Run("the secret check catches a leaked value", func(t *testing.T) {
 		data := legacyData{events: recordedLegacy(t, "events")[:60]}
 		for i, raw := range data.events {
