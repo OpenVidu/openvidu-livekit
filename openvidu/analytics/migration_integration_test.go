@@ -83,7 +83,34 @@ func (d legacyData) without(match func(bson.Raw) bool) legacyData {
 	return legacyData{events: events, stats: d.stats}
 }
 
-// seed writes the collections of the legacy writer with its indexes.
+// legacyExpireAt is the openvidu_expire_at of every seeded legacy document: live for the whole test run, so that the
+// TTL monitor of the test server never deletes a fixture during a test.
+var legacyExpireAt = time.Now().UTC().Add(32 * 24 * time.Hour).Truncate(time.Millisecond)
+
+// withLegacyExpiry returns document with its openvidu_expire_at set to legacyExpireAt.
+func withLegacyExpiry(t *testing.T, document bson.Raw) bson.Raw {
+	t.Helper()
+	elements, err := document.Elements()
+	require.NoError(t, err)
+	fields := make(bson.D, 0, len(elements)+1)
+	found := false
+	for _, element := range elements {
+		if element.Key() == "openvidu_expire_at" {
+			fields = append(fields, bson.E{Key: element.Key(), Value: legacyExpireAt})
+			found = true
+			continue
+		}
+		fields = append(fields, bson.E{Key: element.Key(), Value: element.Value()})
+	}
+	if !found {
+		fields = append(fields, bson.E{Key: "openvidu_expire_at", Value: legacyExpireAt})
+	}
+	rewritten, err := bson.Marshal(fields)
+	require.NoError(t, err)
+	return rewritten
+}
+
+// seed writes the collections of the legacy writer with its indexes, every document expiring at legacyExpireAt.
 func (d legacyData) seed(t *testing.T, db *mongo.Database) {
 	t.Helper()
 	ctx := context.Background()
@@ -99,7 +126,7 @@ func (d legacyData) seed(t *testing.T, db *mongo.Database) {
 		}
 		items := make([]any, len(documents))
 		for i := range documents {
-			items[i] = documents[i]
+			items[i] = withLegacyExpiry(t, documents[i])
 		}
 		_, err = db.Collection(collection).InsertMany(ctx, items)
 		require.NoError(t, err)
@@ -124,7 +151,7 @@ func legacyFixerClose(t *testing.T, creation bson.Raw, closeType livekit.Analyti
 		return v
 	}
 	document := bson.D{{Key: "_id", Value: bson.NewObjectID()}, {Key: "type", Value: closeType.String()},
-		{Key: "openvidu_expire_at", Value: time.Date(2026, 11, 13, 8, 0, 0, 0, time.UTC)},
+		{Key: "openvidu_expire_at", Value: legacyExpireAt},
 		{Key: "timestamp", Value: bson.D{{Key: "seconds", Value: seconds}, {Key: "nanos", Value: int32(552394272)}}}}
 	switch closeType {
 	case livekit.AnalyticsEventType_ROOM_ENDED:
