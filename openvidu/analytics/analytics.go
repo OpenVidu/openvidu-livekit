@@ -56,6 +56,7 @@ var (
 	reconciles *reconcilerRunner
 	aggregates *aggregatorRunner
 	migrations *task
+	retentions *legacyRetentionTask
 )
 
 // task runs a loop in its own goroutine between Start and Stop.
@@ -197,11 +198,16 @@ func InitializeAnalytics(conf *config.Config, node Node, helper livekithelperint
 	if err != nil {
 		return err
 	}
+	retention, err := newLegacyRetentionTask(ctx, db)
+	if err != nil {
+		return err
+	}
 	mu.Lock()
 	instance = w
 	reconciles = runner
 	aggregates = aggregation
 	migrations = migration
+	retentions = retention
 	mu.Unlock()
 	return nil
 }
@@ -422,10 +428,11 @@ func isLegacyEvents(ctx context.Context, events *mongo.Collection) (bool, error)
 	return count > 0, err
 }
 
-// Start starts the reconciler, the aggregator and the legacy migration, and runs the batch loop until Stop. It blocks.
+// Start starts the reconciler, the aggregator, the legacy migration and the legacy data retention, and runs the batch
+// loop until Stop. It blocks.
 func Start() {
 	mu.Lock()
-	w, runner, aggregation, migration := instance, reconciles, aggregates, migrations
+	w, runner, aggregation, migration, retention := instance, reconciles, aggregates, migrations, retentions
 	mu.Unlock()
 	if runner != nil {
 		runner.start()
@@ -436,17 +443,23 @@ func Start() {
 	if migration != nil {
 		migration.start()
 	}
+	if retention != nil {
+		retention.start()
+	}
 	if w != nil {
 		w.run()
 	}
 }
 
-// Stop stops the reconciler and the aggregator and flushes the queues through the normal batch path, waiting at most
-// until ctx expires, and counts whatever remains as dropped.
+// Stop stops the background tasks and flushes the queues through the normal batch path, waiting at most until ctx
+// expires, and counts whatever remains as dropped.
 func Stop(ctx context.Context) {
 	mu.Lock()
-	w, runner, aggregation, migration := instance, reconciles, aggregates, migrations
+	w, runner, aggregation, migration, retention := instance, reconciles, aggregates, migrations, retentions
 	mu.Unlock()
+	if retention != nil {
+		retention.stop(ctx)
+	}
 	if migration != nil {
 		migration.stop(ctx)
 	}

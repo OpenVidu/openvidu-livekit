@@ -565,30 +565,16 @@ func (m *migrator) reconcile(ctx context.Context) error {
 }
 
 // cleanup drops the bookkeeping collections of the legacy writer, records until when its data stays and marks the
-// migration completed. legacy_events and stats expire by their own TTL.
+// migration completed. legacy_events and stats keep expiring by their own TTL until legacyRetention drops them.
 func (m *migrator) cleanup(ctx context.Context) error {
 	for _, name := range []string{legacyActiveEntitiesCollection, legacyLastAliveCollection} {
 		if err := m.db.Collection(name).Drop(ctx); err != nil {
 			return err
 		}
 	}
-	var retainedUntil *time.Time
-	for _, name := range []string{LegacyEventsCollection, legacyStatsCollection} {
-		var latest struct {
-			ExpireAt time.Time `bson:"openvidu_expire_at"`
-		}
-		err := m.db.Collection(name).FindOne(ctx, bson.D{{Key: "openvidu_expire_at", Value: bson.D{{Key: "$exists", Value: true}}}},
-			options.FindOne().SetSort(bson.D{{Key: "openvidu_expire_at", Value: -1}}).
-				SetProjection(bson.D{{Key: "openvidu_expire_at", Value: 1}})).Decode(&latest)
-		if errors.Is(err, mongo.ErrNoDocuments) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		if expireAt := latest.ExpireAt.UTC(); retainedUntil == nil || expireAt.After(*retainedUntil) {
-			retainedUntil = &expireAt
-		}
+	retainedUntil, err := latestLegacyExpiry(ctx, m.db)
+	if err != nil {
+		return err
 	}
 	finished := m.now()
 	m.state.State = migrationCompleted
@@ -601,6 +587,30 @@ func (m *migrator) cleanup(ctx context.Context) error {
 	m.log.infow("analytics migration: completed", "processed", m.state.Processed, "counts", m.state.Counts,
 		"duration", finished.Sub(*m.state.StartedAt).String(), "legacyRetainedUntil", retainedUntil)
 	return nil
+}
+
+// latestLegacyExpiry returns the latest openvidu_expire_at of legacy_events and stats, read through their TTL index, or
+// nil when neither holds a dated document.
+func latestLegacyExpiry(ctx context.Context, db *mongo.Database) (*time.Time, error) {
+	var retainedUntil *time.Time
+	for _, name := range []string{LegacyEventsCollection, legacyStatsCollection} {
+		var latest struct {
+			ExpireAt time.Time `bson:"openvidu_expire_at"`
+		}
+		err := db.Collection(name).FindOne(ctx, bson.D{{Key: "openvidu_expire_at", Value: bson.D{{Key: "$exists", Value: true}}}},
+			options.FindOne().SetSort(bson.D{{Key: "openvidu_expire_at", Value: -1}}).
+				SetProjection(bson.D{{Key: "openvidu_expire_at", Value: 1}})).Decode(&latest)
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if expireAt := latest.ExpireAt.UTC(); retainedUntil == nil || expireAt.After(*retainedUntil) {
+			retainedUntil = &expireAt
+		}
+	}
+	return retainedUntil, nil
 }
 
 // logProgress writes a progress line at most every migrationProgressInterval.

@@ -546,6 +546,45 @@ func TestMigrationReplay(t *testing.T) {
 		require.NotEmpty(t, env.logs.matching("info", "analytics migration: completed"))
 	})
 
+	t.Run("Rollback after the migration", func(t *testing.T) {
+		data := recordedData(t)
+		env := newMigrationEnv(t, client, "migration_rollback", &data)
+		env.run()
+		require.Equal(t, migrationCompleted, env.state().State)
+
+		// Dropping the time-series track_stats drops its system.buckets collection and view.
+		userCollections := bson.D{{Key: "name", Value: bson.D{{Key: "$not", Value: bson.Regex{Pattern: `^system\.`}}}}}
+		names, err := env.db.ListCollectionNames(ctx, userCollections)
+		require.NoError(t, err)
+		require.Contains(t, names, schema.CollectionSchemaMeta)
+		for _, name := range names {
+			if name != LegacyEventsCollection && name != legacyStatsCollection {
+				require.NoError(t, env.db.Collection(name).Drop(ctx), name)
+			}
+		}
+		require.NoError(t, env.db.Client().Database("admin").RunCommand(ctx, bson.D{
+			{Key: "renameCollection", Value: env.db.Name() + "." + LegacyEventsCollection},
+			{Key: "to", Value: env.db.Name() + "." + schema.CollectionEvents},
+		}).Err())
+
+		names, err = env.db.ListCollectionNames(ctx, userCollections)
+		require.NoError(t, err)
+		require.ElementsMatch(t, []string{schema.CollectionEvents, legacyStatsCollection}, names)
+		for collection, seeded := range map[string][]bson.Raw{schema.CollectionEvents: data.events, legacyStatsCollection: data.stats} {
+			var expected []any
+			for _, raw := range seeded {
+				var id any
+				require.NoError(t, raw.Lookup("_id").Unmarshal(&id))
+				expected = append(expected, id)
+			}
+			var actual []any
+			require.NoError(t, env.db.Collection(collection).Distinct(ctx, "_id", bson.D{}).Decode(&actual))
+			require.ElementsMatch(t, expected, actual, collection)
+		}
+		requireLegacyIndexes(t, env.db, schema.CollectionEvents, "timestamp.seconds_1")
+		requireLegacyIndexes(t, env.db, legacyStatsCollection, "time_stamp.seconds_1")
+	})
+
 	t.Run("Migrated legacy session", func(t *testing.T) {
 		data := recordedData(t)
 		joinedWithAddress := 0
@@ -803,4 +842,345 @@ type unavailableStore struct {
 
 func (s *unavailableStore) ApplyUpdates(context.Context, []projection.Update) error {
 	return mongo.CommandError{Code: 91, Message: "shutdown in progress", Labels: []string{"RetryableWriteError"}}
+}
+
+// requireLegacyIndexes asserts that a legacy collection keeps its timestamp index and its TTL index on
+// openvidu_expire_at.
+func requireLegacyIndexes(t *testing.T, db *mongo.Database, collection string, timestampIndex string) {
+	t.Helper()
+	indexes, err := db.Collection(collection).Indexes().ListSpecifications(context.Background())
+	require.NoError(t, err)
+	byName := map[string]mongo.IndexSpecification{}
+	for _, index := range indexes {
+		byName[index.Name] = index
+	}
+	require.Contains(t, byName, timestampIndex, collection)
+	require.Contains(t, byName, "openvidu_expire_at_1", collection)
+	ttl := byName["openvidu_expire_at_1"].ExpireAfterSeconds
+	require.NotNil(t, ttl, collection)
+	require.Zero(t, *ttl, collection)
+}
+
+// retentionClock is the settable time of a legacyRetention, counting the checks that read it.
+type retentionClock struct {
+	mu    sync.Mutex
+	at    time.Time
+	reads int
+}
+
+func (c *retentionClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.reads++
+	return c.at
+}
+
+func (c *retentionClock) set(at time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.at = at
+}
+
+func (c *retentionClock) checks() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.reads
+}
+
+// retentionEnv is a v2 database with the legacy collections a migration left, as the server finds it at startup.
+type retentionEnv struct {
+	t     *testing.T
+	db    *mongo.Database
+	logs  *capturedLog
+	clock *retentionClock
+}
+
+// legacyExpiries are the openvidu_expire_at of the documents of each legacy collection; nil leaves the collections
+// out, empty ones create them without documents.
+type legacyExpiries struct {
+	events []time.Time
+	stats  []time.Time
+}
+
+// newRetentionEnv seeds the legacy collections with their indexes, initializes the v2 collections and records
+// migration, when given, in schema_meta.
+func newRetentionEnv(t *testing.T, client *mongo.Client, name string, legacy *legacyExpiries,
+	migration *schema.SchemaMetaMigration) *retentionEnv {
+	t.Helper()
+	ctx := context.Background()
+	db := client.Database(name)
+	require.NoError(t, db.Drop(ctx))
+	t.Cleanup(func() { _ = db.Drop(context.Background()) })
+	if legacy != nil {
+		seedLegacyExpiries(t, db, LegacyEventsCollection, "timestamp", legacy.events)
+		seedLegacyExpiries(t, db, legacyStatsCollection, "time_stamp", legacy.stats)
+	}
+	settings := testSettings(t, func(c *openviduconfig.AnalyticsConfig) { c.ValidationAction = "error" })
+	_, err := initialize(ctx, db, settings, Node{ID: "ND_retention"})
+	require.NoError(t, err)
+	if migration != nil {
+		migration.ID = schema.SchemaMetaMigrationID
+		_, err := db.Collection(schema.CollectionSchemaMeta).ReplaceOne(ctx,
+			bson.D{{Key: "_id", Value: schema.SchemaMetaMigrationID}}, migration, options.Replace().SetUpsert(true))
+		require.NoError(t, err)
+	}
+	return &retentionEnv{t: t, db: db, logs: &capturedLog{},
+		clock: &retentionClock{at: time.Now().UTC().Truncate(time.Millisecond)}}
+}
+
+// seedLegacyExpiries creates a legacy collection with the indexes of the legacy writer and one document per expiry.
+func seedLegacyExpiries(t *testing.T, db *mongo.Database, collection string, timestampKey string, expiries []time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	require.NoError(t, db.CreateCollection(ctx, collection))
+	_, err := db.Collection(collection).Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{Keys: bson.D{{Key: timestampKey + ".seconds", Value: 1}}},
+		{Keys: bson.D{{Key: "openvidu_expire_at", Value: 1}}, Options: options.Index().SetExpireAfterSeconds(0)},
+	})
+	require.NoError(t, err)
+	for i, expireAt := range expiries {
+		written := expireAt.Add(-32 * 24 * time.Hour)
+		_, err := db.Collection(collection).InsertOne(ctx, bson.D{
+			{Key: "_id", Value: fmt.Sprintf("%s-%d", collection, i)},
+			{Key: "type", Value: "ROOM_CREATED"},
+			{Key: timestampKey, Value: bson.D{{Key: "seconds", Value: float64(written.Unix())}, {Key: "nanos", Value: float64(0)}}},
+			{Key: "openvidu_expire_at", Value: expireAt},
+		})
+		require.NoError(t, err)
+	}
+}
+
+// completedMigration is the migration document of a migration that completed an hour before now.
+func completedMigration(now time.Time, retainedUntil *time.Time) *schema.SchemaMetaMigration {
+	started, finished := now.Add(-2*time.Hour), now.Add(-time.Hour)
+	return &schema.SchemaMetaMigration{State: migrationCompleted, Checkpoint: &schema.MigrationPoint{Phase: phaseCleanup},
+		StartedAt: &started, FinishedAt: &finished, WriterVersion: "3.10.0-test", NodeID: "ND_migrator",
+		LegacyRetainedUntil: retainedUntil}
+}
+
+func (e *retentionEnv) retention() *legacyRetention {
+	r := newLegacyRetention(e.db)
+	r.log = e.logs.sink()
+	r.now = e.clock.now
+	r.interval = 10 * time.Millisecond
+	return r
+}
+
+// startupTask builds the retention task as InitializeAnalytics does, with the test log, clock and interval.
+func (e *retentionEnv) startupTask() *legacyRetentionTask {
+	e.t.Helper()
+	runner, err := newLegacyRetentionTask(context.Background(), e.db)
+	require.NoError(e.t, err)
+	if runner != nil {
+		runner.retention.log = e.logs.sink()
+		runner.retention.now = e.clock.now
+		runner.retention.interval = 10 * time.Millisecond
+	}
+	return runner
+}
+
+// runUntilDone runs a started task until its loop returns.
+func (e *retentionEnv) runUntilDone(runner *legacyRetentionTask) {
+	e.t.Helper()
+	runner.start()
+	select {
+	case <-runner.done:
+	case <-time.After(30 * time.Second):
+		e.t.Fatal("the legacy retention loop did not finish")
+	}
+	runner.stop(context.Background())
+}
+
+func (e *retentionEnv) legacyNames() []string {
+	e.t.Helper()
+	names, err := retainedLegacyCollections(context.Background(), e.db)
+	require.NoError(e.t, err)
+	return names
+}
+
+func (e *retentionEnv) migrationDocument() bson.M {
+	e.t.Helper()
+	var document bson.M
+	require.NoError(e.t, e.db.Collection(schema.CollectionSchemaMeta).FindOne(context.Background(),
+		bson.D{{Key: "_id", Value: schema.SchemaMetaMigrationID}}).Decode(&document))
+	return document
+}
+
+func (e *retentionEnv) count(collection string) int64 {
+	e.t.Helper()
+	n, err := e.db.Collection(collection).CountDocuments(context.Background(), bson.D{})
+	require.NoError(e.t, err)
+	return n
+}
+
+func TestLegacyRetention(t *testing.T) {
+	client := mongotest.StartMongo(t)
+	ctx := context.Background()
+	// Real time, so that the TTL monitor of the test server deletes no document a test expects.
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	ptr := func(at time.Time) *time.Time { return &at }
+
+	t.Run("Rollback window ended", func(t *testing.T) {
+		env := newRetentionEnv(t, client, "retention_ended", &legacyExpiries{events: []time.Time{}, stats: []time.Time{}},
+			completedMigration(now, ptr(now.Add(-24*time.Hour))))
+		before := env.migrationDocument()
+		runner := env.startupTask()
+		require.NotNil(t, runner)
+		env.runUntilDone(runner)
+
+		require.Empty(t, env.legacyNames())
+		require.Equal(t, before, env.migrationDocument())
+		dropped := env.logs.matching("info", "analytics: legacy data dropped after its rollback window")
+		require.Len(t, dropped, 1)
+		require.Contains(t, dropped[0], LegacyEventsCollection)
+		require.Contains(t, dropped[0], legacyStatsCollection)
+		require.Empty(t, env.logs.matching("warn", ""))
+	})
+
+	t.Run("Rollback window ends while running", func(t *testing.T) {
+		until := now.Add(30 * time.Minute)
+		env := newRetentionEnv(t, client, "retention_while_running",
+			&legacyExpiries{events: []time.Time{until.Add(-time.Minute)}, stats: []time.Time{until}},
+			completedMigration(now, ptr(until)))
+		runner := env.startupTask()
+		require.NotNil(t, runner)
+		runner.start()
+		defer runner.stop(context.Background())
+		require.Eventually(t, func() bool { return env.clock.checks() >= 2 }, 10*time.Second, 5*time.Millisecond)
+		require.ElementsMatch(t, []string{LegacyEventsCollection, legacyStatsCollection}, env.legacyNames(),
+			"kept while the window is open")
+
+		env.clock.set(until.Add(time.Minute))
+		select {
+		case <-runner.done:
+		case <-time.After(30 * time.Second):
+			t.Fatal("the legacy retention loop did not drop the collections")
+		}
+		require.Empty(t, env.legacyNames())
+		require.Len(t, env.logs.matching("info", "analytics: legacy data dropped after its rollback window"), 1)
+	})
+
+	t.Run("Rollback window still open", func(t *testing.T) {
+		until := now.Add(24 * time.Hour)
+		env := newRetentionEnv(t, client, "retention_open",
+			&legacyExpiries{events: []time.Time{now.Add(time.Hour), until.Add(-time.Hour)}, stats: []time.Time{now.Add(2 * time.Hour), until}},
+			completedMigration(now, ptr(until)))
+		runner := env.startupTask()
+		require.NotNil(t, runner)
+		runner.start()
+		require.Eventually(t, func() bool { return env.clock.checks() >= 5 }, 10*time.Second, 5*time.Millisecond)
+		runner.stop(context.Background())
+
+		require.EqualValues(t, 2, env.count(LegacyEventsCollection))
+		require.EqualValues(t, 2, env.count(legacyStatsCollection))
+		requireLegacyIndexes(t, env.db, LegacyEventsCollection, "timestamp.seconds_1")
+		requireLegacyIndexes(t, env.db, legacyStatsCollection, "time_stamp.seconds_1")
+		kept := env.logs.matching("info", "analytics: legacy data kept for rollback until")
+		require.Len(t, kept, 1)
+		require.Contains(t, kept[0], until.Format(time.RFC3339))
+		require.Empty(t, env.logs.matching("info", "dropped"))
+	})
+
+	t.Run("Unfinished migration keeps legacy data", func(t *testing.T) {
+		data := legacyData{events: recordedLegacy(t, "events")[:40], stats: recordedLegacy(t, "stats")[:20]}
+		migration := newMigrationEnv(t, client, "retention_unfinished", &data, func(c *openviduconfig.AnalyticsConfig) {
+			disabled := false
+			c.Migration.Enabled = &disabled
+		})
+		migration.run()
+		require.Equal(t, migrationPending, migration.state().State)
+
+		env := &retentionEnv{t: t, db: migration.db, logs: &capturedLog{},
+			clock: &retentionClock{at: legacyExpireAt.Add(24 * time.Hour)}}
+		runner := env.startupTask()
+		require.NotNil(t, runner)
+		r := runner.retention
+		for range 3 {
+			done, err := r.check(ctx)
+			require.NoError(t, err)
+			require.False(t, done)
+		}
+		require.EqualValues(t, len(data.events), env.count(LegacyEventsCollection))
+		require.EqualValues(t, len(data.stats), env.count(legacyStatsCollection))
+		require.Equal(t, migrationPending, migration.state().State)
+	})
+
+	t.Run("Stats collection without a migration", func(t *testing.T) {
+		env := newRetentionEnv(t, client, "retention_no_migration", nil, nil)
+		require.Nil(t, env.startupTask(), "no retention task without legacy collections")
+
+		_, err := env.db.Collection(legacyStatsCollection).InsertOne(ctx, bson.D{{Key: "_id", Value: "not-legacy"}})
+		require.NoError(t, err)
+		env.clock.set(now.Add(2 * time.Hour))
+		done, err := env.retention().check(ctx)
+		require.NoError(t, err)
+		require.True(t, done)
+		require.Equal(t, []string{legacyStatsCollection}, env.legacyNames())
+		require.EqualValues(t, 1, env.count(legacyStatsCollection))
+	})
+
+	t.Run("Legacy documents newer than the date", func(t *testing.T) {
+		later := now.Add(3 * 24 * time.Hour)
+		env := newRetentionEnv(t, client, "retention_newer",
+			&legacyExpiries{events: []time.Time{}, stats: []time.Time{later}},
+			completedMigration(now, ptr(now.Add(-24*time.Hour))))
+		r := env.retention()
+		done, err := r.check(ctx)
+		require.NoError(t, err)
+		require.False(t, done)
+
+		require.ElementsMatch(t, []string{LegacyEventsCollection, legacyStatsCollection}, env.legacyNames())
+		require.EqualValues(t, 1, env.count(legacyStatsCollection))
+		var state schema.SchemaMetaMigration
+		require.NoError(t, env.db.Collection(schema.CollectionSchemaMeta).FindOne(ctx,
+			bson.D{{Key: "_id", Value: schema.SchemaMetaMigrationID}}).Decode(&state))
+		require.NotNil(t, state.LegacyRetainedUntil)
+		require.True(t, later.Equal(*state.LegacyRetainedUntil), "%v", state.LegacyRetainedUntil)
+		require.Equal(t, migrationCompleted, state.State)
+		kept := env.logs.matching("info", "analytics: legacy data kept for rollback until")
+		require.Len(t, kept, 1)
+		require.Contains(t, kept[0], later.Format(time.RFC3339))
+
+		done, err = r.check(ctx)
+		require.NoError(t, err)
+		require.False(t, done, "kept until the new date")
+		require.Len(t, env.logs.matching("info", "analytics: legacy data kept for rollback until"), 1)
+	})
+
+	t.Run("Completed without a retention date", func(t *testing.T) {
+		env := newRetentionEnv(t, client, "retention_no_date", &legacyExpiries{events: []time.Time{}, stats: []time.Time{}},
+			completedMigration(now, nil))
+		runner := env.startupTask()
+		require.NotNil(t, runner)
+		done, err := runner.retention.check(ctx)
+		require.NoError(t, err)
+		require.True(t, done)
+		require.Empty(t, env.legacyNames())
+	})
+
+	t.Run("Nodes dropping together", func(t *testing.T) {
+		env := newRetentionEnv(t, client, "retention_two_nodes", &legacyExpiries{events: []time.Time{}, stats: []time.Time{}},
+			completedMigration(now, ptr(now.Add(-time.Hour))))
+		nodes := []*legacyRetention{env.retention(), env.retention()}
+		start := make(chan struct{})
+		results := make([]error, len(nodes))
+		finished := make([]bool, len(nodes))
+		var wg sync.WaitGroup
+		for i, node := range nodes {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				finished[i], results[i] = node.check(ctx)
+			}()
+		}
+		close(start)
+		wg.Wait()
+		for i := range nodes {
+			require.NoError(t, results[i], "node %d", i)
+			require.True(t, finished[i], "node %d", i)
+		}
+		require.Empty(t, env.legacyNames())
+		require.Empty(t, env.logs.matching("warn", ""))
+	})
 }

@@ -102,8 +102,14 @@ first start of the new version renames `events` to `legacy_events`, records `sch
   every batch); the other nodes retry every minute, so a node takes over when the runner dies.
 - Phases: `events` (legacy events replayed through the same projections as live events, in timestamp order),
   `stats` (legacy stats through the stats pipeline), `reconcile` (the reconciler runs until nothing is left to
-  close) and `cleanup` (`active_entities` and `last_alive` dropped). `legacy_events` and `stats` are never deleted:
-  they expire by their own TTL, recorded as `legacyRetainedUntil`.
+  close) and `cleanup` (`active_entities` and `last_alive` dropped, and the latest `openvidu_expire_at` of
+  `legacy_events` and `stats` recorded as `legacyRetainedUntil`).
+- `legacy_events` and `stats` are kept, expiring by their own TTL, until `legacyRetainedUntil`. Every node checks at
+  startup and then every hour; once the migration has completed and that date has passed (or none was recorded), it
+  drops both collections, which frees their disk space. Before dropping, a legacy document that expires later (written
+  by a node of a previous version) moves `legacyRetainedUntil` to its expiry instead. A `stats` collection is dropped
+  only with a completed `migration` document. The date is logged at startup while the data is kept, and a node that
+  drops logs the collections.
 - Raw events keep the LiveKit `id` of the legacy event (`AE_LEG_<legacy _id>` when it had none). The close events
   the legacy fixer inserted are not replayed as events: their entity is closed by the reconciler at the fixer's
   time (`closedBy: reconciler`, `RECONCILED`); an authentic close event overrides it.
@@ -116,8 +122,8 @@ first start of the new version renames `events` to `legacy_events`, records `sch
   heartbeat in `nodes`: they are legacy entities the replay closes later.
 - Progress is logged every 30 s (processed, total, documents per second, ETA) and on every phase.
 
-Rollback: stop the new server, rename `legacy_events` back to `events`, drop the v2 collections and start the
-previous version.
+Rollback, until `legacyRetainedUntil`: stop the new server, rename `legacy_events` back to `events`, drop the v2
+collections and start the previous version. After that date the legacy collections are gone.
 
 ## Reconciler
 
