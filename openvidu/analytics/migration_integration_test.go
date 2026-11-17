@@ -1029,6 +1029,7 @@ func TestLegacyRetention(t *testing.T) {
 		env.runUntilDone(runner)
 
 		require.Empty(t, env.legacyNames())
+		require.Nil(t, env.startupTask(), "no retention task on a restart after the drop")
 		require.Equal(t, before, env.migrationDocument())
 		dropped := env.logs.matching("info", "analytics: legacy data dropped after its rollback window")
 		require.Len(t, dropped, 1)

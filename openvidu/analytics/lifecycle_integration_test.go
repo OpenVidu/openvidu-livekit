@@ -239,6 +239,41 @@ func TestWriterLifecycle(t *testing.T) {
 		require.NotNil(t, node.StoppedAt, "the stop is recorded after the final batch")
 	})
 
+	t.Run("Rollback window ended: the server drops the legacy data after Start", func(t *testing.T) {
+		name := "lifecycle_legacy_retention"
+		db := client.Database(name)
+		require.NoError(t, db.Drop(ctx))
+		t.Cleanup(func() { _ = db.Drop(context.Background()) })
+		seedLegacyExpiries(t, db, LegacyEventsCollection, "timestamp", []time.Time{})
+		seedLegacyExpiries(t, db, legacyStatsCollection, "time_stamp", []time.Time{})
+		now := time.Now().UTC().Truncate(time.Millisecond)
+		migration := completedMigration(now, func() *time.Time { at := now.Add(-24 * time.Hour); return &at }())
+		migration.ID = schema.SchemaMetaMigrationID
+		_, err := db.Collection(schema.CollectionSchemaMeta).InsertOne(ctx, migration)
+		require.NoError(t, err)
+
+		conf := &config.Config{}
+		conf.OpenVidu.Analytics = openviduconfig.AnalyticsConfig{
+			Enabled: true, MongoUrl: uri, Database: name, Interval: "60s", ValidationAction: "error",
+		}
+		require.NoError(t, InitializeAnalytics(conf, Node{ID: testNode}, nil))
+		t.Cleanup(func() {
+			mu.Lock()
+			instance, retentions = nil, nil
+			mu.Unlock()
+		})
+		go Start()
+
+		require.Eventually(t, func() bool {
+			names, err := retainedLegacyCollections(ctx, db)
+			return err == nil && len(names) == 0
+		}, 30*time.Second, 50*time.Millisecond, "legacy_events and stats are dropped")
+
+		stopCtx, cancel := context.WithTimeout(ctx, ShutdownTimeout)
+		defer cancel()
+		Stop(stopCtx)
+	})
+
 	t.Run("legacy events collection is renamed once", func(t *testing.T) {
 		db := legacyDatabase(t, client, "lifecycle_legacy")
 		settings := testSettings(t, func(c *openviduconfig.AnalyticsConfig) { c.ValidationAction = "error" })
