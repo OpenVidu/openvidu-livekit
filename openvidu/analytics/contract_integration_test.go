@@ -402,6 +402,7 @@ type scPerson struct {
 	joined              time.Time
 	permission          *livekit.ParticipantPermission
 	client              *livekit.ClientInfo
+	attributes          map[string]string
 }
 
 var (
@@ -417,6 +418,7 @@ func (p scPerson) info(state livekit.ParticipantInfo_State) *livekit.Participant
 	return &livekit.ParticipantInfo{
 		Sid: p.sid, Identity: p.identity, Name: p.name, Kind: p.kind, State: state,
 		JoinedAt: p.joined.Unix(), JoinedAtMs: p.joined.UnixMilli(), Permission: p.permission, Region: scRegion,
+		Attributes: p.attributes,
 	}
 }
 
@@ -511,7 +513,8 @@ func scenarioEvents() []*livekit.AnalyticsEvent {
 		joined: sat("09:02:00"), permission: scRecorderPermission, client: scGoClient}
 	agent := scPerson{sid: scAgent, identity: "agent-assistant", name: "Assistant", kind: livekit.ParticipantInfo_AGENT,
 		room: scClosedRoom, joined: sat("09:00:10"), permission: scStandardPermission,
-		client: &livekit.ClientInfo{Sdk: livekit.ClientInfo_PYTHON, Version: "1.2.0", Os: "linux"}}
+		client:     &livekit.ClientInfo{Sdk: livekit.ClientInfo_PYTHON, Version: "1.2.0", Os: "linux"},
+		attributes: map[string]string{"lk.agent_name": "speech-processing", "openvidu.agent": "speech-processing"}}
 	sip := scPerson{sid: scSIP, identity: "sip-caller-1", name: "Caller", kind: livekit.ParticipantInfo_SIP,
 		room: scClosedRoom, joined: sat("09:20:00"), permission: scStandardPermission}
 	dave := scPerson{sid: scDave, identity: "dave", name: "Dave", room: scActiveRoom, joined: sat("10:00:03"),
