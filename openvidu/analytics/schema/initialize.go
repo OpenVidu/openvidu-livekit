@@ -53,6 +53,9 @@ type InitResult struct {
 	UpdatedTTLs        []string
 	// DroppedIndexes are the TTL indexes of a retention class configured to keep its documents forever.
 	DroppedIndexes []string
+	// UpgradedDocuments counts the documents matched by the updates that removed the fields of an older contract
+	// version; a document matched by two updates counts twice.
+	UpgradedDocuments int64
 }
 
 type collectionInfo struct {
@@ -100,8 +103,8 @@ func classifyPipelineProbe(plain error, pipeline error) error {
 }
 
 // Initialize creates or updates the collections, validators, indexes and TTL values of the contract and writes the
-// schema, retention, capabilities and config documents of schema_meta. It is idempotent: a second run with the same
-// options changes nothing but the schema_meta timestamps.
+// schema, retention, capabilities and config documents of schema_meta; a schema version recorded by a newer writer is
+// left as it is. It is idempotent: a second run with the same options changes nothing but the schema_meta timestamps.
 func Initialize(ctx context.Context, db *mongo.Database, opts InitOptions) (*InitResult, error) {
 	if err := opts.validate(); err != nil {
 		return nil, err
@@ -147,9 +150,11 @@ func Initialize(ctx context.Context, db *mongo.Database, opts InitOptions) (*Ini
 		}
 	}
 
-	if err := upgradeDocuments(ctx, db); err != nil {
+	upgraded, err := upgradeDocuments(ctx, db)
+	if err != nil {
 		return nil, err
 	}
+	result.UpgradedDocuments = upgraded
 
 	if err := writeSchemaMeta(ctx, db, opts, result, now().UTC()); err != nil {
 		return nil, fmt.Errorf("schema_meta: %w", err)
@@ -540,8 +545,16 @@ func writeSchemaMeta(ctx context.Context, db *mongo.Database, opts InitOptions, 
 
 	collection := db.Collection(CollectionSchemaMeta)
 	for i, document := range documents {
-		if _, err := collection.ReplaceOne(ctx, bson.D{{Key: "_id", Value: ids[i]}}, document,
-			options.Replace().SetUpsert(true)); err != nil {
+		filter := bson.D{{Key: "_id", Value: ids[i]}}
+		if ids[i] == SchemaMetaSchemaID {
+			// A newer writer's version is never lowered: the filter then misses, and the upsert collides with its _id.
+			filter = append(filter, bson.E{Key: "version", Value: bson.D{{Key: "$not", Value: bson.D{{Key: "$gt", Value: SchemaVersion}}}}})
+		}
+		_, err := collection.ReplaceOne(ctx, filter, document, options.Replace().SetUpsert(true))
+		if ids[i] == SchemaMetaSchemaID && mongo.IsDuplicateKeyError(err) {
+			continue
+		}
+		if err != nil {
 			return fmt.Errorf("%s: %w", ids[i], err)
 		}
 	}

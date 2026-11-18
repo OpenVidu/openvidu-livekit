@@ -357,6 +357,7 @@ func logInitialization(result *schema.InitResult, settings openviduconfig.Analyt
 		"createdIndexes", len(result.CreatedIndexes),
 		"updatedTTLs", result.UpdatedTTLs,
 		"droppedIndexes", result.DroppedIndexes,
+		"upgradedDocuments", result.UpgradedDocuments,
 		"statsDetail", settings.StatsDetail,
 	}
 	if result.TimeseriesError != nil {

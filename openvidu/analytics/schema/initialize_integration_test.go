@@ -111,6 +111,62 @@ func contractIndexNames(found map[string]indexInfo, expected []string) []string 
 	return names
 }
 
+// seedTracksWithFrames initializes db, records version in schema_meta and inserts the track fixtures with what a
+// version 1 writer left: a frame count in each layer of a publication, both in publishStats and in the per-layer stats
+// it is derived from.
+func seedTracksWithFrames(t *testing.T, db *mongo.Database, version int32) {
+	ctx := context.Background()
+	_, err := schema.Initialize(ctx, db, testOptions())
+	require.NoError(t, err)
+	setSchemaVersion(t, db, version)
+
+	tracks := db.Collection(schema.CollectionTracks)
+	fixtures, err := schema.Fixtures(schema.CollectionTracks)
+	require.NoError(t, err)
+	for _, fixture := range fixtures {
+		_, err = tracks.InsertOne(ctx, fixture)
+		require.NoError(t, err)
+	}
+	layered := bson.D{{Key: "publishStats.layers.0", Value: bson.D{{Key: "$exists", Value: true}}}}
+	bypass := options.UpdateMany().SetBypassDocumentValidation(true)
+	_, err = tracks.UpdateMany(ctx, layered,
+		bson.D{{Key: "$set", Value: bson.D{{Key: "publishStats.layers.$[].frames", Value: int32(900)}}}}, bypass)
+	require.NoError(t, err)
+	perLayer := bson.D{{Key: "$map", Value: bson.D{
+		{Key: "input", Value: "$publishStats.layers"},
+		{Key: "as", Value: "layer"},
+		{Key: "in", Value: bson.D{{Key: "k", Value: bson.D{{Key: "$toString", Value: "$$layer.layer"}}}, {Key: "v", Value: "$$layer"}}},
+	}}}
+	setInternal := bson.D{{Key: "$set", Value: bson.D{
+		{Key: "internal.publishStats", Value: bson.D{{Key: "$arrayToObject", Value: perLayer}}},
+	}}}
+	_, err = tracks.UpdateMany(ctx, layered, mongo.Pipeline{setInternal}, bypass)
+	require.NoError(t, err)
+}
+
+func setSchemaVersion(t *testing.T, db *mongo.Database, version int32) {
+	_, err := db.Collection(schema.CollectionSchemaMeta).UpdateOne(context.Background(),
+		bson.D{{Key: "_id", Value: schema.SchemaMetaSchemaID}},
+		bson.D{{Key: "$set", Value: bson.D{{Key: "version", Value: version}}}})
+	require.NoError(t, err)
+}
+
+func recordedSchema(t *testing.T, db *mongo.Database) schema.SchemaMetaSchema {
+	var recorded schema.SchemaMetaSchema
+	require.NoError(t, db.Collection(schema.CollectionSchemaMeta).FindOne(context.Background(),
+		bson.D{{Key: "_id", Value: schema.SchemaMetaSchemaID}}).Decode(&recorded))
+	return recorded
+}
+
+// countWith returns a counter of the documents of collection that have a field.
+func countWith(t *testing.T, collection *mongo.Collection) func(field string) int64 {
+	return func(field string) int64 {
+		n, err := collection.CountDocuments(context.Background(), bson.D{{Key: field, Value: bson.D{{Key: "$exists", Value: true}}}})
+		require.NoError(t, err)
+		return n
+	}
+}
+
 func TestInitialize(t *testing.T) {
 	client := testutil.StartMongo(t)
 	ctx := context.Background()
@@ -219,44 +275,12 @@ func TestInitialize(t *testing.T) {
 
 	t.Run("Upgrade from schema version 1", func(t *testing.T) {
 		db := client.Database("init_upgrade_v1")
-		_, err := schema.Initialize(ctx, db, testOptions())
-		require.NoError(t, err)
-
-		// What a version 1 writer left: its version in schema_meta, and a frame count in each layer of a publication,
-		// both in publishStats and in the per-layer stats it is derived from.
-		_, err = db.Collection(schema.CollectionSchemaMeta).UpdateOne(ctx,
-			bson.D{{Key: "_id", Value: schema.SchemaMetaSchemaID}},
-			bson.D{{Key: "$set", Value: bson.D{{Key: "version", Value: int32(1)}}}})
-		require.NoError(t, err)
+		seedTracksWithFrames(t, db, 1)
 		tracks := db.Collection(schema.CollectionTracks)
-		fixtures, err := schema.Fixtures(schema.CollectionTracks)
-		require.NoError(t, err)
-		for _, fixture := range fixtures {
-			_, err = tracks.InsertOne(ctx, fixture)
-			require.NoError(t, err)
-		}
+		count := countWith(t, tracks)
 		layered := bson.D{{Key: "publishStats.layers.0", Value: bson.D{{Key: "$exists", Value: true}}}}
-		bypass := options.UpdateMany().SetBypassDocumentValidation(true)
-		_, err = tracks.UpdateMany(ctx, layered,
-			bson.D{{Key: "$set", Value: bson.D{{Key: "publishStats.layers.$[].frames", Value: int32(900)}}}}, bypass)
-		require.NoError(t, err)
-		perLayer := bson.D{{Key: "$map", Value: bson.D{
-			{Key: "input", Value: "$publishStats.layers"},
-			{Key: "as", Value: "layer"},
-			{Key: "in", Value: bson.D{{Key: "k", Value: bson.D{{Key: "$toString", Value: "$$layer.layer"}}}, {Key: "v", Value: "$$layer"}}},
-		}}}
-		setInternal := bson.D{{Key: "$set", Value: bson.D{
-			{Key: "internal.publishStats", Value: bson.D{{Key: "$arrayToObject", Value: perLayer}}},
-		}}}
-		_, err = tracks.UpdateMany(ctx, layered, mongo.Pipeline{setInternal}, bypass)
-		require.NoError(t, err)
-		count := func(field string) int64 {
-			n, err := tracks.CountDocuments(ctx, bson.D{{Key: field, Value: bson.D{{Key: "$exists", Value: true}}}})
-			require.NoError(t, err)
-			return n
-		}
 		// A layer that is not a document is left as it is.
-		_, err = tracks.UpdateOne(ctx, layered,
+		_, err := tracks.UpdateOne(ctx, layered,
 			bson.D{{Key: "$set", Value: bson.D{{Key: "internal.publishStats.9", Value: "not a layer"}}}}, options.UpdateOne().SetBypassDocumentValidation(true))
 		require.NoError(t, err)
 		require.NotZero(t, count("publishStats.layers.frames"))
@@ -281,6 +305,76 @@ func TestInitialize(t *testing.T) {
 		require.NoError(t, db.Collection(schema.CollectionSchemaMeta).FindOne(ctx,
 			bson.D{{Key: "_id", Value: schema.SchemaMetaSchemaID}}).Decode(&recorded))
 		require.EqualValues(t, 2, recorded.Version)
+	})
+
+	t.Run("Upgrade from schema version 1: several nodes at once", func(t *testing.T) {
+		db := client.Database("init_upgrade_v1_nodes")
+		seedTracksWithFrames(t, db, 1)
+
+		errs := make([]error, 3)
+		var nodes sync.WaitGroup
+		for i := range errs {
+			nodes.Add(1)
+			go func() {
+				defer nodes.Done()
+				_, errs[i] = schema.Initialize(ctx, db, testOptions())
+			}()
+		}
+		nodes.Wait()
+		for _, err := range errs {
+			require.NoError(t, err)
+		}
+
+		count := countWith(t, db.Collection(schema.CollectionTracks))
+		require.Zero(t, count("publishStats.layers.frames"))
+		require.Zero(t, count("internal.publishStats.0.frames"))
+		require.EqualValues(t, 2, recordedSchema(t, db).Version)
+	})
+
+	t.Run("Upgrade from schema version 1: a database at version 2 is left untouched", func(t *testing.T) {
+		db := client.Database("init_upgrade_v2")
+		seedTracksWithFrames(t, db, 2)
+		count := countWith(t, db.Collection(schema.CollectionTracks))
+		published, internal := count("publishStats.layers.frames"), count("internal.publishStats.0.frames")
+		require.NotZero(t, published)
+		require.NotZero(t, internal)
+
+		result, err := schema.Initialize(ctx, db, testOptions())
+		require.NoError(t, err)
+		require.Zero(t, result.UpgradedDocuments)
+		require.Equal(t, published, count("publishStats.layers.frames"), "no document rewritten")
+		require.Equal(t, internal, count("internal.publishStats.0.frames"), "no document rewritten")
+	})
+
+	t.Run("Upgrade from schema version 1: a repeated run rewrites nothing", func(t *testing.T) {
+		db := client.Database("init_upgrade_v1_repeated")
+		seedTracksWithFrames(t, db, 1)
+		first, err := schema.Initialize(ctx, db, testOptions())
+		require.NoError(t, err)
+		require.NotZero(t, first.UpgradedDocuments)
+
+		// A run stopped after the upgrade and before recording version 2 leaves version 1 for the next one.
+		setSchemaVersion(t, db, 1)
+		second, err := schema.Initialize(ctx, db, testOptions())
+		require.NoError(t, err)
+		require.Zero(t, second.UpgradedDocuments)
+		require.EqualValues(t, 2, recordedSchema(t, db).Version)
+	})
+
+	t.Run("Upgrade from schema version 1: a higher recorded version is not lowered", func(t *testing.T) {
+		db := client.Database("init_newer_version")
+		_, err := schema.Initialize(ctx, db, testOptions())
+		require.NoError(t, err)
+		_, err = db.Collection(schema.CollectionSchemaMeta).UpdateOne(ctx,
+			bson.D{{Key: "_id", Value: schema.SchemaMetaSchemaID}},
+			bson.D{{Key: "$set", Value: bson.D{{Key: "version", Value: int32(schema.SchemaVersion + 1)}, {Key: "writerVersion", Value: "newer"}}}})
+		require.NoError(t, err)
+
+		_, err = schema.Initialize(ctx, db, testOptions())
+		require.NoError(t, err)
+		recorded := recordedSchema(t, db)
+		require.EqualValues(t, schema.SchemaVersion+1, recorded.Version)
+		require.Equal(t, "newer", recorded.WriterVersion)
 	})
 
 	t.Run("second run changes nothing", func(t *testing.T) {
