@@ -51,7 +51,8 @@ type InitResult struct {
 	CreatedCollections []string
 	CreatedIndexes     []string
 	UpdatedTTLs        []string
-	// DroppedIndexes are the TTL indexes of a retention class configured to keep its documents forever.
+	// DroppedIndexes are the TTL indexes of a retention class configured to keep its documents forever and the
+	// retired indexes of an earlier contract.
 	DroppedIndexes []string
 	// UpgradedDocuments counts the documents matched by the updates that removed the fields of an older contract
 	// version; a document matched by two updates counts twice.
@@ -148,6 +149,9 @@ func Initialize(ctx context.Context, db *mongo.Database, opts InitOptions) (*Ini
 			result.Timeseries, result); err != nil {
 			return nil, fmt.Errorf("indexes of %s: %w", definition.Name, err)
 		}
+	}
+	if err := dropRetiredIndexes(ctx, db, result); err != nil {
+		return nil, err
 	}
 
 	upgraded, err := upgradeDocuments(ctx, db)

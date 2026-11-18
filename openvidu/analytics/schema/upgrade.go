@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -92,4 +93,32 @@ func removeTrackFrames(ctx context.Context, tracks *mongo.Collection) (int64, er
 		return published.MatchedCount, fmt.Errorf("internal.publishStats: %w", err)
 	}
 	return published.MatchedCount + internal.MatchedCount, nil
+}
+
+// retiredIndexes are the indexes, by collection, that an earlier contract defined and this one does not.
+var retiredIndexes = []struct{ collection, name string }{
+	{CollectionRooms, "status_endedAt_id"},
+}
+
+// dropRetiredIndexes drops the retired indexes that exist, whatever schema version is recorded, and leaves any other
+// index outside the contract in place. A drop that another node made first counts as done but is not reported.
+func dropRetiredIndexes(ctx context.Context, db *mongo.Database, result *InitResult) error {
+	for _, retired := range retiredIndexes {
+		indexes := db.Collection(retired.collection).Indexes()
+		listed, err := indexes.ListSpecifications(ctx)
+		if err != nil {
+			return fmt.Errorf("indexes of %s: %w", retired.collection, err)
+		}
+		if !slices.ContainsFunc(listed, func(index mongo.IndexSpecification) bool { return index.Name == retired.name }) {
+			continue
+		}
+		if err := indexes.DropOne(ctx, retired.name); err != nil {
+			if isIndexNotFound(err) {
+				continue
+			}
+			return fmt.Errorf("drop index %s.%s: %w", retired.collection, retired.name, err)
+		}
+		result.DroppedIndexes = append(result.DroppedIndexes, retired.collection+"."+retired.name)
+	}
+	return nil
 }

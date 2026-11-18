@@ -377,6 +377,66 @@ func TestInitialize(t *testing.T) {
 		require.Equal(t, "newer", recorded.WriterVersion)
 	})
 
+	createRetiredIndex := func(t *testing.T, rooms *mongo.Collection) {
+		_, err := rooms.Indexes().CreateOne(ctx, mongo.IndexModel{
+			Keys:    bson.D{{Key: "status", Value: 1}, {Key: "endedAt", Value: -1}, {Key: "_id", Value: -1}},
+			Options: options.Index().SetName("status_endedAt_id"),
+		})
+		require.NoError(t, err)
+	}
+
+	t.Run("Retired rooms index dropped", func(t *testing.T) {
+		db := client.Database("init_retired_index")
+		_, err := schema.Initialize(ctx, db, testOptions())
+		require.NoError(t, err)
+		rooms := db.Collection(schema.CollectionRooms)
+		createRetiredIndex(t, rooms)
+		_, err = rooms.Indexes().CreateOne(ctx, mongo.IndexModel{
+			Keys:    bson.D{{Key: "name", Value: 1}},
+			Options: options.Index().SetName("operator_custom"),
+		})
+		require.NoError(t, err)
+
+		first, err := schema.Initialize(ctx, db, testOptions())
+		require.NoError(t, err)
+		require.Equal(t, []string{"rooms.status_endedAt_id"}, first.DroppedIndexes)
+		require.Empty(t, first.CreatedIndexes)
+		found := listIndexes(t, rooms)
+		require.NotContains(t, found, "status_endedAt_id")
+		require.Contains(t, found, "operator_custom")
+		expected := expectedIndexNames(t, schema.CollectionRooms, false, schema.DefaultRetention())
+		require.Equal(t, expected, contractIndexNames(found, expected))
+		require.EqualValues(t, 2, recordedSchema(t, db).Version)
+
+		second, err := schema.Initialize(ctx, db, testOptions())
+		require.NoError(t, err)
+		require.Empty(t, second.DroppedIndexes)
+		require.Empty(t, second.CreatedIndexes)
+	})
+
+	t.Run("Nodes dropping the retired index together", func(t *testing.T) {
+		db := client.Database("init_retired_index_nodes")
+		_, err := schema.Initialize(ctx, db, testOptions())
+		require.NoError(t, err)
+		rooms := db.Collection(schema.CollectionRooms)
+		createRetiredIndex(t, rooms)
+
+		errs := make([]error, 4)
+		var nodes sync.WaitGroup
+		for i := range errs {
+			nodes.Add(1)
+			go func() {
+				defer nodes.Done()
+				_, errs[i] = schema.Initialize(ctx, db, testOptions())
+			}()
+		}
+		nodes.Wait()
+		for _, err := range errs {
+			require.NoError(t, err)
+		}
+		require.NotContains(t, listIndexes(t, rooms), "status_endedAt_id")
+	})
+
 	t.Run("second run changes nothing", func(t *testing.T) {
 		db := client.Database("init_idempotent")
 		_, err := schema.Initialize(ctx, db, testOptions())
