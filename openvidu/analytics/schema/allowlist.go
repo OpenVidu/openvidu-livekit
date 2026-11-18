@@ -86,10 +86,10 @@ var allowList = map[protoreflect.FullName]map[protoreflect.Name]fieldRule{
 		"packet_loss_percentage": keep, "packets_duplicate": keep, "packet_duplicate_rate": keep,
 		"bytes_duplicate": keep, "header_bytes_duplicate": keep, "bitrate_duplicate": keep, "packets_padding": keep,
 		"packet_padding_rate": keep, "bytes_padding": keep, "header_bytes_padding": keep, "bitrate_padding": keep,
-		"packets_out_of_order": keep, "frames": keep, "frame_rate": keep, "jitter_current": keep, "jitter_max": keep,
+		"packets_out_of_order": keep, "jitter_current": keep, "jitter_max": keep,
 		"gap_histogram": keep, "nacks": keep, "nack_acks": keep, "nack_misses": keep, "nack_repeated": keep,
 		"plis": keep, "last_pli": keep, "firs": keep, "last_fir": keep, "rtt_current": keep, "rtt_max": keep,
-		"key_frames": keep, "last_key_frame": keep, "layer_lock_plis": keep, "last_layer_lock_pli": keep,
+		"layer_lock_plis": keep, "last_layer_lock_pli": keep,
 	},
 	"livekit.EgressInfo": {
 		"egress_id": keep, "room_id": keep, "room_name": keep, "source_type": keep, "status": keep, "started_at": keep,

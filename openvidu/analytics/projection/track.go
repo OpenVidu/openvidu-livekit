@@ -247,7 +247,6 @@ func finalStats(stats *livekit.RTPStats, layer int32) bson.D {
 		{Key: "nacks", Value: clampInt32(int64(stats.GetNacks()))},
 		{Key: "plis", Value: clampInt32(int64(stats.GetPlis()))},
 		{Key: "firs", Value: clampInt32(int64(stats.GetFirs()))},
-		{Key: "frames", Value: clampInt32(int64(stats.GetFrames()))},
 		{Key: "rttMaxMs", Value: clampInt32(int64(stats.GetRttMax()))},
 		{Key: "jitterMaxMs", Value: math.Round(stats.GetJitterMax()) / 1000},
 		{Key: "durationMs", Value: int64(math.Round(stats.GetDuration() * 1000))},
@@ -357,7 +356,7 @@ func subscribeStats(stats *livekit.RTPStats) bson.D {
 	document := finalStats(stats, 0)
 	out := bson.D{}
 	for _, element := range document {
-		if element.Key != "layer" && element.Key != "frames" {
+		if element.Key != "layer" {
 			out = append(out, element)
 		}
 	}
@@ -387,7 +386,7 @@ func deriveTrack(opts Options) *fields {
 			{Key: "input", Value: layers},
 			{Key: "in", Value: bson.D{
 				{Key: "layer", Value: ref("$$this.layer")}, {Key: "bytes", Value: ref("$$this.bytes")},
-				{Key: "packets", Value: ref("$$this.packets")}, {Key: "frames", Value: ref("$$this.frames")},
+				{Key: "packets", Value: ref("$$this.packets")},
 			}},
 		}}}},
 		{Key: "sortBy", Value: bson.D{{Key: "layer", Value: 1}}},

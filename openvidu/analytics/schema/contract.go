@@ -28,7 +28,7 @@ import (
 
 // SchemaVersion is the version of the data model contract this writer implements. It must equal
 // contract/schema/contract_version.txt.
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 //go:embed contract
 var contractFS embed.FS

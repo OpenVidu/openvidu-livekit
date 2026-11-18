@@ -217,6 +217,72 @@ func TestInitialize(t *testing.T) {
 		require.Equal(t, 121, writeErr.WriteErrors[0].Code, "document validation failure")
 	})
 
+	t.Run("Upgrade from schema version 1", func(t *testing.T) {
+		db := client.Database("init_upgrade_v1")
+		_, err := schema.Initialize(ctx, db, testOptions())
+		require.NoError(t, err)
+
+		// What a version 1 writer left: its version in schema_meta, and a frame count in each layer of a publication,
+		// both in publishStats and in the per-layer stats it is derived from.
+		_, err = db.Collection(schema.CollectionSchemaMeta).UpdateOne(ctx,
+			bson.D{{Key: "_id", Value: schema.SchemaMetaSchemaID}},
+			bson.D{{Key: "$set", Value: bson.D{{Key: "version", Value: int32(1)}}}})
+		require.NoError(t, err)
+		tracks := db.Collection(schema.CollectionTracks)
+		fixtures, err := schema.Fixtures(schema.CollectionTracks)
+		require.NoError(t, err)
+		for _, fixture := range fixtures {
+			_, err = tracks.InsertOne(ctx, fixture)
+			require.NoError(t, err)
+		}
+		layered := bson.D{{Key: "publishStats.layers.0", Value: bson.D{{Key: "$exists", Value: true}}}}
+		bypass := options.UpdateMany().SetBypassDocumentValidation(true)
+		_, err = tracks.UpdateMany(ctx, layered,
+			bson.D{{Key: "$set", Value: bson.D{{Key: "publishStats.layers.$[].frames", Value: int32(900)}}}}, bypass)
+		require.NoError(t, err)
+		perLayer := bson.D{{Key: "$map", Value: bson.D{
+			{Key: "input", Value: "$publishStats.layers"},
+			{Key: "as", Value: "layer"},
+			{Key: "in", Value: bson.D{{Key: "k", Value: bson.D{{Key: "$toString", Value: "$$layer.layer"}}}, {Key: "v", Value: "$$layer"}}},
+		}}}
+		setInternal := bson.D{{Key: "$set", Value: bson.D{
+			{Key: "internal.publishStats", Value: bson.D{{Key: "$arrayToObject", Value: perLayer}}},
+		}}}
+		_, err = tracks.UpdateMany(ctx, layered, mongo.Pipeline{setInternal}, bypass)
+		require.NoError(t, err)
+		count := func(field string) int64 {
+			n, err := tracks.CountDocuments(ctx, bson.D{{Key: field, Value: bson.D{{Key: "$exists", Value: true}}}})
+			require.NoError(t, err)
+			return n
+		}
+		// A layer that is not a document is left as it is.
+		_, err = tracks.UpdateOne(ctx, layered,
+			bson.D{{Key: "$set", Value: bson.D{{Key: "internal.publishStats.9", Value: "not a layer"}}}}, options.UpdateOne().SetBypassDocumentValidation(true))
+		require.NoError(t, err)
+		require.NotZero(t, count("publishStats.layers.frames"))
+		require.NotZero(t, count("internal.publishStats.0.frames"))
+		total, err := tracks.CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+
+		_, err = schema.Initialize(ctx, db, testOptions())
+		require.NoError(t, err)
+
+		require.Zero(t, count("publishStats.layers.frames"))
+		for _, layer := range []string{"0", "1", "2"} {
+			require.Zero(t, count("internal.publishStats."+layer+".frames"), "layer %s", layer)
+		}
+		require.NotZero(t, count("publishStats.layers.bytes"), "the rest of each layer is kept")
+		require.NotZero(t, count("internal.publishStats.0.bytes"), "the rest of each layer is kept")
+		require.EqualValues(t, 1, count("internal.publishStats.9"), "a layer that is not a document")
+		after, err := tracks.CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		require.Equal(t, total, after)
+		var recorded schema.SchemaMetaSchema
+		require.NoError(t, db.Collection(schema.CollectionSchemaMeta).FindOne(ctx,
+			bson.D{{Key: "_id", Value: schema.SchemaMetaSchemaID}}).Decode(&recorded))
+		require.EqualValues(t, 2, recorded.Version)
+	})
+
 	t.Run("second run changes nothing", func(t *testing.T) {
 		db := client.Database("init_idempotent")
 		_, err := schema.Initialize(ctx, db, testOptions())

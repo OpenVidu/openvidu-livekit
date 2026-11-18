@@ -147,6 +147,10 @@ func Initialize(ctx context.Context, db *mongo.Database, opts InitOptions) (*Ini
 		}
 	}
 
+	if err := upgradeDocuments(ctx, db); err != nil {
+		return nil, err
+	}
+
 	if err := writeSchemaMeta(ctx, db, opts, result, now().UTC()); err != nil {
 		return nil, fmt.Errorf("schema_meta: %w", err)
 	}

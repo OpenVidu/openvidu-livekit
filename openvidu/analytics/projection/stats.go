@@ -52,7 +52,6 @@ type sample struct {
 	nacks    int64
 	plis     int64
 	firs     int64
-	frames   int64
 	rttMs    int64
 	jitterMs float64
 	layers   map[int32]*schema.RtpLayerStats
@@ -70,17 +69,16 @@ func newSample(stat *livekit.AnalyticsStat) *sample {
 		s.nacks += int64(stream.GetNacks())
 		s.plis += int64(stream.GetPlis())
 		s.firs += int64(stream.GetFirs())
-		s.frames += int64(stream.GetFrames())
 		s.rttMs = max(s.rttMs, int64(stream.GetRtt()))
 		s.jitterMs = math.Max(s.jitterMs, schema.MicrosToMs(stream.GetJitter()))
 		for _, layer := range stream.GetVideoLayers() {
-			s.addLayer(layer.GetLayer(), int64(layer.GetBytes()), int64(layer.GetPackets()), int64(layer.GetFrames()))
+			s.addLayer(layer.GetLayer(), int64(layer.GetBytes()), int64(layer.GetPackets()))
 		}
 	}
 	return s
 }
 
-func (s *sample) addLayer(index int32, bytes int64, packets int64, frames int64) {
+func (s *sample) addLayer(index int32, bytes int64, packets int64) {
 	layer, ok := s.layers[index]
 	if !ok {
 		layer = &schema.RtpLayerStats{Layer: index}
@@ -88,7 +86,6 @@ func (s *sample) addLayer(index int32, bytes int64, packets int64, frames int64)
 	}
 	layer.Bytes += bytes
 	layer.Packets = clampInt32(int64(layer.Packets) + packets)
-	layer.Frames = clampInt32(int64(layer.Frames) + frames)
 }
 
 func (s *sample) layerList() []schema.RtpLayerStats {
@@ -335,7 +332,6 @@ func (s *sample) document(withTrack bool) schema.TrackStatsDocument {
 		Nacks:       clampInt32(s.nacks),
 		Plis:        clampInt32(s.plis),
 		Firs:        clampInt32(s.firs),
-		Frames:      clampInt32(s.frames),
 		Layers:      s.layerList(),
 	}
 	if withTrack {
@@ -367,11 +363,10 @@ func mergeSamples(samples []*sample) *sample {
 		merged.nacks += s.nacks
 		merged.plis += s.plis
 		merged.firs += s.firs
-		merged.frames += s.frames
 		merged.rttMs = max(merged.rttMs, s.rttMs)
 		merged.jitterMs = math.Max(merged.jitterMs, s.jitterMs)
 		for _, layer := range s.layers {
-			merged.addLayer(layer.Layer, layer.Bytes, int64(layer.Packets), int64(layer.Frames))
+			merged.addLayer(layer.Layer, layer.Bytes, int64(layer.Packets))
 		}
 		if score := float64(s.stat.GetScore()); score > 0 {
 			scores = append(scores, score)

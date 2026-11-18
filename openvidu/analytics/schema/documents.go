@@ -206,7 +206,6 @@ type RtpLayerStats struct {
 	Layer   int32 `bson:"layer"`
 	Bytes   int64 `bson:"bytes"`
 	Packets int32 `bson:"packets"`
-	Frames  int32 `bson:"frames"`
 }
 
 // RtpFinalStats holds the final RTP statistics of a closed publication or subscription.
@@ -450,7 +449,6 @@ type TrackStatsDocument struct {
 	Nacks       int32           `bson:"nacks"`
 	Plis        int32           `bson:"plis"`
 	Firs        int32           `bson:"firs"`
-	Frames      int32           `bson:"frames"`
 	Layers      []RtpLayerStats `bson:"layers"`
 	MimeType    string          `bson:"mimeType,omitempty"`
 }
