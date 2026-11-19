@@ -26,6 +26,32 @@ import (
 	"github.com/livekit/livekit-server/openvidu/analytics/store"
 )
 
+// rollupCollections are the collections of rollup increments, in the order a batch writes them.
+var rollupCollections = []string{schema.CollectionAnalytics5Min, schema.CollectionAnalyticsHourly,
+	schema.CollectionAnalyticsDaily}
+
+// deltaCollections are the collections of stats deltas, in the order a batch writes them.
+var deltaCollections = []string{schema.CollectionParticipants, schema.CollectionRooms}
+
+// collectionSet holds the collections a step of an entry has written.
+type collectionSet map[string]bool
+
+func (s *collectionSet) add(collection string) {
+	if *s == nil {
+		*s = collectionSet{}
+	}
+	(*s)[collection] = true
+}
+
+func (s collectionSet) covers(collections []string) bool {
+	for _, collection := range collections {
+		if !s[collection] {
+			return false
+		}
+	}
+	return true
+}
+
 // eventEntry is a queued event with the steps of its batch already applied, so that a retry after a transient
 // error redoes only the remaining ones.
 type eventEntry struct {
@@ -35,25 +61,29 @@ type eventEntry struct {
 	entitiesDone bool
 	rawDone      bool
 	countable    bool
-	rollupsDone  bool
+	rollups      collectionSet
+	// ended holds the increments of the room the event ends, computed once so that every rollup collection gets the
+	// same ones; endedLoaded reports that they were computed.
+	ended       []projection.Increment
+	endedLoaded bool
 }
 
 // statsEntry is one flush of stats (one Send call), the unit that the participant stats detail merges.
 type statsEntry struct {
-	stats       []*livekit.AnalyticsStat
-	projected   bool
-	result      projection.StatsResult
-	insertDone  bool
-	deltasDone  bool
-	rollupsDone bool
+	stats      []*livekit.AnalyticsStat
+	projected  bool
+	result     projection.StatsResult
+	insertDone bool
+	deltas     collectionSet
+	rollups    collectionSet
 }
 
 func (e *eventEntry) done() bool {
-	return e.entitiesDone && e.rawDone && e.rollupsDone
+	return e.entitiesDone && e.rawDone && e.rollups.covers(rollupCollections)
 }
 
 func (e *statsEntry) done() bool {
-	return e.insertDone && e.deltasDone && e.rollupsDone
+	return e.insertDone && e.deltas.covers(deltaCollections) && e.rollups.covers(rollupCollections)
 }
 
 // batchStore is what a batch needs from the database; *store.Store implements it.
@@ -315,19 +345,14 @@ func (p *processor) insertRaw(ctx context.Context, events []*eventEntry) error {
 }
 
 func (p *processor) applyRollups(ctx context.Context, events []*eventEntry) error {
-	var increments []projection.Increment
 	var pending []*eventEntry
 	var endedRooms []string
 	for _, entry := range events {
-		if entry.rollupsDone {
+		if entry.rollups.covers(rollupCollections) {
 			continue
 		}
 		pending = append(pending, entry)
-		if !entry.countable {
-			continue
-		}
-		increments = append(increments, entry.result.Increments...)
-		if entry.result.EndedRoom != "" {
+		if entry.countable && entry.result.EndedRoom != "" && !entry.endedLoaded {
 			endedRooms = append(endedRooms, entry.result.EndedRoom)
 		}
 	}
@@ -340,20 +365,36 @@ func (p *processor) applyRollups(ctx context.Context, events []*eventEntry) erro
 			return err
 		}
 		for _, entry := range pending {
-			if !entry.countable || entry.result.EndedRoom == "" {
+			if !entry.countable || entry.result.EndedRoom == "" || entry.endedLoaded {
 				continue
 			}
 			ts := schema.FromTimestamp(entry.event.GetTimestamp())
-			increments = append(increments,
-				projection.RoomEndedIncrements(p.opts.MediaNode, !p.opts.WithoutMediaStats, ts,
-					closed[entry.result.EndedRoom])...)
+			entry.ended = projection.RoomEndedIncrements(p.opts.MediaNode, !p.opts.WithoutMediaStats, ts,
+				closed[entry.result.EndedRoom])
+			entry.endedLoaded = true
 		}
 	}
-	if err := p.rejected(p.store.ApplyIncrements(ctx, projection.MergeIncrements(increments))); err != nil {
-		return err
+	for _, collection := range rollupCollections {
+		var increments []projection.Increment
+		var missing []*eventEntry
+		for _, entry := range pending {
+			if entry.rollups[collection] {
+				continue
+			}
+			missing = append(missing, entry)
+			if entry.countable {
+				increments = appendIn(increments, collection, entry.result.Increments)
+				increments = appendIn(increments, collection, entry.ended)
+			}
+		}
+		if err := p.applyIncrements(ctx, increments); err != nil {
+			return err
+		}
+		for _, entry := range missing {
+			entry.rollups.add(collection)
+		}
 	}
 	for _, entry := range pending {
-		entry.rollupsDone = true
 		if entry.countable && entry.event.GetType() == livekit.AnalyticsEventType_ROOM_CREATED {
 			p.hostedRooms++
 		}
@@ -361,10 +402,26 @@ func (p *processor) applyRollups(ctx context.Context, events []*eventEntry) erro
 	return nil
 }
 
+// applyIncrements writes the merged increments of one collection, dropping the rejected ones.
+func (p *processor) applyIncrements(ctx context.Context, increments []projection.Increment) error {
+	if len(increments) == 0 {
+		return nil
+	}
+	return p.rejected(p.store.ApplyIncrements(ctx, projection.MergeIncrements(increments)))
+}
+
+// appendIn appends the increments of from that belong to collection.
+func appendIn(increments []projection.Increment, collection string, from []projection.Increment) []projection.Increment {
+	for _, increment := range from {
+		if increment.Collection == collection {
+			increments = append(increments, increment)
+		}
+	}
+	return increments
+}
+
 func (p *processor) applyStats(ctx context.Context, stats []*statsEntry) error {
 	var documents []schema.TrackStatsDocument
-	var updates []projection.Update
-	var increments []projection.Increment
 	for _, entry := range stats {
 		if !entry.projected {
 			entry.result = projection.Stats(entry.stats, p.opts)
@@ -372,12 +429,6 @@ func (p *processor) applyStats(ctx context.Context, stats []*statsEntry) error {
 		}
 		if !entry.insertDone {
 			documents = append(documents, entry.result.Documents...)
-		}
-		if !entry.deltasDone {
-			updates = append(updates, entry.result.Updates...)
-		}
-		if !entry.rollupsDone {
-			increments = append(increments, entry.result.Increments...)
 		}
 	}
 
@@ -389,21 +440,45 @@ func (p *processor) applyStats(ctx context.Context, stats []*statsEntry) error {
 	for _, entry := range stats {
 		entry.insertDone = true
 	}
-	if len(updates) > 0 {
-		if err := p.rejected(p.store.ApplyUpdates(ctx, projection.MergeUpdates(updates, p.opts))); err != nil {
-			return err
+	for _, collection := range deltaCollections {
+		var updates []projection.Update
+		var missing []*statsEntry
+		for _, entry := range stats {
+			if entry.deltas[collection] {
+				continue
+			}
+			missing = append(missing, entry)
+			for _, update := range entry.result.Updates {
+				if update.Collection == collection {
+					updates = append(updates, update)
+				}
+			}
+		}
+		if len(updates) > 0 {
+			if err := p.rejected(p.store.ApplyUpdates(ctx, projection.MergeUpdates(updates, p.opts))); err != nil {
+				return err
+			}
+		}
+		for _, entry := range missing {
+			entry.deltas.add(collection)
 		}
 	}
-	for _, entry := range stats {
-		entry.deltasDone = true
-	}
-	if len(increments) > 0 {
-		if err := p.rejected(p.store.ApplyIncrements(ctx, projection.MergeIncrements(increments))); err != nil {
+	for _, collection := range rollupCollections {
+		var increments []projection.Increment
+		var missing []*statsEntry
+		for _, entry := range stats {
+			if entry.rollups[collection] {
+				continue
+			}
+			missing = append(missing, entry)
+			increments = appendIn(increments, collection, entry.result.Increments)
+		}
+		if err := p.applyIncrements(ctx, increments); err != nil {
 			return err
 		}
-	}
-	for _, entry := range stats {
-		entry.rollupsDone = true
+		for _, entry := range missing {
+			entry.rollups.add(collection)
+		}
 	}
 	return nil
 }

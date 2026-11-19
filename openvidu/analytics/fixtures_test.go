@@ -139,8 +139,6 @@ func familyOf(eventType livekit.AnalyticsEventType) string {
 	}
 }
 
-var rollupCollections = []string{schema.CollectionAnalytics5Min, schema.CollectionAnalyticsHourly, schema.CollectionAnalyticsDaily}
-
 func TestEveryEmittedTypeIsProjected(t *testing.T) {
 	settings := testSettings(t, func(c *openviduconfig.AnalyticsConfig) { c.StoreMetadata = false })
 	opts := projectionOptions(settings)
@@ -194,7 +192,7 @@ func TestRecordedStatsAreProjected(t *testing.T) {
 				require.NotEmpty(t, document.Meta.ParticipantSID, name)
 			}
 			for _, update := range result.Updates {
-				require.Contains(t, []string{schema.CollectionParticipants, schema.CollectionRooms}, update.Collection, name)
+				require.Contains(t, deltaCollections, update.Collection, name)
 			}
 			for _, increment := range result.Increments {
 				require.Contains(t, rollupCollections, increment.Collection, name)
