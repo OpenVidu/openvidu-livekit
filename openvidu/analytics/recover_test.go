@@ -94,7 +94,7 @@ func TestLeaderJobSurvivesACycleThatPanics(t *testing.T) {
 func TestMigrationPhaseThatPanicsIsNotRetried(t *testing.T) {
 	m := &migrator{backoff: time.Millisecond, log: defaultJobLog()}
 	calls := 0
-	err := m.withRetries(context.Background(), func() error {
+	err := m.withRetries(context.Background(), localLease{}, func() error {
 		calls++
 		panic("boom")
 	})

@@ -55,13 +55,15 @@ const (
 
 const (
 	migrationLockKey = "analytics-migration-lock"
-	// migrationLockTTL bounds how long a crashed runner keeps the migration; the lock is refreshed after every batch.
+	// migrationLockTTL bounds how long a crashed runner keeps the migration; the lock is refreshed after every batch
+	// and before every retry, so it outlasts the longest sleep between attempts.
 	migrationLockTTL = 60 * time.Second
 	// migrationLockRetry spaces the attempts of a node that does not hold the migration lock.
 	migrationLockRetry = time.Minute
 	// migrationProgressInterval spaces the progress log lines.
 	migrationProgressInterval = 30 * time.Second
-	// migrationRetries and migrationBackoff bound the retries of a failing batch: 1, 2, 4 and 8 s.
+	// migrationRetries and migrationBackoff bound the retries of a failing batch: up to five rounds of five attempts,
+	// spaced 1, 2, 4 and 8 s within a round and between rounds (about 90 s), the lock refreshed before each retry.
 	migrationRetries = 5
 	migrationBackoff = time.Second
 
@@ -138,6 +140,25 @@ type migrator struct {
 	state        schema.SchemaMetaMigration
 	progressAt   time.Time
 	progressFrom int64
+	// batch is the batch being applied, kept until it completes so that a retry finishes it instead of reading it
+	// again; a new run drops it and reads from the persisted checkpoint.
+	batch *migrationBatch
+}
+
+// migrationBatch is a whole-second batch of a legacy collection, decoded once, with the progress of its steps.
+type migrationBatch struct {
+	field     string
+	second    int64
+	documents int
+	started   time.Time
+	events    []*eventEntry
+	stats     []*statsEntry
+	fakes     []*livekit.AnalyticsEvent
+	// eventsDone and fakesDone report that the authentic events and the fixer closures are applied.
+	eventsDone bool
+	fakesDone  bool
+	// counts are added to the migration's counts when the batch completes.
+	counts schema.MigrationCounts
 }
 
 func newMigrator(db *mongo.Database, settings openviduconfig.AnalyticsSettings, rec *reconciler, locks locker, nodeID string,
@@ -233,6 +254,8 @@ func (m *migrator) persist(ctx context.Context) error {
 
 // run executes the remaining phases from the checkpoint.
 func (m *migrator) run(ctx context.Context, held lease) error {
+	m.batch = nil
+	defer func() { m.batch = nil }()
 	started := m.now()
 	if m.state.StartedAt == nil {
 		m.state.StartedAt = &started
@@ -254,16 +277,16 @@ func (m *migrator) run(ctx context.Context, held lease) error {
 		next := ""
 		switch m.state.Checkpoint.Phase {
 		case phaseEvents:
-			err = m.withRetries(ctx, func() error { return m.replay(ctx, held, legacy.EventTimestamp) })
+			err = m.withRetries(ctx, held, func() error { return m.replay(ctx, held, legacy.EventTimestamp) })
 			next = phaseStats
 		case phaseStats:
-			err = m.withRetries(ctx, func() error { return m.replay(ctx, held, legacy.StatTimestamp) })
+			err = m.withRetries(ctx, held, func() error { return m.replay(ctx, held, legacy.StatTimestamp) })
 			next = phaseReconcile
 		case phaseReconcile:
-			err = m.withRetries(ctx, func() error { return m.reconcile(ctx) })
+			err = m.withRetries(ctx, held, func() error { return m.reconcile(ctx) })
 			next = phaseCleanup
 		case phaseCleanup:
-			if err = m.withRetries(ctx, func() error { return m.cleanup(ctx) }); err == nil {
+			if err = m.withRetries(ctx, held, func() error { return m.cleanup(ctx) }); err == nil {
 				return nil
 			}
 		default:
@@ -283,9 +306,9 @@ func (m *migrator) run(ctx context.Context, held lease) error {
 	}
 }
 
-// withRetries retries a phase that failed with a transient error, with exponential backoff; a phase that made progress
-// since its last failure starts counting again.
-func (m *migrator) withRetries(ctx context.Context, phase func() error) error {
+// withRetries retries a phase that failed with a transient error, with exponential backoff, refreshing the lock before
+// each retry; a phase that made progress since its last failure starts counting again.
+func (m *migrator) withRetries(ctx context.Context, held lease, phase func() error) error {
 	for attempt := 1; ; attempt++ {
 		processed := m.state.Processed
 		// A phase that panics fails the migration, which the next start retries from its checkpoint.
@@ -302,6 +325,9 @@ func (m *migrator) withRetries(ctx context.Context, phase func() error) error {
 		m.log.warnw("analytics migration: batch failed, retrying", err, "attempt", attempt)
 		if !sleep(ctx, m.backoff<<(attempt-1)) {
 			return err
+		}
+		if err := held.Refresh(ctx, migrationLockTTL); err != nil {
+			return errLockLost
 		}
 	}
 }
@@ -322,11 +348,16 @@ func (m *migrator) fail(ctx context.Context, cause error) error {
 }
 
 // replay reads a legacy collection after its checkpoint in whole-second batches and applies each batch, persisting
-// the checkpoint after it.
+// the checkpoint after it. A batch held from a failed attempt is finished first.
 func (m *migrator) replay(ctx context.Context, held lease, field string) error {
 	collection, checkpoint := LegacyEventsCollection, &m.state.Checkpoint.Events
 	if field == legacy.StatTimestamp {
 		collection, checkpoint = legacyStatsCollection, &m.state.Checkpoint.Stats
+	}
+	if m.batch != nil {
+		if err := m.finish(ctx, held, collection, checkpoint); err != nil {
+			return err
+		}
 	}
 	source, err := legacy.OpenCursor(ctx, m.db.Collection(collection), field, *checkpoint, m.settings.BatchSize)
 	if err != nil {
@@ -342,77 +373,81 @@ func (m *migrator) replay(ctx context.Context, held lease, field string) error {
 		if len(batch.Documents) == 0 {
 			return nil
 		}
-		started := time.Now()
+		m.batch = &migrationBatch{field: field, second: batch.Second, documents: len(batch.Documents), started: time.Now()}
 		if field == legacy.EventTimestamp {
-			err = m.applyEvents(ctx, batch.Documents)
+			m.decodeEvents(batch.Documents)
 		} else {
-			err = m.applyStats(ctx, batch.Documents)
+			m.decodeStats(batch.Documents)
 		}
-		if err != nil {
+		if err := m.finish(ctx, held, collection, checkpoint); err != nil {
 			return err
-		}
-		*checkpoint = batch.Second
-		m.state.Processed += int64(len(batch.Documents))
-		if err := m.persist(ctx); err != nil {
-			return err
-		}
-		if err := held.Refresh(ctx, migrationLockTTL); err != nil {
-			return errLockLost
-		}
-		elapsed := time.Since(started)
-		m.metrics.processed.WithLabelValues(collection).Add(float64(len(batch.Documents)))
-		m.metrics.batchDuration.Observe(elapsed.Seconds())
-		m.logProgress()
-		if !sleep(ctx, legacy.Pause(len(batch.Documents), m.settings.Rate, elapsed)) {
-			return ctx.Err()
 		}
 	}
 }
 
-// applyEvents projects the authentic events of a batch and closes the entities of its fixer events through the
-// reconciler. Transient errors are retried on the same entries, which keep the steps already applied.
-func (m *migrator) applyEvents(ctx context.Context, documents []bson.Raw) error {
-	var entries []*eventEntry
-	var fakes []*livekit.AnalyticsEvent
+// finish applies the rest of the held batch, then advances and persists the checkpoint and refreshes the lock.
+func (m *migrator) finish(ctx context.Context, held lease, collection string, checkpoint *int64) error {
+	batch := m.batch
+	var err error
+	if batch.field == legacy.EventTimestamp {
+		err = m.applyEvents(ctx, held, batch)
+	} else {
+		err = m.applyStats(ctx, held, batch)
+	}
+	if err != nil {
+		return err
+	}
+	m.batch = nil
+	*checkpoint = batch.second
+	m.state.Processed += int64(batch.documents)
+	m.state.Counts.Events += batch.counts.Events
+	m.state.Counts.Stats += batch.counts.Stats
+	m.state.Counts.Synthetic += batch.counts.Synthetic
+	m.state.Counts.Skipped += batch.counts.Skipped
+	if err := m.persist(ctx); err != nil {
+		return err
+	}
+	if err := held.Refresh(ctx, migrationLockTTL); err != nil {
+		return errLockLost
+	}
+	elapsed := time.Since(batch.started)
+	m.metrics.processed.WithLabelValues(collection).Add(float64(batch.documents))
+	m.metrics.batchDuration.Observe(elapsed.Seconds())
+	m.logProgress()
+	if !sleep(ctx, legacy.Pause(batch.documents, m.settings.Rate, elapsed)) {
+		return ctx.Err()
+	}
+	return nil
+}
+
+// decodeEvents fills the held batch with the authentic events and the fixer events of documents.
+func (m *migrator) decodeEvents(documents []bson.Raw) {
+	batch := m.batch
 	for _, raw := range documents {
 		event, err := legacy.DecodeEvent(raw)
 		if err != nil {
-			m.skip(err)
+			m.skip(batch, err)
 			continue
 		}
 		switch {
 		case event.Fake:
-			fakes = append(fakes, event.Message)
+			batch.fakes = append(batch.fakes, event.Message)
 		case !projection.Supported(event.Message.GetType()):
-			m.state.Counts.Skipped++
+			batch.counts.Skipped++
 		default:
-			entries = append(entries, &eventEntry{event: event.Message})
+			batch.events = append(batch.events, &eventEntry{event: event.Message})
 		}
 	}
-	if len(entries) > 0 {
-		if err := m.retrying(ctx, func() error { return m.processor.apply(ctx, entries, nil) }); err != nil {
-			return err
-		}
-		m.state.Counts.Events += int64(len(entries))
-	}
-	if len(fakes) == 0 {
-		return nil
-	}
-	closed, skipped, err := m.closeFakes(ctx, fakes)
-	m.state.Counts.Synthetic += closed
-	m.state.Counts.Skipped += skipped
-	return err
 }
 
-// applyStats replays the stats of a batch, one entry per second, as the server flushes them.
-func (m *migrator) applyStats(ctx context.Context, documents []bson.Raw) error {
-	var entries []*statsEntry
+// decodeStats fills the held batch with the stats of documents, one entry per second, as the server flushes them.
+func (m *migrator) decodeStats(documents []bson.Raw) {
+	batch := m.batch
 	bySecond := map[int64]*statsEntry{}
-	decoded := 0
 	for _, raw := range documents {
 		stat, err := legacy.DecodeStat(raw)
 		if err != nil {
-			m.skip(err)
+			m.skip(batch, err)
 			continue
 		}
 		second := legacy.Seconds(raw, legacy.StatTimestamp)
@@ -420,33 +455,64 @@ func (m *migrator) applyStats(ctx context.Context, documents []bson.Raw) error {
 		if !ok {
 			entry = &statsEntry{}
 			bySecond[second] = entry
-			entries = append(entries, entry)
+			batch.stats = append(batch.stats, entry)
 		}
 		entry.stats = append(entry.stats, stat)
-		decoded++
+		batch.counts.Stats++
 	}
-	if len(entries) == 0 {
+}
+
+// applyEvents projects the authentic events of a batch and closes the entities of its fixer events through the
+// reconciler. Transient errors are retried on the same entries, which keep the steps already applied.
+func (m *migrator) applyEvents(ctx context.Context, held lease, batch *migrationBatch) error {
+	if !batch.eventsDone {
+		if len(batch.events) > 0 {
+			if err := m.retrying(ctx, held, func() error { return m.processor.apply(ctx, batch.events, nil) }); err != nil {
+				return err
+			}
+		}
+		batch.counts.Events = int64(len(batch.events))
+		batch.eventsDone = true
+	}
+	if batch.fakesDone || len(batch.fakes) == 0 {
 		return nil
 	}
-	if err := m.retrying(ctx, func() error { return m.processor.applyStats(ctx, entries) }); err != nil {
+	var closed, skipped int64
+	if err := m.retrying(ctx, held, func() (err error) {
+		closed, skipped, err = m.closeFakes(ctx, batch.fakes)
+		return err
+	}); err != nil {
 		return err
 	}
-	m.state.Counts.Stats += int64(decoded)
+	batch.counts.Synthetic += closed
+	batch.counts.Skipped += skipped
+	batch.fakesDone = true
 	return nil
 }
 
-// retrying retries step on transient errors with the migration's backoff.
-func (m *migrator) retrying(ctx context.Context, step func() error) error {
+// applyStats replays the stats of a batch. Transient errors are retried on the same entries.
+func (m *migrator) applyStats(ctx context.Context, held lease, batch *migrationBatch) error {
+	if len(batch.stats) == 0 {
+		return nil
+	}
+	return m.retrying(ctx, held, func() error { return m.processor.applyStats(ctx, batch.stats) })
+}
+
+// retrying retries step on transient errors with the migration's backoff, refreshing the lock before each retry.
+func (m *migrator) retrying(ctx context.Context, held lease, step func() error) error {
 	for attempt := 1; ; attempt++ {
 		err := step()
 		if err == nil || !isTransient(err) || attempt >= migrationRetries || !sleep(ctx, m.backoff<<(attempt-1)) {
 			return err
 		}
+		if err := held.Refresh(ctx, migrationLockTTL); err != nil {
+			return errLockLost
+		}
 	}
 }
 
-func (m *migrator) skip(err error) {
-	m.state.Counts.Skipped++
+func (m *migrator) skip(batch *migrationBatch, err error) {
+	batch.counts.Skipped++
 	var skip *legacy.SkipError
 	if errors.As(err, &skip) {
 		m.log.warnw("analytics migration: legacy document skipped", nil, "id", skip.ID, "reason", skip.Reason)

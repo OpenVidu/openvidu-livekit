@@ -744,7 +744,7 @@ func (l *losingLocker) Obtain(ctx context.Context, key string, ttl time.Duration
 func TestMigrationResilience(t *testing.T) {
 	client := mongotest.StartMongo(t)
 
-	t.Run("resumes after a lost lock without reapplying a document", func(t *testing.T) {
+	t.Run("Killed mid-run: between two batches", func(t *testing.T) {
 		data := recordedData(t)
 		reference := newMigrationEnv(t, client, "migration_resume_reference", &data)
 		reference.run()
@@ -768,15 +768,16 @@ func TestMigrationResilience(t *testing.T) {
 		}
 	})
 
-	t.Run("fails after the retries and resumes on the next start", func(t *testing.T) {
+	t.Run("Database error", func(t *testing.T) {
 		data := legacyData{events: recordedLegacy(t, "events")[:300]}
 		env := newMigrationEnv(t, client, "migration_failure", &data)
-		real := env.m.processor.store
-		env.m.processor.store = &unavailableStore{batchStore: real}
+		unavailable := &unavailableStore{batchStore: env.m.processor.store}
+		env.m.processor.store = unavailable
 		env.run()
 
 		state := env.state()
 		require.Equal(t, migrationFailed, state.State)
+		require.Equal(t, migrationRetries*migrationRetries, unavailable.attempts, "five rounds of five attempts")
 		require.Contains(t, state.Error, "phase events")
 		require.NotNil(t, state.FinishedAt)
 		require.Equal(t, 4.0, testutil.ToFloat64(env.metrics.state))
@@ -785,6 +786,162 @@ func TestMigrationResilience(t *testing.T) {
 		env.run()
 		require.Equal(t, migrationCompleted, env.state().State)
 		require.Empty(t, env.state().Error)
+	})
+
+	t.Run("Batch finished after its fixer closures failed", func(t *testing.T) {
+		data := recordedData(t)
+		reference := newMigrationEnv(t, client, "migration_fixer_reference", &data)
+		reference.run()
+		require.Positive(t, reference.state().Counts.Synthetic)
+
+		env := newMigrationEnv(t, client, "migration_fixer_retry", &data)
+		outage := &closureOutageStore{reconcilerStore: env.m.reconciler.store, failures: 1}
+		env.m.reconciler.store = outage
+		env.run()
+
+		require.Zero(t, outage.failures, "a fixer closure failed")
+		requireSameMigration(t, reference, env)
+	})
+
+	t.Run("Stats batch finished after a transient error", func(t *testing.T) {
+		data := recordedData(t)
+		reference := newMigrationEnv(t, client, "migration_stats_reference", &data)
+		reference.run()
+
+		env := newMigrationEnv(t, client, "migration_stats_retry", &data)
+		armed, failed := false, false
+		env.m.processor.store = &outageStore{batchStore: env.m.processor.store,
+			onInsertStats: func(call int, _ []schema.TrackStatsDocument) { armed = call == 3 },
+			failUpdates: func(collection string) bool {
+				if armed && !failed && collection == schema.CollectionRooms {
+					failed = true
+					return true
+				}
+				return false
+			}}
+		env.run()
+
+		require.True(t, failed, "the room deltas of the third stats batch failed")
+		requireSameMigration(t, reference, env)
+	})
+
+	t.Run("Killed mid-run: in the middle of a stats batch", func(t *testing.T) {
+		data := recordedData(t)
+		reference := newMigrationEnv(t, client, "migration_killed_stats_reference", &data)
+		reference.run()
+
+		env := newMigrationEnv(t, client, "migration_killed_stats", &data)
+		locks := &switchLocker{}
+		env.m = env.newMigrator(locks)
+		var abandoned []schema.TrackStatsDocument
+		var abandonedEntries []*statsEntry
+		armed := false
+		env.m.processor.store = &outageStore{batchStore: env.m.processor.store,
+			onInsertStats: func(call int, stats []schema.TrackStatsDocument) {
+				armed = call == 3
+				if armed {
+					abandoned, abandonedEntries = stats, env.m.batch.stats
+				}
+			},
+			failUpdates: func(collection string) bool {
+				if armed && !locks.lost && collection == schema.CollectionRooms {
+					locks.lost = true
+					return true
+				}
+				return false
+			}}
+		env.run()
+
+		require.True(t, locks.lost)
+		require.Equal(t, 2, locks.granted, "the next runner resumed the migration")
+		require.NotEmpty(t, abandoned)
+		require.Equal(t, migrationCompleted, env.state().State)
+		require.Equal(t, reference.state().Processed, env.state().Processed)
+		require.Equal(t, reference.state().Counts, env.state().Counts)
+		require.Equal(t, reference.count(schema.CollectionTrackStats, bson.D{})+int64(len(abandoned)),
+			env.count(schema.CollectionTrackStats, bson.D{}), "only the samples of the abandoned batch are inserted twice")
+
+		// The participant deltas of the abandoned batch: the bytes of its stats, signal and data included.
+		bytes := map[string]map[string]float64{}
+		for _, entry := range abandonedEntries {
+			for _, stat := range entry.stats {
+				if stat.GetParticipantId() == "" || stat.GetRoomId() == "" {
+					continue
+				}
+				kind := "up"
+				if stat.GetKind() == livekit.StreamType_DOWNSTREAM {
+					kind = "down"
+				}
+				if bytes[stat.GetParticipantId()] == nil {
+					bytes[stat.GetParticipantId()] = map[string]float64{}
+				}
+				for _, stream := range stat.GetStreams() {
+					bytes[stat.GetParticipantId()][kind] += float64(stream.GetPrimaryBytes() + stream.GetRetransmitBytes() +
+						stream.GetPaddingBytes())
+				}
+			}
+		}
+		require.NotEmpty(t, bytes)
+		expected, actual := reference.v2Snapshot(), env.v2Snapshot()
+		for collection := range expected {
+			if collection != schema.CollectionParticipants {
+				require.Equal(t, expected[collection], actual[collection], collection)
+			}
+		}
+		require.Equal(t, len(expected[schema.CollectionParticipants]), len(actual[schema.CollectionParticipants]))
+		for sid, want := range expected[schema.CollectionParticipants] {
+			got := actual[schema.CollectionParticipants][sid]
+			delta, inBatch := bytes[sid]
+			if !inBatch {
+				require.Equal(t, want, got, sid)
+				continue
+			}
+			wantBytes, gotBytes := want["bytes"].(map[string]any), got["bytes"].(map[string]any)
+			for _, kind := range []string{"up", "down"} {
+				require.Equal(t, number(t, wantBytes[kind])+delta[kind], number(t, gotBytes[kind]),
+					"the deltas of the abandoned batch are applied twice: %s bytes.%s", sid, kind)
+			}
+			for _, field := range []string{"bytes", "quality"} {
+				delete(want, field)
+				delete(got, field)
+			}
+			require.Equal(t, want, got, sid)
+		}
+	})
+
+	t.Run("Batch replayed after a failed run", func(t *testing.T) {
+		data := legacyData{events: recordedLegacy(t, "events")}
+		reference := newMigrationEnv(t, client, "migration_replayed_reference", &data)
+		reference.run()
+
+		env := newMigrationEnv(t, client, "migration_replayed", &data)
+		created := map[int]int64{}
+		failing := false
+		env.m.processor.store = &outageStore{batchStore: env.m.processor.store,
+			onInsertEvents: func(call int, events []schema.EventDocument) {
+				for _, event := range events {
+					if event.Type == livekit.AnalyticsEventType_ROOM_CREATED.String() {
+						created[call]++
+					}
+				}
+				failing = call == 2
+			},
+			failIncrements: func(string) bool { return failing }}
+		env.run()
+		require.Equal(t, migrationFailed, env.state().State)
+		require.Positive(t, created[1], "the first batch creates rooms")
+		require.Positive(t, created[2], "the failed batch creates rooms")
+
+		env.m = env.newMigrator(&localLocker{})
+		env.run()
+		require.Equal(t, migrationCompleted, env.state().State)
+		require.Equal(t, reference.count(schema.CollectionEvents, bson.D{}), env.count(schema.CollectionEvents, bson.D{}))
+		for _, collection := range []string{schema.CollectionAnalytics5Min, schema.CollectionAnalyticsHourly,
+			schema.CollectionAnalyticsDaily} {
+			require.Equal(t, reference.globalCounter(collection, "rooms.created")-created[2],
+				env.globalCounter(collection, "rooms.created"),
+				"%s: the rooms of the replayed batch are not counted, those of the first batch once", collection)
+		}
 	})
 
 	t.Run("state and metrics through the run", func(t *testing.T) {
@@ -838,10 +995,149 @@ func TestMigrationResilience(t *testing.T) {
 // unavailableStore fails every entity write with a transient error, as a MongoDB without a primary does.
 type unavailableStore struct {
 	batchStore
+	attempts int
 }
 
 func (s *unavailableStore) ApplyUpdates(context.Context, []projection.Update) error {
+	s.attempts++
 	return mongo.CommandError{Code: 91, Message: "shutdown in progress", Labels: []string{"RetryableWriteError"}}
+}
+
+// outageStore wraps the store of a migration's processor: it reports the raw event and stats inserts, numbered from 1,
+// and fails the update and increment writes its hooks choose with a network error.
+type outageStore struct {
+	batchStore
+	eventInserts   int
+	statsInserts   int
+	onInsertEvents func(call int, events []schema.EventDocument)
+	onInsertStats  func(call int, stats []schema.TrackStatsDocument)
+	failUpdates    func(collection string) bool
+	failIncrements func(collection string) bool
+}
+
+func (s *outageStore) InsertEvents(ctx context.Context, events []schema.EventDocument) (map[string]bool, error) {
+	s.eventInserts++
+	if s.onInsertEvents != nil {
+		s.onInsertEvents(s.eventInserts, events)
+	}
+	return s.batchStore.InsertEvents(ctx, events)
+}
+
+func (s *outageStore) InsertStats(ctx context.Context, stats []schema.TrackStatsDocument) error {
+	s.statsInserts++
+	if s.onInsertStats != nil {
+		s.onInsertStats(s.statsInserts, stats)
+	}
+	return s.batchStore.InsertStats(ctx, stats)
+}
+
+func (s *outageStore) ApplyUpdates(ctx context.Context, updates []projection.Update) error {
+	if len(updates) > 0 && s.failUpdates != nil && s.failUpdates(updates[0].Collection) {
+		return networkError
+	}
+	return s.batchStore.ApplyUpdates(ctx, updates)
+}
+
+func (s *outageStore) ApplyIncrements(ctx context.Context, increments []projection.Increment) error {
+	if len(increments) > 0 && s.failIncrements != nil && s.failIncrements(increments[0].Collection) {
+		return networkError
+	}
+	return s.batchStore.ApplyIncrements(ctx, increments)
+}
+
+// closureOutageStore fails the first closures of the reconciler a migration uses with a network error, before they
+// write anything.
+type closureOutageStore struct {
+	reconcilerStore
+	failures int
+}
+
+func (s *closureOutageStore) CloseEntity(ctx context.Context, update projection.Update) (bool, error) {
+	if s.failures > 0 {
+		s.failures--
+		return false, networkError
+	}
+	return s.reconcilerStore.CloseEntity(ctx, update)
+}
+
+// switchLocker grants a first lease whose refreshes fail once lost is set, then leases that never fail.
+type switchLocker struct {
+	inner   localLocker
+	lost    bool
+	granted int
+}
+
+func (l *switchLocker) Obtain(ctx context.Context, key string, ttl time.Duration) (lease, error) {
+	held, err := l.inner.Obtain(ctx, key, ttl)
+	if err != nil {
+		return nil, err
+	}
+	l.granted++
+	if l.granted == 1 {
+		return switchLease{lease: held, locker: l}, nil
+	}
+	return held, nil
+}
+
+type switchLease struct {
+	lease
+	locker *switchLocker
+}
+
+func (l switchLease) Refresh(ctx context.Context, ttl time.Duration) error {
+	if l.locker.lost {
+		return errors.New("lock expired")
+	}
+	return l.lease.Refresh(ctx, ttl)
+}
+
+// requireSameMigration asserts that two completed migrations wrote the same documents and counts.
+func requireSameMigration(t *testing.T, expected *migrationEnv, actual *migrationEnv) {
+	t.Helper()
+	require.Equal(t, migrationCompleted, actual.state().State)
+	require.Equal(t, expected.state().Processed, actual.state().Processed)
+	require.Equal(t, expected.state().Counts, actual.state().Counts)
+	require.Equal(t, expected.count(schema.CollectionTrackStats, bson.D{}), actual.count(schema.CollectionTrackStats, bson.D{}),
+		"no stats sample is duplicated")
+	expectedDocuments, actualDocuments := expected.v2Snapshot(), actual.v2Snapshot()
+	for collection := range expectedDocuments {
+		require.Equal(t, expectedDocuments[collection], actualDocuments[collection], collection)
+	}
+}
+
+// globalCounter sums a counter of the global documents of a rollup collection.
+func (e *migrationEnv) globalCounter(collection string, path string) int64 {
+	e.t.Helper()
+	cursor, err := e.db.Collection(collection).Aggregate(context.Background(), mongo.Pipeline{
+		{{Key: "$match", Value: bson.D{{Key: "scope", Value: "global"}}}},
+		{{Key: "$group", Value: bson.D{{Key: "_id", Value: nil}, {Key: "total", Value: bson.D{{Key: "$sum", Value: "$" + path}}}}}},
+	})
+	require.NoError(e.t, err)
+	var totals []struct {
+		Total int64 `bson:"total"`
+	}
+	require.NoError(e.t, cursor.All(context.Background(), &totals))
+	if len(totals) == 0 {
+		return 0
+	}
+	return totals[0].Total
+}
+
+// number converts a numeric value of a snapshot to float64.
+func number(t *testing.T, value any) float64 {
+	t.Helper()
+	switch v := value.(type) {
+	case nil:
+		return 0
+	case int32:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case float64:
+		return v
+	}
+	require.Failf(t, "not a number", "%T", value)
+	return 0
 }
 
 // requireLegacyIndexes asserts that a legacy collection keeps its timestamp index and its TTL index on
