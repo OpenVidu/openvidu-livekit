@@ -944,6 +944,39 @@ func TestMigrationResilience(t *testing.T) {
 		}
 	})
 
+	t.Run("Lock refreshed while a batch retries: next runner resumes from the checkpoint", func(t *testing.T) {
+		data := legacyData{events: recordedLegacy(t, "events")}
+		reference := newMigrationEnv(t, client, "migration_lock_retry_reference", &data)
+		reference.run()
+
+		env := newMigrationEnv(t, client, "migration_lock_retry", &data)
+		locks := &switchLocker{}
+		env.m = env.newMigrator(locks)
+		calls, afterLoss := 0, 0
+		var checkpoint int64
+		env.m.processor.store = &outageStore{batchStore: env.m.processor.store,
+			failUpdates: func(string) bool {
+				calls++
+				if locks.lost && locks.granted == 1 {
+					afterLoss++
+				}
+				if calls != 2 || locks.lost {
+					return false
+				}
+				// The entity writes of the second batch fail before writing anything, and the lock is lost.
+				checkpoint = env.state().Checkpoint.Events
+				locks.lost = true
+				return true
+			}}
+		env.run()
+
+		require.True(t, locks.lost)
+		require.Zero(t, afterLoss, "no attempt after the failed refresh")
+		require.Positive(t, checkpoint, "the first batch was saved")
+		require.Equal(t, 2, locks.granted, "the next runner resumed the migration")
+		requireSameMigration(t, reference, env)
+	})
+
 	t.Run("state and metrics through the run", func(t *testing.T) {
 		data := legacyData{events: recordedLegacy(t, "events")[:300], stats: recordedLegacy(t, "stats")[:100]}
 		env := newMigrationEnv(t, client, "migration_metrics", &data)

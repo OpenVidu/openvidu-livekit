@@ -42,9 +42,7 @@ func (l *countingLease) Release(context.Context) error { return nil }
 func TestMigrationRetries(t *testing.T) {
 	ctx := context.Background()
 	newTestMigrator := func() *migrator {
-		m := &migrator{backoff: time.Millisecond, log: defaultJobLog()}
-		m.state.State = migrationRunning
-		return m
+		return &migrator{backoff: time.Millisecond, log: defaultJobLog()}
 	}
 
 	t.Run("Transient error with progress", func(t *testing.T) {
@@ -65,7 +63,6 @@ func TestMigrationRetries(t *testing.T) {
 		require.NoError(t, err, "the attempt count starts again after the progress")
 		require.Equal(t, 9, calls)
 		require.Equal(t, 8, held.refreshes, "the lock is refreshed before every retry")
-		require.Equal(t, migrationRunning, m.state.State)
 	})
 
 	t.Run("Transient error with progress: without progress the phase gives up", func(t *testing.T) {

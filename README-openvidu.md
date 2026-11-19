@@ -119,8 +119,8 @@ first start of the new version renames `events` to `legacy_events`, records `sch
   saved batch. A batch that fails with a transient MongoDB error is finished from the writes already applied, in up to
   five rounds of five attempts (about 90 s); then the state is `failed` with the error, and the next start retries
   from the checkpoint. A batch interrupted before its checkpoint is saved is replayed whole, which can add its
-  statistics again and leave uncounted its raw events whose rollups were not written. A replay forced again by deleting the `migration` document is a
-  no-op for entities, events and rollups, but adds the legacy statistics again.
+  statistics again and leave uncounted its raw events whose rollups were not written. A replay forced again by
+  deleting the `migration` document is a no-op for entities, events and rollups, but adds the legacy statistics again.
 - While the migration has not completed, the reconciler leaves alone the candidates of nodes that never wrote a
   heartbeat in `nodes`: they are legacy entities the replay closes later.
 - Progress is logged every 30 s (processed, total, documents per second, ETA) and on every phase.
