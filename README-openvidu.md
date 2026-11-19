@@ -99,7 +99,8 @@ first start of the new version renames `events` to `legacy_events`, records `sch
 `state: pending`, and migrates the legacy data in the background while live events are written as usual:
 
 - One node at a time runs it, elected with the Redis lock `analytics-migration-lock` (TTL 60 s, refreshed after
-  every batch); the other nodes retry every minute, so a node takes over when the runner dies.
+  every batch and before every retry; a runner that cannot refresh it stops); the other nodes retry every minute, so a
+  node takes over when the runner dies.
 - Phases: `events` (legacy events replayed through the same projections as live events, in timestamp order),
   `stats` (legacy stats through the stats pipeline), `reconcile` (the reconciler runs until nothing is left to
   close) and `cleanup` (`active_entities` and `last_alive` dropped, and the latest `openvidu_expire_at` of
@@ -114,9 +115,11 @@ first start of the new version renames `events` to `legacy_events`, records `sch
   the legacy fixer inserted are not replayed as events: their entity is closed by the reconciler at the fixer's
   time (`closedBy: reconciler`, `RECONCILED`); an authentic close event overrides it.
 - Batches never split a second; after every batch the checkpoint (phase and last second per collection),
-  `processed` and `counts` (`events`, `stats`, `synthetic`, `skipped`) are saved, so a restart resumes without
-  reapplying a document. Transient MongoDB errors are retried 5 times; then the state is `failed` with the error,
-  and the next start retries from the checkpoint. A replay forced again by deleting the `migration` document is a
+  `processed` and `counts` (`events`, `stats`, `synthetic`, `skipped`) are saved, so a restart resumes after the last
+  saved batch. A batch that fails with a transient MongoDB error is finished from the writes already applied, in up to
+  five rounds of five attempts (about 90 s); then the state is `failed` with the error, and the next start retries
+  from the checkpoint. A batch interrupted before its checkpoint is saved is replayed whole, which can add its
+  statistics again and leave uncounted its raw events whose rollups were not written. A replay forced again by deleting the `migration` document is a
   no-op for entities, events and rollups, but adds the legacy statistics again.
 - While the migration has not completed, the reconciler leaves alone the candidates of nodes that never wrote a
   heartbeat in `nodes`: they are legacy entities the replay closes later.
