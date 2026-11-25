@@ -576,4 +576,173 @@ func TestInitialize(t *testing.T) {
 		require.False(t, second.Timeseries)
 		require.Empty(t, second.CreatedIndexes)
 	})
+
+	t.Run("time-series create cut off after its buckets collection", func(t *testing.T) {
+		skipOnExternalServer(t)
+		db := client.Database("init_cut_off")
+		failPoint(t, client, "failTimeseriesViewCreation", bson.D{{Key: "ns", Value: trackStatsNamespace(db)}})
+		result, err := schema.Initialize(ctx, db, testOptions())
+		require.NoError(t, err)
+		require.Equal(t, 1, failPointOff(t, client, "failTimeseriesViewCreation"), "the create was cut off")
+		requireTimeseriesTrackStats(t, db, 7*24*3600)
+		require.True(t, result.Timeseries)
+		require.NoError(t, result.TimeseriesError)
+		require.Contains(t, result.CreatedCollections, schema.CollectionTrackStats)
+		require.Empty(t, result.RepairedCollections)
+
+		second, err := schema.Initialize(ctx, db, testOptions())
+		require.NoError(t, err)
+		require.Empty(t, second.CreatedCollections)
+		require.Empty(t, second.CreatedIndexes)
+		require.Empty(t, second.UpdatedTTLs)
+	})
+
+	t.Run("buckets of a cut-off create, left with another retention", func(t *testing.T) {
+		skipOnExternalServer(t)
+		db := client.Database("init_cut_off_retention")
+		cutOffTimeseriesCreate(t, client, db, 2*24*3600)
+		result, err := schema.Initialize(ctx, db, testOptions())
+		require.NoError(t, err)
+		requireTimeseriesTrackStats(t, db, 7*24*3600)
+		require.True(t, result.Timeseries)
+		require.Contains(t, result.CreatedCollections, schema.CollectionTrackStats)
+		require.Contains(t, result.UpdatedTTLs, schema.CollectionTrackStats)
+	})
+
+	t.Run("plain track_stats beside the buckets of a cut-off create is repaired", func(t *testing.T) {
+		skipOnExternalServer(t)
+		db := client.Database("init_repair")
+		// What a writer that fell back after the cut-off create left: the server then treats track_stats as
+		// time-series, rejecting its validator and TTL index, and the writer never started again.
+		cutOffTimeseriesCreate(t, client, db, 7*24*3600)
+		require.NoError(t, db.CreateCollection(ctx, schema.CollectionTrackStats))
+		collMod := bson.D{{Key: "collMod", Value: schema.CollectionTrackStats}, {Key: "validator", Value: bson.D{}}}
+		require.ErrorContains(t, db.RunCommand(ctx, collMod).Err(), "option not supported on a time-series collection")
+
+		result, err := schema.Initialize(ctx, db, testOptions())
+		require.NoError(t, err)
+		requireTimeseriesTrackStats(t, db, 7*24*3600)
+		require.True(t, result.Timeseries)
+		require.Equal(t, []string{schema.CollectionTrackStats}, result.RepairedCollections)
+
+		fixtures, err := schema.Fixtures(schema.CollectionTrackStats)
+		require.NoError(t, err)
+		_, err = db.Collection(schema.CollectionTrackStats).InsertOne(ctx, fixtures[0])
+		require.NoError(t, err)
+		second, err := schema.Initialize(ctx, db, testOptions())
+		require.NoError(t, err)
+		require.True(t, second.Timeseries)
+		require.Empty(t, second.RepairedCollections)
+		require.Empty(t, second.CreatedIndexes)
+	})
+
+	t.Run("transient error creating track_stats: no plain fallback", func(t *testing.T) {
+		skipOnExternalServer(t)
+		db := client.Database("init_transient")
+		failPoint(t, client, "failCommand", bson.D{
+			{Key: "failCommands", Value: bson.A{"create"}},
+			{Key: "namespace", Value: trackStatsNamespace(db)},
+			{Key: "errorCode", Value: 11600}, // InterruptedAtShutdown
+		})
+		_, err := schema.Initialize(ctx, db, testOptions())
+		require.Error(t, err)
+		require.True(t, schema.IsTransient(err), "%v", err)
+		collections := listCollections(t, db)
+		require.NotContains(t, collections, schema.CollectionTrackStats)
+
+		result, err := schema.Initialize(ctx, db, testOptions())
+		require.NoError(t, err)
+		require.True(t, result.Timeseries)
+		requireTimeseriesTrackStats(t, db, 7*24*3600)
+	})
+
+	t.Run("time-series rejected by the server: plain track_stats", func(t *testing.T) {
+		skipOnExternalServer(t)
+		db := client.Database("init_rejected")
+		failPoint(t, client, "failCommand", bson.D{
+			{Key: "failCommands", Value: bson.A{"create"}},
+			{Key: "namespace", Value: trackStatsNamespace(db)},
+			{Key: "errorCode", Value: 72}, // InvalidOptions
+		})
+		result, err := schema.Initialize(ctx, db, testOptions())
+		require.NoError(t, err)
+		require.False(t, result.Timeseries)
+		require.Error(t, result.TimeseriesError)
+		info := listCollections(t, db)[schema.CollectionTrackStats]
+		require.Equal(t, "collection", info.Type)
+		require.Contains(t, listIndexes(t, db.Collection(schema.CollectionTrackStats)), "ts_ttl")
+	})
+}
+
+func skipOnExternalServer(t *testing.T) {
+	if testutil.External() {
+		t.Skip("failpoints need the test server, which runs with test commands enabled")
+	}
+}
+
+func trackStatsNamespace(db *mongo.Database) string {
+	return db.Name() + "." + schema.CollectionTrackStats
+}
+
+// failPoint makes MongoDB's failpoint name trigger once, with data.
+func failPoint(t *testing.T, client *mongo.Client, name string, data bson.D) {
+	t.Helper()
+	require.NoError(t, client.Database("admin").RunCommand(context.Background(), bson.D{
+		{Key: "configureFailPoint", Value: name},
+		{Key: "mode", Value: bson.D{{Key: "times", Value: 1}}},
+		{Key: "data", Value: data},
+	}).Err())
+	t.Cleanup(func() { failPointOff(t, client, name) })
+}
+
+// failPointOff turns a failpoint off and returns how many times it triggered.
+func failPointOff(t *testing.T, client *mongo.Client, name string) int {
+	t.Helper()
+	var reply struct {
+		Count int `bson:"count"`
+	}
+	require.NoError(t, client.Database("admin").RunCommand(context.Background(), bson.D{
+		{Key: "configureFailPoint", Value: name},
+		{Key: "mode", Value: "off"},
+	}).Decode(&reply))
+	return reply.Count
+}
+
+// cutOffTimeseriesCreate leaves in db what a time-series create of track_stats cut off after its first step (by a
+// shutdown, for example) leaves: its buckets collection, without the time-series view.
+func cutOffTimeseriesCreate(t *testing.T, client *mongo.Client, db *mongo.Database, expireAfterSeconds int64) {
+	t.Helper()
+	definitions, err := schema.Collections()
+	require.NoError(t, err)
+	var timeseries *schema.TimeseriesDefinition
+	for _, definition := range definitions {
+		if definition.Name == schema.CollectionTrackStats {
+			timeseries = definition.Timeseries
+		}
+	}
+	require.NotNil(t, timeseries)
+
+	failPoint(t, client, "failTimeseriesViewCreation", bson.D{{Key: "ns", Value: trackStatsNamespace(db)}})
+	err = db.RunCommand(context.Background(), bson.D{
+		{Key: "create", Value: schema.CollectionTrackStats},
+		{Key: "timeseries", Value: bson.D{
+			{Key: "timeField", Value: timeseries.TimeField},
+			{Key: "metaField", Value: timeseries.MetaField},
+			{Key: "granularity", Value: timeseries.Granularity},
+		}},
+		{Key: "expireAfterSeconds", Value: expireAfterSeconds},
+	}).Err()
+	require.ErrorContains(t, err, "failTimeseriesViewCreation")
+	collections := listCollections(t, db)
+	require.Contains(t, collections, "system.buckets."+schema.CollectionTrackStats)
+	require.NotContains(t, collections, schema.CollectionTrackStats)
+}
+
+func requireTimeseriesTrackStats(t *testing.T, db *mongo.Database, expireAfterSeconds int64) {
+	t.Helper()
+	info := listCollections(t, db)[schema.CollectionTrackStats]
+	require.Equal(t, "timeseries", info.Type)
+	require.EqualValues(t, expireAfterSeconds, info.Options["expireAfterSeconds"])
+	expected := expectedIndexNames(t, schema.CollectionTrackStats, true, schema.DefaultRetention())
+	require.Equal(t, expected, contractIndexNames(listIndexes(t, db.Collection(schema.CollectionTrackStats)), expected))
 }

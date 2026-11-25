@@ -71,8 +71,9 @@ func StartMongoWithURI(t *testing.T) (*mongo.Client, string) {
 
 	ctr, err := testcontainers.Run(ctx, image,
 		testcontainers.WithEntrypoint(mongodPath),
+		// Test commands enable the failpoints that simulate a server failing in the middle of a command.
 		testcontainers.WithCmd("--replSet", "rs0", "--bind_ip_all", "--port", "27017", "--dbpath", "/tmp",
-			"--wiredTigerCacheSizeGB", "0.25"),
+			"--wiredTigerCacheSizeGB", "0.25", "--setParameter", "enableTestCommands=1"),
 		testcontainers.WithExposedPorts("27017/tcp"),
 		testcontainers.WithHostConfigModifier(func(hostConfig *container.HostConfig) {
 			hostConfig.Memory = 1024 * 1024 * 1024

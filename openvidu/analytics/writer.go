@@ -16,15 +16,14 @@ package analytics
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
-	"go.mongodb.org/mongo-driver/v2/mongo"
 
+	"github.com/livekit/livekit-server/openvidu/analytics/schema"
 	"github.com/livekit/livekit-server/openvidu/analytics/store"
 	"github.com/livekit/livekit-server/openvidu/openviduconfig"
 	"github.com/livekit/livekit-server/openvidu/queue"
@@ -280,30 +279,5 @@ func (w *writer) recordStop(ctx context.Context) {
 	}
 }
 
-// isTransient reports errors a later retry can overcome: network errors, timeouts, elections, write concern and the
-// KeyNotFound (211) of a restarted replica set that has not loaded its signing keys yet, returned during the
-// authentication handshake.
-func isTransient(err error) bool {
-	if err == nil {
-		return false
-	}
-	if mongo.IsNetworkError(err) || mongo.IsTimeout(err) || errors.Is(err, context.DeadlineExceeded) {
-		return true
-	}
-	var serverErr mongo.ServerError
-	if errors.As(err, &serverErr) {
-		if serverErr.HasErrorLabel("RetryableWriteError") || serverErr.HasErrorLabel("TransientTransactionError") {
-			return true
-		}
-		for _, code := range []int{6, 7, 89, 91, 189, 211, 262, 9001, 10107, 11600, 11602, 13435, 13436, 64} {
-			if serverErr.HasErrorCode(code) {
-				return true
-			}
-		}
-	}
-	var bulkErr mongo.BulkWriteException
-	if errors.As(err, &bulkErr) && bulkErr.WriteConcernError != nil {
-		return true
-	}
-	return false
-}
+// isTransient reports errors a later retry can overcome; see schema.IsTransient.
+var isTransient = schema.IsTransient

@@ -354,6 +354,7 @@ func logInitialization(result *schema.InitResult, settings openviduconfig.Analyt
 		"timeseries", result.Timeseries,
 		"transactions", result.Transactions,
 		"createdCollections", len(result.CreatedCollections),
+		"repairedCollections", result.RepairedCollections,
 		"createdIndexes", len(result.CreatedIndexes),
 		"updatedTTLs", result.UpdatedTTLs,
 		"droppedIndexes", result.DroppedIndexes,

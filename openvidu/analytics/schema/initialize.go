@@ -51,6 +51,9 @@ type InitResult struct {
 	CreatedCollections []string
 	CreatedIndexes     []string
 	UpdatedTTLs        []string
+	// RepairedCollections are the plain collections an earlier start created beside the buckets of a cut-off
+	// time-series create, replaced by the time-series collection.
+	RepairedCollections []string
 	// DroppedIndexes are the TTL indexes of a retention class configured to keep its documents forever and the
 	// retired indexes of an earlier contract.
 	DroppedIndexes []string
@@ -256,6 +259,11 @@ func ensureCollection(ctx context.Context, db *mongo.Database, definition Collec
 	if info.Type == "timeseries" {
 		return true, ensureTimeseriesTTL(ctx, db, definition, info, opts.Retention, result)
 	}
+	if definition.Timeseries != nil && !opts.DisableTimeseries {
+		if repaired, err := repairFallback(ctx, db, definition, opts.Retention, result); err != nil || repaired {
+			return repaired, err
+		}
+	}
 
 	// Time-series collections reject validators, so only plain collections (including the track_stats fallback) get one.
 	return false, db.RunCommand(ctx, bson.D{
@@ -269,12 +277,26 @@ func ensureCollection(ctx context.Context, db *mongo.Database, definition Collec
 func createCollection(ctx context.Context, db *mongo.Database, definition CollectionDefinition, validator bson.D,
 	opts InitOptions, result *InitResult) (bool, error) {
 	if definition.Timeseries != nil && !opts.DisableTimeseries {
-		created, err := createTimeseries(ctx, db, definition, opts.Retention)
+		ttl, err := timeseriesTTL(definition, opts.Retention)
+		if err != nil {
+			return false, err
+		}
+		err = createTimeseries(ctx, db, definition, ttl)
 		if err == nil {
 			result.CreatedCollections = append(result.CreatedCollections, definition.Name)
-			return created, nil
+			return true, nil
 		}
-		if isNamespaceExists(err) {
+		found, completeErr := completeCutOffCreate(ctx, db, definition, opts.Retention, result)
+		switch {
+		case found && completeErr == nil:
+			result.CreatedCollections = append(result.CreatedCollections, definition.Name)
+			return true, nil
+		case found:
+			return false, completeErr
+		case completeErr != nil, isNamespaceExists(err), IsTransient(err):
+			// NamespaceExists: another node created it, and the caller updates it. A server that could not be asked,
+			// or that is restarting or changing primary, may support time-series: the next start tries again rather
+			// than keep a plain collection for good.
 			return false, err
 		}
 		result.TimeseriesError = err
@@ -291,6 +313,15 @@ func createCollection(ctx context.Context, db *mongo.Database, definition Collec
 }
 
 func collectionInfoOf(ctx context.Context, db *mongo.Database, name string) (*collectionInfo, error) {
+	info, err := findCollection(ctx, db, name)
+	if err == nil && info == nil {
+		err = fmt.Errorf("collection %s reported as existing but not listed", name)
+	}
+	return info, err
+}
+
+// findCollection returns the listCollections entry of a collection, nil when it does not exist.
+func findCollection(ctx context.Context, db *mongo.Database, name string) (*collectionInfo, error) {
 	cursor, err := db.ListCollections(ctx, bson.D{{Key: "name", Value: name}})
 	if err != nil {
 		return nil, fmt.Errorf("listCollections: %w", err)
@@ -300,9 +331,80 @@ func collectionInfoOf(ctx context.Context, db *mongo.Database, name string) (*co
 		return nil, fmt.Errorf("listCollections: %w", err)
 	}
 	if len(infos) == 0 {
-		return nil, fmt.Errorf("collection %s reported as existing but not listed", name)
+		return nil, nil
 	}
 	return &infos[0], nil
+}
+
+// bucketsName is the collection that holds a time-series collection on MongoDB 8.0, behind a view with its name.
+func bucketsName(name string) string {
+	return "system.buckets." + name
+}
+
+// completeCutOffCreate completes a time-series create cut off after its first step, by a shutdown for example, which
+// leaves the buckets collection without the time-series view. MongoDB refuses a new create over those buckets when
+// their options differ, such as a TTL changed since, with NamespaceExists. It reports whether it found such buckets;
+// an error without them is one of the lookups.
+func completeCutOffCreate(ctx context.Context, db *mongo.Database, definition CollectionDefinition, retention Retention,
+	result *InitResult) (bool, error) {
+	buckets, err := findCollection(ctx, db, bucketsName(definition.Name))
+	if err != nil || buckets == nil {
+		return false, err
+	}
+	// With the view too, another node created the collection: the caller's NamespaceExists path updates it.
+	if view, err := findCollection(ctx, db, definition.Name); err != nil || view != nil {
+		return false, err
+	}
+	return true, adoptBuckets(ctx, db, definition, buckets, retention, result)
+}
+
+// adoptBuckets creates a time-series collection over the buckets a cut-off create left behind. MongoDB reuses buckets
+// whose options match, expireAfterSeconds included, so the create repeats theirs and the configured TTL is set after.
+func adoptBuckets(ctx context.Context, db *mongo.Database, definition CollectionDefinition, buckets *collectionInfo,
+	retention Retention, result *InitResult) error {
+	if err := createTimeseries(ctx, db, definition, buckets.Options.ExpireAfterSeconds); err != nil {
+		return fmt.Errorf("time-series collection over %s: %w", buckets.Name, err)
+	}
+	return ensureTimeseriesTTL(ctx, db, definition, buckets, retention, result)
+}
+
+// repairFallback replaces the plain collection an earlier start created after its time-series create was cut off
+// past the buckets: MongoDB treats the name as time-series while those buckets exist, so the plain collection rejects
+// its validator and indexes and the writer never starts. Writes to it go to the buckets, so it is empty; it is dropped
+// and the time-series collection created over the buckets. It reports whether it repaired the collection.
+func repairFallback(ctx context.Context, db *mongo.Database, definition CollectionDefinition, retention Retention,
+	result *InitResult) (bool, error) {
+	buckets, err := findCollection(ctx, db, bucketsName(definition.Name))
+	if err != nil || buckets == nil {
+		return false, err
+	}
+	collection := db.Collection(definition.Name)
+	count, err := collection.CountDocuments(ctx, bson.D{}, options.Count().SetLimit(1))
+	if err != nil {
+		return false, err
+	}
+	if count > 0 {
+		return false, fmt.Errorf("plain collection with documents beside %s; drop one of them", buckets.Name)
+	}
+	// Another node starting at the same time may have repaired it since the listing: dropping the time-series collection
+	// would drop the buckets too.
+	current, err := findCollection(ctx, db, definition.Name)
+	switch {
+	case err != nil:
+		return false, err
+	case current == nil:
+		return false, fmt.Errorf("dropped by another node while repairing it; the next start checks it again")
+	case current.Type == "timeseries":
+		return true, ensureTimeseriesTTL(ctx, db, definition, current, retention, result)
+	}
+	if err := collection.Drop(ctx); err != nil {
+		return false, err
+	}
+	if err := adoptBuckets(ctx, db, definition, buckets, retention, result); err != nil {
+		return false, err
+	}
+	result.RepairedCollections = append(result.RepairedCollections, definition.Name)
+	return true, nil
 }
 
 // isNamespaceExists reports the NamespaceExists error (code 48) of a create or rename whose target already exists.
@@ -311,23 +413,28 @@ func isNamespaceExists(err error) bool {
 	return errors.As(err, &serverErr) && serverErr.HasErrorCode(48)
 }
 
-func createTimeseries(ctx context.Context, db *mongo.Database, definition CollectionDefinition, retention Retention) (bool, error) {
+// timeseriesTTL returns the expireAfterSeconds of a time-series collection, nil when its retention class keeps its
+// documents forever.
+func timeseriesTTL(definition CollectionDefinition, retention Retention) (*int64, error) {
 	ttl, ok, err := retention.Of(definition.Timeseries.RetentionClass)
-	if err != nil {
-		return false, err
+	if err != nil || !ok {
+		return nil, err
 	}
+	seconds := int64(ttl.Seconds())
+	return &seconds, nil
+}
+
+func createTimeseries(ctx context.Context, db *mongo.Database, definition CollectionDefinition,
+	expireAfterSeconds *int64) error {
 	timeseries := options.TimeSeries().
 		SetTimeField(definition.Timeseries.TimeField).
 		SetMetaField(definition.Timeseries.MetaField).
 		SetGranularity(definition.Timeseries.Granularity)
 	createOpts := options.CreateCollection().SetTimeSeriesOptions(timeseries)
-	if ok {
-		createOpts.SetExpireAfterSeconds(int64(ttl.Seconds()))
+	if expireAfterSeconds != nil {
+		createOpts.SetExpireAfterSeconds(*expireAfterSeconds)
 	}
-	if err := db.CreateCollection(ctx, definition.Name, createOpts); err != nil {
-		return false, err
-	}
-	return true, nil
+	return db.CreateCollection(ctx, definition.Name, createOpts)
 }
 
 func ensureTimeseriesTTL(ctx context.Context, db *mongo.Database, definition CollectionDefinition, info *collectionInfo,
