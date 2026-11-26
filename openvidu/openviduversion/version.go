@@ -3,9 +3,9 @@ package openviduversion
 // These values must be overwritten by CI when releasing the artifact.
 const (
 	Service   = "openvidu-livekit-server"
-	Version   = "3.10.0"
-	GitCommit = "d686fd893a289c81aff33399b707407fd2c63135"
-	BuildDate = "2026-11-26T17:59:44Z"
+	Version   = "3.11.0-dev"
+	GitCommit = "unknown"
+	BuildDate = "unknown"
 	Edition   = "ce"
 )
 
